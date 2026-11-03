@@ -94,24 +94,36 @@ expectFail('推近镜头把一段文字切成半截', (tl) => {
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1);
   const xs = tl.strokes.filter((s) => s.action === st.action).flatMap((s) => s.pts.map((p) => p[0]));
   m.to = { ...m.to, x: mid(xs) + tl.view.cx / m.to.z };
-}, safezone, '[失败] 镜头停稳时文字不被画面边缘切断');
+}, safezone, '[失败] 镜头停稳时不切字、不留残边');
 expectFail('推近镜头把一段文字推到字幕衬底下面', (tl) => {
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1);
   const ys = tl.strokes.filter((s) => s.action === st.action).flatMap((s) => s.pts.map((p) => p[1]));
   m.to = { ...m.to, y: mid(ys) - (subTop(tl) - tl.view.cy) / m.to.z }; // 让这段文字的中线正好落在字幕衬底上沿
-}, safezone, '[失败] 镜头停稳时文字不被画面边缘切断');
+}, safezone, '[失败] 镜头停稳时不切字、不留残边');
 expectFail('推近时一段文字落进 TikTok 顶部栏（文字整段在画布里）', (tl) => {
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1 && !m.focus.includes(s.action));
   const ys = tl.strokes.filter((s) => s.action === st.action).flatMap((s) => s.pts.map((p) => p[1]));
   m.to = { ...m.to, y: mid(ys) - (65 - tl.view.cy) / m.to.z }; // 文字中线落在屏幕 y=65，正在顶部标签栏（0–130）里
-}, safezone, '[失败] 镜头停稳时文字不被画面边缘切断');
-expectFail('镜头停稳时一个图形压在字幕衬底底下', (tl) => {
-  // 找一个镜头位置和这一镜里已经开始画的一个图形（优先推近镜头），把镜头挪到让图形中线落在字幕上沿下面 20px
+}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+// 一个镜头位置和这一镜里已经开始画的一个图形（优先推近镜头），返回 [镜头, 图形的纵坐标]
+function shotWithShape(tl) {
   const shots = tl.camera.map((m, i) => ({ m, until: tl.camera[i + 1]?.t0 ?? tl.duration })).sort((a, b) => !!b.m.focus - !!a.m.focus);
   const shapes = [...Map.groupBy(tl.strokes.filter((s) => s.kind === 'shape'), (s) => s.action).values()];
   const [{ m }, g] = shots.flatMap((sh) => shapes.filter((g) => g[0].t0 < sh.until).map((g) => [sh, g]))[0];
-  m.to = { ...m.to, y: mid(g.flatMap((s) => s.pts.map((p) => p[1]))) - (subTop(tl) + 20 - tl.view.cy) / m.to.z };
+  return [m, g.flatMap((s) => s.pts.map((p) => p[1]))];
+}
+expectFail('镜头停稳时一个图形压在字幕衬底底下', (tl) => {
+  const [m, ys] = shotWithShape(tl);
+  m.to = { ...m.to, y: mid(ys) - (subTop(tl) + 20 - tl.view.cy) / m.to.z }; // 图形中线落在字幕上沿下面 20px
 }, safezone, '[失败] 镜头停稳时内容不进字幕区');
+expectFail('镜头停稳时一个图形越过取景框下沿（还在字幕上方）', (tl) => {
+  const [m, ys] = shotWithShape(tl);
+  m.to = { ...m.to, y: Math.max(...ys) - (tl.frame.b + 0.5 * (subTop(tl) - tl.frame.b) - tl.view.cy) / m.to.z }; // 图形底边落在取景框下沿和字幕之间
+}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+expectFail('图形停在取景框外的顶边距里（像推近后挂在顶边的下划线）', (tl) => {
+  const [m, ys] = shotWithShape(tl), z = Math.min(m.to.z, (tl.frame.t - 20) / (Math.max(...ys) - Math.min(...ys)));
+  m.to = { ...m.to, z, y: Math.max(...ys) - (tl.frame.t - 10 - tl.view.cy) / z }; // 整个图形落在画布顶边和取景框上沿之间
+}, safezone, '[失败] 镜头停稳时不切字、不留残边');
 expectFail('推近把焦点挤到画面顶上（下面大半空着）', (tl) => {
   const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
   m.to = { ...m.to, y: m.to.y + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z }; // 焦点中心往上挪 35% 个取景框高
@@ -220,6 +232,10 @@ expectBeats('提示词不在这句旁白里', (b) => { acts(b).at(-1).at = '这�
 expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; }, validate, '必须有 role=hook');
 expectBeats('字幕太长会折成三行', (b) => { b.phrases[0].caption = '这是一句特别特别长的字幕，长到在竖屏上要折成好几行，观众根本来不及看完，所以必须拆成短句再配画面'; }, validate, '请拆句');
 expectBeats('回描引用了还没画的元素', (b) => { b.phrases[0].actions.push({ id: '_rt', type: 'retrace', at: b.phrases[0].actions[0].at, target: b.phrases.at(-1).actions.at(-1).id }); }, validate, '不存在或还没画');
+expectBeats('两个图形的墨迹相切（关闭自动修复）', (b) => {
+  const p = b.phrases.find((q) => q.actions.some((a) => a.type === 'circle')), c = p.actions.find((a) => a.type === 'circle');
+  p.actions.push({ id: '_tan', type: 'circle', at: c.at, cx: c.cx + c.r * 2 + 3, cy: c.cy, r: c.r });
+}, compileNoFix('9x16'), '墨迹只隔');
 expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/);
 expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) => {
   const t = firstText(b);

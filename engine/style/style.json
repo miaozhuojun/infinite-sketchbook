@@ -1,0 +1,168 @@
+{
+ "name": "无限草稿本",
+ "version": "0.4.0",
+ "note": "唯一的风格来源。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。",
+
+ "palette": {
+  "paper": "#f3ecdc",
+  "grid": "#9fb3bd",
+  "ink": "#36383d",
+  "accent": "#c4432f",
+  "highlight": "#f3c64a",
+  "subtitle": "#3b3027",
+  "plate": "#f8f2e4",
+  "lamp": "#fff6dc",
+  "shade": "#3c2a12"
+ },
+ "inkColors": ["ink", "accent"],
+ "effectColors": ["highlight"],
+
+ "paper": { "gridSize": 48, "gridOpacity": 0.3, "fiberOpacity": 0.5, "lampOpacity": 0.62, "vignetteOpacity": 0.22 },
+
+ "ink": {
+  "note": "一支铅笔：所有笔画同一线宽（世界坐标），轻重只靠压力起伏；每个元素的笔画先合成再整体上透明度，交叉处不叠黑",
+  "penWidth": 4.4,
+  "opacity": 0.82,
+  "freehand": { "sizeScale": 1.3, "thinning": 0.3, "smoothing": 0.55 },
+  "grain": { "displace": 1.0, "frequency": 1.5, "alphaGain": 1.1, "alphaBias": 0.35 },
+  "shapeWidth": { "default": 4.4, "min": 3, "max": 6 },
+  "retraceOffsets": [1.3, -1.3, 2.4]
+ },
+
+ "type": {
+  "scale": [40, 48, 56, 64, 72, 84, 96, 112, 140],
+  "minScreenPx": { "9x16": 42, "16x9": 30, "1x1": 34 },
+  "labelGap": 14,
+  "labelTextGapEm": 0.8,
+  "sameRowOverlap": 0.4,
+  "sameRowGapEm": 1.0,
+  "sameRowDigitGapEm": 1.5,
+  "maxAutoGrow": 1.4,
+  "minCjkSize": 72,
+  "cjkSizePerStroke": 5,
+  "minCjkSizeNote": "手写汉字字号下限：笔宽统一（4.4）后，56 号字的笔画占字高 8%，像马克笔（组件预览和理解度测试都看到 56–64 号的字发黑发糊）；72–84 号占 5–6%，接近铅笔写在孩子字上的比例。字号至少 max(minCjkSize, 笔画数 × cjkSizePerStroke)；笔宽和字号随镜头同比缩放，所以按世界字号卡"
+ },
+
+ "motion": {
+  "fps": 60,
+  "zoomMax": 1.25,
+  "zoomMin": 0.5,
+  "drawSpeed": 1800,
+  "moveSpeed": 1600,
+  "minStroke": 0.05,
+  "liftBase": 0.033,
+  "travelBase": 0.12,
+  "cameraMove": [0.7, 0.35],
+  "maxLag": 1.5,
+  "maxPause": 2.5,
+  "maxPauseNonAha": 1.5,
+  "textOverlapMin": 0.5,
+  "maxSpeedBoost": 1.8,
+  "aha": { "lead": 0.3, "moveDur": 0.9, "hold": 0.8, "minPush": 1.1, "maxPush": 1.35, "pad": 110, "zoomMax": 1.5, "holdAfter": 0.5, "pauseAfter": 0.6, "maxOffCenter": 0.2, "offCenterNote": "推近后焦点中心离取景框中心不超过取景框宽、高的这个比例（最偏落在三分线附近）；只求不切字时，推近会把焦点挤到画面顶上、下面大半空着" },
+  "finalOverviewHold": 1.4,
+  "minCameraGap": 1.2
+ },
+
+ "pencil": {
+  "base": 42, "swing": 3, "length": 276, "halfWidth": 14, "scale": 0.95, "followZoom": true,
+  "swaySigma": 0.25, "liftSigma": 0.06,
+  "edgeMargin": 8, "minAngle": 10, "maxAngle": 100, "turnPerFrame": 0.2, "travelTurnSteps": 4, "travelTurnNote": "抬笔移动时每帧最多转 travelTurnSteps × turnPerFrame 度（0.8°，检查上限 1°），写字和停笔时最多 0.4°（检查上限 0.5°，不晃眼）",
+  "park": { "minRest": 0.5, "dist": 70, "note": "写完一句、要停一会儿时，笔尖往右下退开 dist 屏幕像素，别压着刚写的东西（理解度测试：停笔时笔身压住了刚画的声波和算式）" }
+ },
+
+ "subtitle": {
+  "font": "\"LXGW WenKai\", \"PingFang SC\", sans-serif", "fontFamily": "LXGW WenKai", "weight": 700,
+  "lineHeight": 1.3, "maxLines": 2, "holdWhileDrawing": true,
+  "plate": { "opacity": 0.86, "padX": 18, "padY": 6, "radius": 10 }
+ },
+
+ "watermark": {
+  "note": "可见水印：品牌名小字、半透明，用字幕字体。每 every 秒换到下一个候选位置（淡出淡入 fade 秒），编译时跳过这段时间里会压到字幕、平台界面或已画内容的位置（离它们至少 margin 像素）。文字取自本机 brand.local.json，没有就不加",
+  "opacity": 0.42, "every": 12, "fade": 0.8, "margin": 10,
+  "size": { "9x16": 30, "16x9": 28, "1x1": 26 },
+  "slots": {
+   "9x16": [
+    { "x": 56, "y": 1298, "anchor": "l" }, { "x": 1052, "y": 146, "anchor": "r" },
+    { "x": 924, "y": 1298, "anchor": "r" }, { "x": 56, "y": 146, "anchor": "l" }
+   ],
+   "16x9": [
+    { "x": 40, "y": 940, "anchor": "l" }, { "x": 1880, "y": 10, "anchor": "r" },
+    { "x": 1880, "y": 940, "anchor": "r" }, { "x": 40, "y": 10, "anchor": "l" }
+   ],
+   "1x1": [
+    { "x": 16, "y": 1040, "anchor": "l" }, { "x": 1064, "y": 6, "anchor": "r" },
+    { "x": 880, "y": 1040, "anchor": "r" }, { "x": 16, "y": 6, "anchor": "l" }
+   ]
+  }
+ },
+
+ "audio": {
+  "voiceLufs": -16,
+  "truePeak": -1.5,
+  "foleyRel": -27,
+  "musicRel": -21,
+  "chimeRel": -14,
+  "duckDb": -8,
+  "foleyDuck": 0.75,
+  "voiceComp": { "threshold": -24, "ratio": 2, "window": 0.01, "tau": 0.05, "note": "人声轻压缩：TTS 原声峰响比 18dB，直接拉到 -16 LUFS 会削顶；压一点再做真峰值限幅，响度和峰值都到位" },
+  "limiterLook": 0.003,
+  "music": { "bpm": 80, "progression": [[53, 57, 60, 65], [50, 57, 62, 65], [46, 58, 62, 65], [48, 55, 60, 64]], "note": "程序合成占位，正式曲目另定" }
+ },
+
+ "defaultTargets": ["9x16", "16x9"],
+ "publish": {
+  "note": "每个平台只传一个文件：按顺序取本期已出的第一个画幅",
+  "TikTok": ["9x16"],
+  "YouTube Shorts": ["9x16"],
+  "YouTube": ["16x9"],
+  "X": ["1x1", "9x16", "16x9"]
+ },
+
+ "targets": {
+  "9x16": {
+   "w": 1080, "h": 1920, "platforms": ["tiktok", "youtube-shorts", "x-vertical"],
+   "view": { "cx": 490, "cy": 700, "w": 907, "h": 1060 },
+   "frame": { "l": 40, "r": 940, "t": 140, "b": 1258 },
+   "sub": { "cx": 490, "top": 1400, "size": 52, "width": 840 }
+  },
+  "16x9": {
+   "w": 1920, "h": 1080, "platforms": ["youtube"],
+   "view": { "cx": 960, "cy": 460, "w": 1760, "h": 800 },
+   "frame": { "l": 60, "r": 1860, "t": 40, "b": 870 },
+   "sub": { "cx": 960, "top": 925, "size": 46, "width": 1500 }
+  },
+  "1x1": {
+   "w": 1080, "h": 1080, "platforms": ["x"],
+   "view": { "cx": 540, "cy": 455, "w": 980, "h": 790 },
+   "frame": { "l": 30, "r": 1050, "t": 40, "b": 860 },
+   "sub": { "cx": 540, "top": 915, "size": 44, "width": 940 }
+  }
+ },
+
+ "platformUI": {
+  "note": "各平台界面遮挡区（屏幕像素，按该画幅原始分辨率）。为近似值，用于避让检查；平台改版后在此更新。",
+  "tiktok": [
+   { "name": "右侧按钮列", "l": 948, "r": 1080, "t": 760, "b": 1620 },
+   { "name": "底部账号与文案", "l": 0, "r": 948, "t": 1550, "b": 1920 },
+   { "name": "顶部标签栏", "l": 0, "r": 1080, "t": 0, "b": 130 }
+  ],
+  "youtube-shorts": [
+   { "name": "右侧按钮列", "l": 950, "r": 1080, "t": 900, "b": 1600 },
+   { "name": "底部标题与频道", "l": 0, "r": 950, "t": 1560, "b": 1920 }
+  ],
+  "youtube": [
+   { "name": "暂停时进度条与控件", "l": 0, "r": 1920, "t": 1000, "b": 1080 }
+  ],
+  "x": [
+   { "name": "右下静音/时长角标", "l": 900, "r": 1080, "t": 990, "b": 1080 }
+  ],
+  "x-vertical": [
+   { "name": "右下静音/时长角标（竖版发 X）", "l": 900, "r": 1080, "t": 1830, "b": 1920 }
+  ]
+ },
+
+ "narrative": {
+  "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2 },
+  "segment": { "requireRoles": [], "minQuiz": 0 }
+ }
+}

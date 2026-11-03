@@ -1,0 +1,32 @@
+name: 问题报告
+description: 引擎出错、检查漏报或误报、出片有缺陷
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 看到的现象。出片问题请写画幅、时间点或帧号；截图里不要包含不该公开的内容。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 应该是什么样
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 怎么复现
+      description: 最好能用演示分镜 engine/data/demo.beats.json 复现。不要贴自己的作品分镜或录音。
+  - type: dropdown
+    id: layer
+    attributes:
+      label: 你觉得该在哪一层修
+      options: [不确定, 组件库, 风格规范, 关卡（自动修正或检查）, 渲染, 配音或混音]
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: 系统、芯片、Node 和 Python 版本

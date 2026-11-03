@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全或隐私问题（私下报告）
+    url: https://github.com/miaozhuojun/infinite-sketchbook/security/advisories/new
+    about: 漏洞、录音或个人信息误提交等，请不要开公开 Issue

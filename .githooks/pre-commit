@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# 提交前：隐私与产权把关（作品、录音、模型、大文件、私人关键词），再对改动的脚本做语法检查。
+# 启用：git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/privacy_guard.sh --staged
+
+changed=$(git diff --cached --name-only --diff-filter=ACMR)
+for f in $(printf '%s\n' "$changed" | grep -E '\.mjs$' || true); do node --check "$f"; done
+for f in $(printf '%s\n' "$changed" | grep -E '\.py$' || true); do python3 -m py_compile "$f"; done

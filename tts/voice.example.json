@@ -1,0 +1,9 @@
+{
+ "name": "示例音色",
+ "note": "复制成 voice.json（不进仓库）再填写。只克隆你自己的声音，或已取得本人书面同意的声音（未成年人要监护人同意）。",
+ "ref": "ref/my-voice/ref.wav",
+ "refNote": "参考音放在 ref/ 下（不进仓库）。同名 .txt 写参考音的逐字文本，要和录音完全一致。参考音最好以陈述句收尾：以问句收尾时，按句生成容易接着念那句问话。可以用 build_anchor.py 在后面接一句同音色的陈述句。",
+ "real": ["ref/my-voice/sample1.wav", "ref/my-voice/sample2.wav"],
+ "minSimilarity": 0.965,
+ "calibration": "下限要按你自己的录音标定：先算几段真人录音之间、以及满意的生成样本与真人录音质心的相似度，再定一个能拦住别的音色的值。"
+}

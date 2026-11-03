@@ -1,0 +1,7 @@
+# 本地配音、对齐、回转识别（Apple Silicon，MLX）。模型由 fetch_models.sh 从 ModelScope 下载，不进仓库。
+mlx-audio==0.6.0
+mlx==0.32.4
+pypinyin==0.55.0
+numpy==2.5.4
+scipy==1.18.1
+soundfile==0.14.0

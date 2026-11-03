@@ -1,0 +1,20 @@
+name: 功能建议
+description: 新组件、新检查、新的自动修正或风格规则
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 想解决什么问题
+      description: 最好从看片或审片发现的具体问题说起
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 建议怎么做
+  - type: dropdown
+    id: layer
+    attributes:
+      label: 属于哪一层
+      options: [组件库, 风格规范, 关卡（自动修正或检查）, 渲染, 配音或混音, 文档或流程]

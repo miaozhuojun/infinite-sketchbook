@@ -1,0 +1,14 @@
+name: 产权 / 侵权
+description: 发现有人搬运、去水印、冒用品牌，或对许可有疑问
+labels: [ip]
+body:
+  - type: markdown
+    attributes:
+      value: 涉及个人隐私的内容不要写在这里，请通过维护者 GitHub 主页上的联系方式私下联系。
+  - type: textarea
+    id: what
+    attributes:
+      label: 情况说明
+      description: 在哪个平台、链接、时间；或者对哪条许可有疑问
+    validations:
+      required: true

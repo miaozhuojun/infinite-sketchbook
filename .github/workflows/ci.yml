@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  privacy:
+    name: 隐私与产权
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 作品、录音、模型、大文件不进仓库
+        run: bash scripts/privacy_guard.sh --all
+
+  engine:
+    name: 组件库、分镜校验、编译与检查（演示分镜）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: engine/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: 合成演示配音（提示音，不是人声）
+        run: |
+          python -m pip install numpy==2.5.4 soundfile==0.14.0
+          python qa/fixtures/demo/make_demo.py
+      - name: 组件库测试
+        run: node library/test.mjs
+      - name: 分镜校验
+        run: node compiler/validate.mjs data/demo.beats.json
+      - name: 编译、铅笔与运笔、平台安全区（9x16 与 16x9）
+        run: |
+          for t in 9x16 16x9; do
+            node compiler/compile.mjs data/demo.beats.json --target "$t"
+            node qa/pencil_check.mjs "build/demo-$t.timeline.json"
+            node qa/safezone_check.mjs "build/demo-$t.timeline.json"
+          done
+      - name: 渲染端类型检查
+        run: |
+          node compiler/gen-compositions.mjs
+          npm run typecheck
+      - name: 检查器自测（注入已知缺陷，必须全部抓到；旁白类没有人声配音，跳过）
+        run: node qa/selftest.mjs build/demo-9x16.timeline.json
+
+  render:
+    name: 演示分镜全流程（混音、渲染、成片检查）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: engine/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: engine/requirements-qa.txt
+      - name: 中文字体（设备预览和联系表上的标注用）
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends fonts-noto-cjk
+      - run: npm ci
+      - run: python -m pip install -r requirements-qa.txt
+      - name: 合成演示配音（提示音，不是人声）
+        run: python qa/fixtures/demo/make_demo.py
+      - name: 渲染用的浏览器
+        run: npx remotion browser ensure
+      - name: 流水线（没有品牌配置：不加水印；配音是合成的：不查旁白）
+        run: node pipeline.mjs data/demo.beats.json
+      - name: 上传报告和成片
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-pipeline
+          path: engine/out/demo/
+          retention-days: 7
+
+  python:
+    name: Python 语法
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m py_compile tts/*.py engine/qa/*.py engine/audio/*.py engine/qa/fixtures/demo/make_demo.py
+
+  pr-title:
+    name: PR 标题符合约定式提交
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$TITLE" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .+'; then
+            echo "PR 标题要符合约定式提交，例如：fix(compile): 推近取景不再把文字切成半截"
+            exit 1
+          fi

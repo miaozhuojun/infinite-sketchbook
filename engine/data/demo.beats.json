@@ -1,0 +1,49 @@
+{
+ "id": "demo",
+ "kind": "segment",
+ "targets": ["9x16", "16x9"],
+ "brief": {
+  "question": "演示：一加一等于几？",
+  "audience": "零基础",
+  "objectives": ["能说出 1+1=2、2+2=4"],
+  "note": "引擎自带的演示分镜，也是 CI 和检查器自测的基线。配音由 qa/fixtures/demo/make_demo.py 用提示音合成，不是人声，也不是作品"
+ },
+ "narration": {
+  "script": "我们来做加法。1加1等于2。2加2等于4。",
+  "audio": "audio/demo.wav",
+  "timing": "../qa/fixtures/demo/out/demo.timing.json",
+  "synthetic": true
+ },
+ "pen": { "leadIn": 1.1, "tail": 1.0, "cueLead": 0.12, "defaultHold": 0.3 },
+ "facts": [{ "match": ["1", "2", "4"], "kind": "example", "note": "演示用的算式" }],
+ "quiz": [],
+ "phrases": [
+  {
+   "text": "我们来做加法",
+   "caption": "我们来做加法",
+   "role": "setup",
+   "actions": [
+    { "id": "title", "type": "text", "at": "加法", "text": "加法", "x": 490, "y": 300, "size": 96, "layout": { "16x9": { "x": 960, "y": 170 } } }
+   ]
+  },
+  {
+   "text": "1加1等于2",
+   "caption": "1 加 1 等于 2",
+   "role": "setup",
+   "actions": [
+    { "id": "a1", "type": "text", "at": "1加1", "text": "1+1", "x": 280, "y": 640, "size": 96, "anchor": "l", "layout": { "16x9": { "x": 760, "y": 400 } } },
+    { "id": "a2", "type": "text", "at": "等于2", "text": "=2", "size": 96, "after": "a1" }
+   ]
+  },
+  {
+   "text": "2加2等于4",
+   "caption": "2 加 2 等于 4",
+   "role": "aha",
+   "actions": [
+    { "id": "b1", "type": "text", "at": "2加2", "text": "2+2=", "x": 280, "y": 900, "size": 96, "anchor": "l", "layout": { "16x9": { "x": 760, "y": 640 } } },
+    { "id": "b2", "type": "text", "at": "4", "text": "4", "x": 600, "y": 900, "size": 96, "anchor": "l", "color": "accent", "layout": { "16x9": { "x": 1080, "y": 640 } } },
+    { "id": "ring", "type": "circle", "at": "4", "cx": 627, "cy": 891, "r": 68, "color": "accent", "layout": { "16x9": { "cx": 1107, "cy": 631 } } }
+   ]
+  }
+ ]
+}

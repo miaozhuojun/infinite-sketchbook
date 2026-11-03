@@ -1,0 +1,27 @@
+{
+  "name": "infinite-sketchbook-engine",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "compile": "node compiler/compile.mjs data/demo.beats.json",
+    "typecheck": "tsc --noEmit -p .",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.535",
+    "hanzi-writer-data": "2.0.1",
+    "hersheytext": "2.0.0",
+    "lxgw-wenkai-webfont": "1.7.0",
+    "perfect-freehand": "1.2.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.535",
+    "svg-path-properties": "2.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}

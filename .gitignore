@@ -1,0 +1,46 @@
+# 这份忽略清单和 scripts/privacy_guard.sh 一起把关：作品、真人录音、模型和生成物一律不进仓库。
+# 提交前钩子和 CI 都会再查一遍，漏网的会直接拦下。
+
+# ---- 依赖与环境 ----
+node_modules/
+.venv*/
+__pycache__/
+*.pyc
+.DS_Store
+
+# ---- 生成物：编译、渲染、混音、审片材料 ----
+engine/build/
+engine/out/
+engine/public/
+engine/qa/fixtures/demo/out/
+
+# ---- 作品：每期的分镜与旁白稿（保留所有权利，不公开）。只放行引擎自带的演示分镜 ----
+engine/data/*
+!engine/data/demo.beats.json
+
+# ---- 配音：模型权重、参考音（含真人录音）、生成的配音、本机的音色配置 ----
+tts/models/
+tts/ref/
+tts/out/
+tts/voice.json
+# 从私人录音里切参考片段的一次性脚本（含录音里的时间点），只留在本机
+tts/analyze_ref.py
+tts/build_refs.py
+tts/bakeoff_script.txt
+
+# ---- 媒体文件一律不进仓库 ----
+*.wav
+*.mp3
+*.mp4
+*.mov
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.webm
+*.mkv
+
+# ---- 本机私有：品牌配置（水印与版权文字）、内部记录、隐私关键词表 ----
+engine/brand.local.json
+docs-private/
+scripts/privacy_patterns.local.txt

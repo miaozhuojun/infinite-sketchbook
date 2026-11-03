@@ -1,0 +1,27 @@
+无限草稿本 infinite-sketchbook
+Copyright 2026 miaozhuojun
+
+本仓库的源代码、文档和测试以 Apache License 2.0 授权，全文见 LICENSE。
+用本引擎制作的作品，以及「锟仔ai科学」的名称和形象，都不在本仓库内，也不受 Apache-2.0 授权，见 COPYRIGHT.md。
+
+本仓库不附带任何第三方代码、字体、数据或模型权重。它们在安装或首次运行时从各自的官方来源获取，按各自的许可证使用：
+
+渲染与书写
+- Remotion 4.0.535 / @remotion/cli 4.0.535：Remotion License（源码可见，非 OSI 开源协议）。个人和小公司可以免费使用，达到规定规模的营利性组织需要购买公司许可。条款见 https://www.remotion.dev/license
+- hanzi-writer-data 2.0.1（汉字笔顺中线数据，源自 Make Me a Hanzi）：Arphic Public License
+- hersheytext 2.0.0（Hershey 单线字体）：MIT；Hershey 字形数据属公有领域
+- lxgw-wenkai-webfont 1.7.0（霞鹜文楷，字幕字体）：包装代码 MIT，字体本身 SIL Open Font License 1.1
+- perfect-freehand 1.2.3：MIT
+- svg-path-properties 2.2.0：ISC
+- React / React DOM 19.3.1：MIT
+- TypeScript 5.9.3：Apache-2.0
+
+配音、对齐与检查（本地运行）
+- Qwen3-TTS-12Hz-1.7B-Base、Qwen3-ForcedAligner-0.6B、Qwen3-ASR-0.6B：Apache-2.0，由 tts/fetch_models.sh 从 ModelScope 官方仓库下载
+- mlx-audio 0.6.0、mlx 0.32.4：MIT
+- pypinyin 0.55.0：MIT
+- pyloudnorm 0.2.0：MIT
+- NumPy 2.5.4、SciPy 1.18.1：BSD-3-Clause（NumPy 另含 0BSD、MIT、Zlib、CC0-1.0 部分）
+- soundfile 0.14.0：BSD-3-Clause
+- Pillow 13.0.0：MIT-CMU
+- imageio-ffmpeg 0.8.0：BSD-2-Clause；它附带的 FFmpeg 二进制按 FFmpeg 自己的 LGPL/GPL 授权

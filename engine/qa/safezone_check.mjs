@@ -10,6 +10,7 @@
 //   5. 推近时焦点在画面中部：顿悟推近停稳时，焦点中心离取景框中心不超过 aha.maxOffCenter（占取景框宽、高的比例）
 //      （理解度截帧：推近「灯就亮」时量表和灯挤在画面顶上，下面三分之二是空纸）
 //   6. 水印避开字幕、平台界面和内容：每一段水印显示期间（每 0.1 秒看一次），离平台界面、正在显示的字幕、已开始画的内容都至少 margin 像素
+//   7. 水印换位避开顿悟句：水印淡出、换位、淡入的时刻不落在顿悟句里（从开口到说完再停 aha.holdAfter 秒，前后各留 fade 秒）（审片 v9：60 秒那次换位正好撞上灯灭）
 // 用法：node qa/safezone_check.mjs build/<id>.timeline.json
 import fs from 'node:fs';
 import { svgPathProperties } from 'svg-path-properties';
@@ -107,6 +108,13 @@ for (const sp of wm?.spans ?? []) {
   }
 }
 check('水印避开字幕、平台界面和内容', !wmHits.length, wmHits.length ? wmHits.slice(0, 5).join('；') : wm ? `「${wm.text}」${wm.spans.length} 段，都离字幕、平台界面和内容 ${wm.margin}px 以上` : '没有水印（本机没有配置 brand.local.json），未查');
+// 7. 水印换位避开顿悟句
+const hold = tl.style?.motion?.aha?.holdAfter ?? 0, swapHits = [];
+for (const sp of wm?.spans ?? []) for (const t of [sp.t0, sp.t1].filter((x) => x > 0.01 && x < tl.duration - 0.01)) {
+  const p = (tl.report?.phrases ?? []).find((q) => q.role === 'aha' && t > q.at - wm.fade && t < q.audioEnd + hold + wm.fade);
+  if (p) swapHits.push(`${t.toFixed(1)}s 换位落在顿悟句「${p.text}」里`);
+}
+check('水印换位避开顿悟句', !swapHits.length, swapHits.length ? [...new Set(swapHits)].slice(0, 5).join('；') : wm ? `${Math.max(0, wm.spans.length - 1)} 次换位都不在顿悟句里` : '没有水印，未查');
 check('推近时焦点在画面中部', !offC.length, offC.length ? offC.join('；') : maxOff === undefined || !fr ? '风格规范没有 aha.maxOffCenter 或时间线没有取景框，未查' : `${tl.camera.filter((m) => m.focus && (m.to.push ?? 1) > 1.001).length} 次推近，焦点中心都在取景框中心 ${(maxOff * 100).toFixed(0)}% 以内`);
 check('镜头停稳时内容不进字幕区', !inSub.length, inSub.length ? `${inSub.length} 处：` + inSub.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，画出来的东西都在字幕上方`);
 check('镜头停稳时不切字、不留残边', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，文字都整段在取景框里或整段在画外，图形没有停在边距里`);

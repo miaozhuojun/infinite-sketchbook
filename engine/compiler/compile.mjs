@@ -680,7 +680,20 @@ const out = {
       const msg = `水印：${r2(t0)}–${r2(t1)}s 每个候选位置都会压到字幕、平台界面或内容，这一段不加`;
       fixes.push(msg), console.log(`  ${msg}`);
     };
-    for (let t = 0; t < end - 1e-6; t += WM.every, k++) place(t, Math.min(end, t + WM.every), 0);
+    // 换位时刻：每 every 秒一次，在前后 swapWindow 秒里挑——优先落在两句旁白之间的停顿里，并避开顿悟句（见 watermark.swapNote）
+    const ahaWin = report.phrases.filter((p) => p.role === 'aha').map((p) => [p.at - WM.fade, p.audioEnd + AHA.holdAfter + WM.fade]);
+    const pauses = report.phrases.slice(0, -1).map((p, i) => [p.audioEnd, report.phrases[i + 1].at]).filter(([a, b]) => b > a);
+    const okAt = (t) => !ahaWin.some(([a, b]) => t > a && t < b);
+    const swaps = [];
+    for (let t = WM.every; t < end - WM.fade * 2; t += WM.every) {
+      const near = (lst) => lst.filter((x) => Math.abs(x - t) <= WM.swapWindow && okAt(x) && x > (swaps.at(-1) ?? 0) + WM.fade * 2 && x < end - WM.fade * 2).sort((a, b) => Math.abs(a - t) - Math.abs(b - t))[0];
+      const grid = Array.from({ length: Math.round((WM.swapWindow * 2) / 0.1) + 1 }, (_, i) => r2(t - WM.swapWindow + i * 0.1));
+      const inPause = near(grid.filter((x) => pauses.some(([a, b]) => x >= a && x <= b)));
+      const b = inPause ?? near(grid);
+      if (b !== undefined) swaps.push(b);
+    }
+    const cuts = [0, ...swaps, end];
+    for (let i = 0; i + 1 < cuts.length; i++, k++) place(cuts[i], cuts[i + 1], 0);
     // 相邻两段落在同一位置就合并，不白白淡出淡入
     wm.spans = wm.spans.reduce((a, s) => { const l = a.at(-1); if (l && l.t1 === s.t0 && l.x === s.x && l.y === s.y && l.anchor === s.anchor) l.t1 = s.t1; else a.push(s); return a; }, []);
     out.watermark = wm;

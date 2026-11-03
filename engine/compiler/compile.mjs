@@ -379,7 +379,13 @@ const focusCam = phrases.map((p, pi) => {
   return prev && prev.z >= ov.z && fits(prev) && !cutTexts(prev, pi).length ? { ...prev, push: 1 } : { ...ov, push: 1 };
 });
 const targetCam = phrases.map((p, pi) => focusCam[pi] ?? phraseCam[pi]);
-for (const [pi, f] of focusCam.entries()) if (f && f.push < AHA.minPush - 1e-3) console.log(`  [提醒] 顿悟句「${phrases[pi].text}」只能推近 ${r2(f.push)} 倍：` + (blockers[pi] ? `居中推近时 ${blockers[pi].join('、')} 会被切断或停在取景框边距里，可改版式给焦点四周留空，或把它们挪开` : '焦点装不下（元素太分散，可用 focus 只圈关键元素）'));
+// 顿悟句推不近：分镜没声明这个画幅可以不推近（phrase.noPush）就算问题，要改版式（审片：9x16 两个灯的顿悟都在全景里，高潮最弱）。
+// 声明了的只提醒，表示写分镜的人知道并接受
+for (const [pi, f] of focusCam.entries()) if (f && f.push < AHA.minPush - 1e-3) {
+  const why = blockers[pi] ? `居中推近时 ${blockers[pi].join('、')} 会被切断或停在取景框边距里，要改版式给焦点四周留空，或把它们挪开` : '焦点装不下（元素太分散，可用 focus 只圈关键元素）';
+  if ((phrases[pi].noPush ?? []).includes(targetName)) console.log(`  [提醒] 顿悟句「${phrases[pi].text}」只能推近 ${r2(f.push)} 倍（分镜已声明 ${targetName} 不推近）：${why}`);
+  else layoutProblems.push(`顿悟句「${phrases[pi].text}」推不近（${r2(f.push)} 倍）：${why}；确实不推近就在这句写 noPush: ["${targetName}"]`);
+}
 
 // ---------- 单笔调度（函数化：画面拖尾时自动给该动作提速再排一次） ----------
 // 画面右边外面的一个点（世界坐标）：在给出的每个镜头下都看不到，用来让笔暂时离开画面

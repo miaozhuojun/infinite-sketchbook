@@ -240,12 +240,17 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   } finally { fs.rmSync(f, { force: true }); }
 }
 
-// ---------- 字幕折行（单元检查）：行首不出现收尾标点，能在停顿处断就不在字中间断（审片发现「…权重：4 / 、3、2」） ----------
+// ---------- 字幕折行（单元检查）：行首不出现收尾标点（审片发现「…权重：4 / 、3、2」）；不在词中间断；
+// 两行字数差不超过 3（审片发现「每个输入，/都要乘上自己的权重：4、3、2」5 字对 15 字）----------
 {
   const { breakLines, NO_LINE_START } = await import('../compiler/validate.mjs');
   const cases = ['每个输入，都要乘上自己的权重：4、3、2', '我们把门槛定在 5，超过它，灯才会亮', '它有三个输入：x₁、x₂、x₃，这次分别是 1、1、0，然后呢？'];
   const out = cases.map((c) => breakLines(c, 52, 840));
-  const ok = out.every((L) => L.every((l) => !NO_LINE_START.test(l[0]))) && out[0][0] === '每个输入，';
+  const seg = new Intl.Segmenter('zh', { granularity: 'word' });
+  const atWordEdge = (c, L) => { const edges = new Set([...seg.segment(c)].map((g) => g.index)); let i = 0; return L.slice(0, -1).every((l) => { i = c.indexOf(l, i) + l.length; while (c[i] === ' ') i++; return edges.has(i) || edges.has(i - 1) && c[i - 1] === ' '; }); };
+  const ok = out.every((L) => L.every((l) => !NO_LINE_START.test(l[0])))
+    && cases.every((c, k) => atWordEdge(c, out[k]))
+    && out.every((L) => L.length < 2 || Math.max(...L.map((l) => [...l].length)) - Math.min(...L.map((l) => [...l].length)) <= 3);
   record('字幕折行把标点放到行首（单元检查）', ok, JSON.stringify(out));
 }
 

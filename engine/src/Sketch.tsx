@@ -160,10 +160,14 @@ const WatermarkLayer: React.FC<{ tl: Timeline; t: number }> = ({ tl, t }) => {
   );
 };
 
-// 笔芯颜色：最近一笔（正在写的，或者刚写完的）用的墨色。墨色 ink 是黑芯，其余墨色的笔芯就是那个颜色（尖上深一点）
+// 笔芯颜色：最近一笔（正在写的，或者刚写完的）用的墨色；换色发生在抬笔移动的半路上（笔在空中），不在笔尖碰纸那一帧（审片 v12）。
+// 墨色 ink 是黑芯，其余墨色的笔芯就是那个颜色（尖上深一点）
 const leadAt = (tl: Timeline, t: number): [string, string] => {
   let c = tl.style.palette.ink;
-  for (const sg of tl.penTrack) if (sg.kind === 'down' && sg.t0 <= t) c = tl.strokes[sg.stroke].color;
+  const downs = tl.penTrack.filter((sg) => sg.kind === 'down');
+  for (const sg of downs) if (sg.t0 <= t) c = tl.strokes[sg.stroke].color;
+  const move = tl.penTrack.find((sg) => sg.kind === 'move' && t >= (sg.t0 + sg.t1) / 2 && t < sg.t1), next = move && downs.find((sg) => sg.t0 >= move.t1 - 1e-6);
+  if (next) c = tl.strokes[next.stroke].color;
   if (c === tl.style.palette.ink) return ['#1f2023', '#4a4c51'];
   const dark = '#' + [1, 3, 5].map((i) => Math.round(parseInt(c.slice(i, i + 2), 16) * 0.75).toString(16).padStart(2, '0')).join('');
   return [dark, c];

@@ -230,6 +230,13 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   p.actions.push({ id: '_late', type: 'text', at: a0.at, text: '这一行字太长了来不及跟上旁白', x: 490, y: 1300, size: 72 });
 }, compileNoFix('9x16'), /说完后才起笔|和本句旁白重叠/);
 
+// ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------
+{
+  const r = spawnSync('node', ['qa/ink_check.mjs', '--old'], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+  record('墨迹换回旧叠法（交叠处发黑、红压灰成暗褐）', r.status !== 0 && out.includes('[失败] 交叠处不发黑') && out.includes('[失败] 红笔盖住灰笔仍是红色'), out);
+  spawnSync('node', ['qa/ink_check.mjs'], { encoding: 'utf8' }); // 恢复正常小样
+}
+
 // ---------- 组件库：放进一个会画出非法坐标的组件，组件测试必须失败 ----------
 {
   const f = 'library/components/_selftest_broken.mjs';

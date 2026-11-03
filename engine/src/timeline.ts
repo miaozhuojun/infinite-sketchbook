@@ -30,7 +30,7 @@ export type InkMode = 'mono' | 'kai';
 export type Style = {
   name: string; version: string; palette: Record<string, string>;
   paper: { gridSize: number; gridOpacity: number; fiberOpacity: number; lampOpacity: number; vignetteOpacity: number };
-  ink: { opacity: number; freehand: { sizeScale: number; thinning: number; smoothing: number }; grain: { displace: number; frequency: number; alphaGain: number; alphaBias: number } };
+  ink: { opacity: number; layerBlend?: string; layerBy?: 'color' | 'element'; freehand: { sizeScale: number; thinning: number; smoothing: number }; grain: { displace: number; frequency: number; alphaGain: number; alphaBias: number } };
   subtitle: { font: string; fontFamily: string; weight: number; lineHeight: number; maxLines: number; plate: { opacity: number; padX: number; padY: number; radius: number } };
   pencil: { base: number; swing: number; length: number; halfWidth: number; scale: number; followZoom?: boolean };
 };

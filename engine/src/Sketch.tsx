@@ -167,11 +167,12 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
   const cam = cameraAt(tl.camera, t);
   const sub = tl.subtitles.find((s) => t >= s.t0 && t < s.t1);
   const st = tl.style, paper = st.palette.paper;
-  // 同一元素（回描算在被描的元素里）的笔画先合成，再整组上透明度：交叉、回笔处不叠出黑斑
+  // 同一种墨色的笔画先合成到一层，再整体上透明度：不同元素交叉、回描处也不叠出黑斑。
+  // 墨色 ink 在最下，其余颜色按第一次出现的先后往上叠（红笔盖住灰笔）。layerBy=element 是旧做法，只留给检查器自测复现
   const groups = React.useMemo(() => {
-    const m = new Map<string, { s: Stroke; i: number }[]>();
-    tl.strokes.forEach((s, i) => { const g = s.group ?? s.action; if (!m.has(g)) m.set(g, []); m.get(g)!.push({ s, i }); });
-    return [...m.entries()];
+    const byElement = st.ink.layerBy === 'element', m = new Map<string, { s: Stroke; i: number }[]>(byElement ? [] : [[st.palette.ink, []]]);
+    tl.strokes.forEach((s, i) => { const g = byElement ? s.group ?? s.action : s.color; if (!m.has(g)) m.set(g, []); m.get(g)!.push({ s, i }); });
+    return [...m.entries()].filter(([, list]) => list.length);
   }, [tl]);
   // 字幕字体必须真正加载成功（不能悄悄回退到系统字体）：等待加载，失败就让渲染直接报错
   const [fontHandle] = React.useState(() => (tl.subtitles.length || tl.watermark ? delayRender('加载字幕字体') : null));
@@ -222,7 +223,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
           })}
           <g filter="url(#graphite)">
             {groups.map(([gid, list]) => (
-              <g key={gid} opacity={st.ink.opacity} style={{ mixBlendMode: 'multiply' }}>
+              <g key={gid} opacity={st.ink.opacity} style={{ mixBlendMode: (st.ink.layerBlend ?? 'normal') as React.CSSProperties['mixBlendMode'] }}>
                 {list.map(({ s, i }) => <InkStroke key={s.id} s={s} i={i} t={t} mode={inkMode} st={st} />)}
               </g>
             ))}

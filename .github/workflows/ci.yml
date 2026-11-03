@@ -57,6 +57,10 @@ jobs:
         run: |
           node compiler/gen-compositions.mjs
           npm run typecheck
+      - name: 渲染用的浏览器（墨迹叠色检查要渲染小样）
+        run: npx remotion browser ensure
+      - name: 墨迹叠色检查
+        run: node qa/ink_check.mjs
       - name: 检查器自测（注入已知缺陷，必须全部抓到；旁白类没有人声配音，跳过）
         run: node qa/selftest.mjs build/demo-9x16.timeline.json
 

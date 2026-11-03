@@ -39,6 +39,7 @@ function skip(name, why) {
 
 // 0. 组件库与分镜：先确认工具可靠、数据合规，再花时间渲染
 const libOk = run('组件库测试', 'node', ['library/test.mjs', '--preview']);
+run('墨迹叠色检查（交叠处不发黑、红压灰仍是红）', 'node', ['qa/ink_check.mjs']);
 const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、字幕）', 'node', ['compiler/validate.mjs', beatsPath]);
 
 // 1. 配音：分镜里写了旁白稿但还没有音频时，本地克隆生成（内置回转检查、开头多字修剪、换种子重试）

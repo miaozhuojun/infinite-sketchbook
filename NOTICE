@@ -7,7 +7,7 @@ Copyright 2026 miaozhuojun
 本仓库不附带任何第三方代码、字体、数据或模型权重。它们在安装或首次运行时从各自的官方来源获取，按各自的许可证使用：
 
 渲染与书写
-- Remotion 4.0.535 / @remotion/cli 4.0.535：Remotion License（源码可见，非 OSI 开源协议）。个人和小公司可以免费使用，达到规定规模的营利性组织需要购买公司许可。条款见 https://www.remotion.dev/license
+- Remotion 4.0.540 / @remotion/cli 4.0.540：Remotion License（源码可见，非 OSI 开源协议）。个人和小公司可以免费使用，达到规定规模的营利性组织需要购买公司许可。条款见 https://www.remotion.dev/license
 - hanzi-writer-data 2.0.1（汉字笔顺中线数据，源自 Make Me a Hanzi）：Arphic Public License
 - hersheytext 2.0.0（Hershey 单线字体）：MIT；Hershey 字形数据属公有领域
 - lxgw-wenkai-webfont 1.7.0（霞鹜文楷，字幕字体）：包装代码 MIT，字体本身 SIL Open Font License 1.1

@@ -37,11 +37,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: engine/requirements-qa.txt
       - run: npm ci
+      - run: python -m pip install -r requirements-qa.txt
       - name: 合成演示配音（提示音，不是人声）
-        run: |
-          python -m pip install numpy==2.5.4 soundfile==0.14.0
-          python qa/fixtures/demo/make_demo.py
+        run: python qa/fixtures/demo/make_demo.py
       - name: 组件库测试
         run: node library/test.mjs
       - name: 分镜校验

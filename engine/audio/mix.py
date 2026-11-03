@@ -1,5 +1,6 @@
 """混音：旁白 + 铅笔书写声（按每一笔生成）+ 背景音乐（人声出现时自动压低）+ 顿悟点音效 → 统一响度。
-全部由时间线数据确定性生成，不依赖外部音频素材。背景音乐是程序合成的占位，正式曲目另定。
+书写声和音乐优先用真实的 CC0 录音（风格规范 audio.pencilSamples、audio.music.track，文件由 audio/fetch_cc0.sh 下载到 assets.local/cc0/，不进仓库）；
+没有这些文件时退回程序合成，并在输出里写明。随机数固定，同一份时间线和素材每次混出来一样。
 用法：../.venv-qa/bin/python audio/mix.py build/<id>.timeline.json
 """
 import json
@@ -68,11 +69,57 @@ for c in tl["audioClips"]:
 voice = voice * 10 ** ((AU["voiceLufs"] - meter.integrated_loudness(voice)) / 20)
 sf.write("public/" + tl["narration"], voice.astype(np.float32), SR)
 
-# ---------- 铅笔书写声：笔芯刮过纸纤维的稀疏颗粒 + 很轻的纸面摩擦，强弱跟随该笔的压力曲线和运笔速度 ----------
+ASSETS = Path("assets.local/cc0")
+
+
+def load(name):
+    """读一份素材，转成单声道 48kHz；没有这个文件返回 None。"""
+    p = ASSETS / name if name else None
+    if not p or not p.exists():
+        return None
+    x, sr = sf.read(p, dtype="float64")
+    x = x.mean(axis=1) if x.ndim > 1 else x
+    g = np.gcd(SR, sr)
+    return resample_poly(x, SR // g, sr // g)
+
+
+def stroke_env(n, press_pts):
+    """一笔的包络：起笔、收笔各一小段渐入渐出，中间跟着这一笔的压力曲线。"""
+    pr = np.array(press_pts)
+    press = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(pr)), pr)
+    env = np.ones(n)
+    att, rel = min(n // 3, int(0.006 * SR)), min(n // 3, int(0.02 * SR))
+    env[:att] = np.linspace(0, 1, att) ** 2
+    env[-rel:] = np.linspace(1, 0, rel) ** 2
+    return env, press
+
+
+# ---------- 铅笔书写声：优先用真实录音（CC0）。每一笔从录音里「正在写」的地方截一段，按这一笔的长度、压力调形 ----------
+pencil = [y for y in (load(n) for n in AU.get("pencilSamples", [])) if y is not None]
+
 # （v1 用连续白噪声，用户反馈"太大、太假"；改为颗粒式合成并大幅降低电平）
+pools = []
+for y in pencil:
+    e = np.sqrt(uniform_filter1d(y ** 2, int(0.02 * SR)))
+    pools.append((y, e > e.max() * 10 ** (-25 / 20)))  # 20ms 包络高于峰值 -25dB 算「正在写」
 grains = np.zeros(N)   # 颗粒冲激
 rub = np.zeros(N)      # 纸面摩擦底噪
-for s in tl["strokes"]:
+real = np.zeros(N)     # 真实录音拼出来的书写声
+for s in tl["strokes"] if pools else []:
+    a, b = int(s["t0"] * SR), int(s["t1"] * SR)
+    n = b - a
+    if n < 64:
+        continue
+    y, on = pools[rng.integers(len(pools))]
+    st = 0
+    for _ in range(30):  # 找一段八成以上都在写的
+        st = int(rng.integers(0, max(1, len(y) - n)))
+        if on[st:st + n].mean() > 0.8:
+            break
+    seg = np.resize(y[st:st + n], n)  # 录音比这一笔短时循环补齐
+    env, press = stroke_env(n, [p[2] for p in s["pts"]])
+    real[a:b] += seg * env * press * 10 ** (rng.normal(0, 2) / 20)
+for s in tl["strokes"] if not pools else []:
     a, b = int(s["t0"] * SR), int(s["t1"] * SR)
     n = b - a
     if n < 64:
@@ -96,9 +143,23 @@ kt = np.arange(int(0.0012 * SR)) / SR
 kernel = rng.standard_normal(len(kt)) * np.exp(-kt / 0.00035)
 L = len(grains) + len(kernel)
 grains = np.fft.irfft(np.fft.rfft(grains, L) * np.fft.rfft(kernel, L), L)[:N]
-foley = bandpass(grains, 2500, 9000) + bandpass(rub, 900, 3200)
+foley = bandpass(real, 300, 12000) if pools else bandpass(grains, 2500, 9000) + bandpass(rub, 900, 3200)
+print(f"书写声：{'CC0 录音 ' + str(len(pools)) + ' 份（' + '、'.join(AU.get('pencilSamples', [])) + '）' if pools else '程序合成（没有 assets.local/cc0/ 里的录音，见 audio/fetch_cc0.sh）'}")
 
-# ---------- 背景音乐（占位）：F 大调 I–vi–IV–V，80 BPM，低音 + 高音区拨弦琶音，加简单混响 ----------
+# ---------- 背景音乐：优先用风格规范指定的 CC0 曲目（不够长就循环，接缝处交叉淡化）；没有文件时用下面的合成占位 ----------
+track = load(AU["music"].get("track"))
+
+
+def looped(y, n, xf=int(1.5 * SR)):
+    out = y.copy()
+    while len(out) < n:
+        k = min(xf, len(y) // 4)
+        r = np.linspace(0, 1, k)
+        out = np.concatenate([out[:-k], out[-k:] * (1 - r) + y[:k] * r, y[k:]])
+    return out[:n]
+
+
+# 合成占位：F 大调 I–vi–IV–V，80 BPM，低音 + 高音区拨弦琶音，加简单混响
 def tone(freq, dur, partials=((1, 1.0), (2, 0.35), (3, 0.12)), decay=1.2, attack=0.006):
     t = np.arange(int(dur * SR)) / SR
     y = sum(amp * np.sin(2 * np.pi * freq * k * t) * np.exp(-t * decay * k) for k, amp in partials)
@@ -142,7 +203,8 @@ ir = rng.standard_normal(len(ir_t)) * np.exp(-ir_t * 4.2)
 ir[0] = 6.0
 wet = np.fft.irfft(np.fft.rfft(music, len(music) + len(ir)) * np.fft.rfft(ir, len(music) + len(ir)))[: len(music)]
 music = (music + 0.18 * wet / (np.abs(wet).max() + 1e-9) * np.abs(music).max())[:N]
-music = bandpass(music, 70, 9000)
+music = bandpass(looped(track, N) if track is not None else music, 70, 9000)
+print(f"音乐：{AU['music'].get('track') + '（CC0）' if track is not None else '程序合成占位（没有 assets.local/cc0/ 里的曲目，见 audio/fetch_cc0.sh）'}")
 fade = np.ones(N)
 fi, fo = int(0.8 * SR), int(1.5 * SR)
 fade[:fi] = np.linspace(0, 1, fi)

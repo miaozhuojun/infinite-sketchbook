@@ -3,6 +3,8 @@
 
 # ---- 依赖与环境 ----
 node_modules/
+# Claude 会话的独立工作树（建在仓库里面）
+.claude/worktrees/
 .venv*/
 __pycache__/
 *.pyc

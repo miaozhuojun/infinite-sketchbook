@@ -6,7 +6,8 @@
 //   5. 顿悟时镜头不拉远：role=aha 的句子说完后再停 aha.holdAfter 秒之前，镜头只能推近或保持（审片发现顿悟时反而拉远）
 // 笔身、影子、字幕框的几何和编译器的避让共用 src/timeline.ts 里的同一份定义。
 //   6. 停笔不压正在讲的东西：笔停够 0.5 秒时，笔身不压已写出的文字、刚画完的元素，推近镜头里还有焦点元素
-//   7. 写字时笔身不长时间压住别的字：写字、抬笔移动时，笔身连续压住别的元素已写出的文字不超过 pencil.maxCoverSec 秒
+//   7. 写字时笔身不长时间压住别的字：写字、抬笔移动时，笔身连续压住别的元素已写出的文字不超过 pencil.maxCoverSec 秒，
+//      一句旁白里累计不超过 pencil.maxCoverPhraseSec 秒（审片 v10：断续压住「x₂」累计 1.2 秒，连续的检查拦不住）
 //      （审片 v9：16x9 画声波的约 1.9 秒里，笔身横压 x₁、x₂ 和「×3」，正在说「这个输入说话越大声」）
 //   8. 片尾不带笔：最后一帧整支笔都在画外（审片 v9：16x9 笔扫过算式和灯后停在右缘，终帧带着铅笔）
 // 用法：node qa/pencil_check.mjs build/<id>.timeline.json
@@ -146,7 +147,16 @@ for (let f = 0; f < tl.durationInFrames; f++) {
   if (body.some(([x, y]) => boxes.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3]))) coverFrames.push(f);
 }
 const maxCover = tl.style?.pencil?.maxCoverSec ?? 1.0, longCover = runs(coverFrames).filter(([a, b]) => (b - a + 1) / tl.fps > maxCover);
-check('写字时笔身不长时间压住别的字', !longCover.length, longCover.length ? `${longCover.length} 段连续压字超过 ${maxCover}s：` + longCover.slice(0, 5).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : `写字和移动时，笔身连续压住别的字最长 ${(Math.max(0, ...runs(coverFrames).map(([a, b]) => b - a + 1)) / tl.fps).toFixed(2)}s（上限 ${maxCover}s）`);
+const maxPhrase = tl.style?.pencil?.maxCoverPhraseSec ?? Infinity, phr7 = tl.report?.phrases ?? [];
+const phraseCover = phr7.map((p, i) => {
+  const t1 = phr7[i + 1]?.at ?? tl.duration;
+  return { p, sec: coverFrames.filter((f) => f / tl.fps >= p.at && f / tl.fps < t1).length / tl.fps };
+});
+const heavy = phraseCover.filter((x) => x.sec > maxPhrase);
+check('写字时笔身不长时间压住别的字', !longCover.length && !heavy.length,
+  [longCover.length ? `${longCover.length} 段连续压字超过 ${maxCover}s：` + longCover.slice(0, 5).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : '',
+    heavy.length ? `${heavy.length} 句累计压字超过 ${maxPhrase}s：` + heavy.slice(0, 5).map((x) => `「${x.p.text}」${x.sec.toFixed(2)}s`).join('、') : ''].filter(Boolean).join('；') ||
+  `写字和移动时，笔身连续压住别的字最长 ${(Math.max(0, ...runs(coverFrames).map(([a, b]) => b - a + 1)) / tl.fps).toFixed(2)}s（上限 ${maxCover}s），一句里累计最多 ${Math.max(0, ...phraseCover.map((x) => x.sec)).toFixed(2)}s（上限 ${maxPhrase}s）`);
 
 // 8. 片尾不带笔
 const lastPose = pencilPose(tl, (tl.durationInFrames - 1) / tl.fps), onCanvas = pencilBodyPts(tl, lastPose).filter(([x, y]) => x > 0 && x < tl.canvas.w && y > 0 && y < tl.canvas.h);

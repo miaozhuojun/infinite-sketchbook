@@ -93,6 +93,14 @@ expectFail('写字时笔身横在别的字上 1.5 秒（不是停笔）', (tl) =
   const r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
   tl.penTrack.unshift({ kind: 'move', t0: r.t0, t1: r.t0 + 1.5, from: r.at, to: r.at });
 }, pencil, '[失败] 写字时笔身不长时间压住别的字');
+expectFail('一句话里笔身断续压字，累计超过上限（每段都不到 1 秒）', (tl) => {
+  // 在一句旁白里插四段 0.7 秒的原地「移动」，笔身横在一段已写的文字上，中间隔 0.1 秒：连续的检查拦不住，累计的要拦住
+  const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText)), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
+  for (let i = 3; i >= 0; i--) tl.penTrack.unshift({ kind: 'move', t0: r.t0 + i * 0.8, t1: r.t0 + i * 0.8 + 0.7, from: r.at, to: r.at });
+  const p = tl.report.phrases.findLast((q) => q.at <= r.t0);
+  p.at = Math.min(p.at, r.t0); // 这四段都算在同一句里
+  (tl.report.phrases[tl.report.phrases.indexOf(p) + 1] ?? {}).at = Math.max(tl.report.phrases[tl.report.phrases.indexOf(p) + 1]?.at ?? 0, r.t0 + 3.3);
+}, pencil, '累计压字超过');
 expectFail('片尾铅笔停在画面中间', (tl) => {
   const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);
   last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中
@@ -252,6 +260,13 @@ expectBeats('两个图形的墨迹相切（关闭自动修复）', (b) => {
   const p = b.phrases.find((q) => q.actions.some((a) => a.type === 'circle')), c = p.actions.find((a) => a.type === 'circle');
   p.actions.push({ id: '_tan', type: 'circle', at: c.at, cx: c.cx + c.r * 2 + 3, cy: c.cy, r: c.r });
 }, compileNoFix('9x16'), '墨迹只隔');
+expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => {
+  // 写一段字、圈出来，再让一根箭头的尖正好落在圈上：圈是装饰，箭头尖碰到它不算「接上」
+  const p = b.phrases.at(-1), at = p.actions[0].at;
+  p.actions.push({ id: '_t', type: 'text', at, text: 'AB', x: 640, y: 1150, size: 72 });
+  p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
+  p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
+}, compileNoFix('9x16'), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/);
 expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/);
 expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) => {
   const t = firstText(b);

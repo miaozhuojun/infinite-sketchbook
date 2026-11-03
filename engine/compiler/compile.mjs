@@ -150,9 +150,11 @@ const buildOne = (a) => {
       const at = (r, deg) => [t0.cx + r * Math.cos((deg * Math.PI) / 180), t0.cy + r * Math.sin((deg * Math.PI) / 180)];
       geo.set(a.id, drawAction({ ...a, type: 'line', color: a.color ?? 'accent', from: at(Math.min(...rs) - 1, mid + tilt), to: at(Math.max(...rs) + 12, mid - tilt), bow: 1 }));
     } else {
-      // 划掉：从目标墨迹（一组时取整体）左下到右上斜划一道，两头各出头一点
-      const b = bboxOf(ts.flatMap((t) => geo.get(t.id))), ex = 8;
-      geo.set(a.id, drawAction({ ...a, type: 'line', color: a.color ?? 'accent', from: [b.x0 - ex, b.y1 + ex / 2], to: [b.x1 + ex, b.y0 - ex / 2], bow: 2 }));
+      // 划掉：从目标墨迹（一组时取整体）左下到右上斜划一道，两头各出头一点。
+      // 目标是「图形 + 标签」（量表的柱子和数值）时只划图形，上下不出头（审片 v10：划 7 号柱的红杠拉到「7」右上，把「7」也划掉了）
+      const ink = ts.flatMap((t) => geo.get(t.id)), shapes = ink.filter((s) => s.kind === 'shape'), mixed = shapes.length && shapes.length < ink.length;
+      const b = bboxOf(mixed ? shapes : ink), ex = 8, ey = mixed ? -4 : ex / 2;
+      geo.set(a.id, drawAction({ ...a, type: 'line', color: a.color ?? 'accent', from: [b.x0 - ex, b.y1 + ey], to: [b.x1 + ex, b.y0 - ey], bow: 2 }));
     }
   } else geo.set(a.id, drawAction(a));
 };
@@ -210,8 +212,11 @@ for (const a of allActions) if (a.type === 'text' && a.size !== a._size0) fixes.
 // 2) 压线自动避让：标签离其他元素太近时，在周围由近到远找一个不碰任何元素的位置挪过去
 // 有意贴近的关系不查间距：标签写在图形上（on）、回描/划掉（target）、接写（after）。两段文字之间只认 after——
 // 文字用 on 互相挂靠时照样要查，否则手放的接写会压住前文（实测「=7」压住「4+3+0」，因为 on 让检查跳过了它们）
+// 同一行接写（after 一路接下去）的几段文字算一行：「=」「7」拆开写时，「7」和前面的「+0×2」也是同一行里的字距
+const chainOf = (x) => { const c = []; for (let y = x; y?.after; y = actionsById.get(y.after)) c.push(y.after); return c; };
 const related = (a, b) => {
   if (a.after === b.id || b.after === a.id || [a.target].flat().includes(b.id) || [b.target].flat().includes(a.id)) return true;
+  if (chainOf(a).includes(b.id) || chainOf(b).includes(a.id)) return true;
   // 划掉算式里的一项时，划线会贴着同一行接写的前后项（审片前自查：划「=7」时离「+0×2」3px）
   const struck = (x, y) => x.type === 'strike' && [x.target].flat().some((id) => actionsById.get(id)?.after === y.id || y.after === id);
   if (struck(a, b) || struck(b, a)) return true;
@@ -299,7 +304,9 @@ for (const a of allActions) {
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
     const A = actionsById.get(ids[i]), B = actionsById.get(ids[j]), a = box.get(A.id), b = box.get(B.id);
     if (related(A, B) || a[0] - GAP_S > b[2] || b[0] - GAP_S > a[2] || a[1] - GAP_S > b[3] || b[1] - GAP_S > a[3]) continue;
-    if (ends(A).some((p) => touches(p, pts.get(B.id))) || ends(B).some((p) => touches(p, pts.get(A.id)))) continue;
+    // 圈出（ring）是加在目标上的装饰，箭头尖碰到它不算「接上」（审片 v11：点题的红圈压在向上箭头上，被当成有意连接放过了）
+    const node = (x) => x.type !== 'ring';
+    if ((node(B) && ends(A).some((p) => touches(p, pts.get(B.id)))) || (node(A) && ends(B).some((p) => touches(p, pts.get(A.id))))) continue;
     let d = Infinity;
     for (const [ax, ay, aw] of pts.get(A.id)) for (const [bx, by, bw] of pts.get(B.id)) d = Math.min(d, Math.hypot(ax - bx, ay - by) - (aw + bw) / 2);
     if (d < GAP_S) layoutProblems.push(`图形「${A.id}」和「${B.id}」的墨迹只隔 ${r2(Math.max(0, d))}px（要求 ≥${r2(GAP_S)}px）：不是有意贴着就挪开；有意贴着（比如描在它上面）就在分镜里用 on 声明`);
@@ -658,15 +665,15 @@ const out = {
   const brand = fs.existsSync('brand.local.json') ? JSON.parse(fs.readFileSync('brand.local.json', 'utf8')) : null;
   if (brand?.watermark?.text && slots?.length) {
     const { cameraAt, subtitleBox, watermarkBox, boxesOverlap, strokeScreenBox } = await import('../src/timeline.ts');
-    const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, spans: [] };
+    const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, contentMargin: WM.contentMargin, spans: [] };
     // 和安全区检查同样每 0.1 秒看一次，框再多留 4px，保证检查一定过
     const clashes = (slot, t0, t1) => {
-      const box = watermarkBox(wm, slot, WM.margin + 4);
+      const box = watermarkBox(wm, slot, WM.margin + 4), far = watermarkBox(wm, slot, WM.contentMargin + 4);
       if (UI_ZONES.some((z) => boxesOverlap(box, z))) return true;
       if (subtitles.some((s) => s.t0 < t1 && s.t1 > t0 && boxesOverlap(box, subtitleBox(out, s.lines)))) return true;
       for (let i = 0; t0 + i * 0.1 <= t1 + 1e-6; i++) {
         const t = t0 + i * 0.1, c = cameraAt(camera, t);
-        if (strokes.some((s) => s.t0 <= t && boxesOverlap(box, strokeScreenBox(out, s, c)))) return true;
+        if (strokes.some((s) => s.t0 <= t && boxesOverlap(far, strokeScreenBox(out, s, c)))) return true;
       }
       return false;
     };
@@ -751,8 +758,9 @@ const out = {
   }
   const feasible = (f, k) => { const row = feas[f]; if (!row) return true; const a = k * STEP; return row[Math.floor(a)] && row[Math.min(row.length - 1, Math.ceil(a))]; };
   // 写字和移动时，笔身尽量不压别的元素已写出的字（审片 v9：16x9 画声波时笔身横压 x₁、x₂ 和「×3」）：
-  // 每帧按 2° 采样，数各角度下笔身（不算笔尖那段锥）压进已写文字的采样点，每点记 pencil.coverCost 的代价
-  const txt = strokes.filter((s) => s.kind !== 'shape').map((s) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of s.pts) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); } return { b, a: s.action, t1: s.t1 }; });
+  // 每帧按 2° 采样，数各角度下笔身（不算笔尖那段锥）压进已写文字的采样点，每点记 pencil.coverCost 的代价。
+  // 试过把图形也算进来（记半点）：e02 的 9x16 反而多出两段超过 1 秒的压字，所以只算文字
+  const txt = strokes.filter((s) => s.kind !== 'shape').map((s) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of s.pts) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); } return { b, a: s.action, t1: s.t1, w: 2 }; });
   const cover = new Array(nF).fill(null), CS = 2;
   for (let f = 0; f < nF; f++) {
     const t = f / FPS, cam = cameraAt(camera, t), p = penAt(out, t);
@@ -760,7 +768,7 @@ const out = {
     if (tip.x < 0 || tip.x > TGT.w || tip.y < 0 || tip.y > TGT.h) continue;
     const sc = pencilScale(out, cam.z), reach = (P.length + P.halfWidth) * sc, down = out.penTrack.find((sg) => sg.kind === 'down' && t >= sg.t0 && t < sg.t1);
     const self = down ? strokes[down.stroke].action : null, pad = 4;
-    const near = txt.filter((q) => q.t1 <= t && q.a !== self).map(({ b }) => [(b[0] - cam.x) * cam.z + VIEW.cx - pad, (b[1] - cam.y) * cam.z + VIEW.cy - pad, (b[2] - cam.x) * cam.z + VIEW.cx + pad, (b[3] - cam.y) * cam.z + VIEW.cy + pad])
+    const near = txt.filter((q) => q.t1 <= t && q.a !== self).map(({ b, w }) => [(b[0] - cam.x) * cam.z + VIEW.cx - pad, (b[1] - cam.y) * cam.z + VIEW.cy - pad, (b[2] - cam.x) * cam.z + VIEW.cx + pad, (b[3] - cam.y) * cam.z + VIEW.cy + pad, w])
       .filter((b) => b[2] > tip.x - reach && b[0] < tip.x + reach && b[3] > tip.y - reach && b[1] < tip.y + reach);
     if (!near.length) continue;
     const cone = 0.2 * P.length * sc;
@@ -769,12 +777,13 @@ const out = {
       let n = 0;
       for (const [x, y] of pencilBodyPts(out, { x: tip.x, y: tip.y, ang: a, sc, lift: 0.3 })) {
         if ((x - tip.x) * Math.cos(r) + (y - tip.y) * Math.sin(r) < cone) continue;
-        if (near.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3])) n++;
+        const hit = near.filter((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3]);
+        if (hit.length) n += Math.max(...hit.map((b) => b[4]));
       }
       return Math.min(255, n);
     });
   }
-  const coverAt = (f, k) => (cover[f] ? cover[f][Math.min(cover[f].length - 1, Math.round((k * STEP) / CS))] : 0);
+  const coverAt = (f, k) => (cover[f] ? cover[f][Math.min(cover[f].length - 1, Math.round((k * STEP) / CS))] / 2 : 0); // 表里存的是半点数
   const cost = (f, k) => (feasible(f, k) ? 0 : 1000) + Math.abs(ang(k) - a0s[f]) + (P.coverCost ?? 0) * coverAt(f, k);
   let D = Float64Array.from({ length: K }, (_, k) => cost(0, k)), D2 = new Float64Array(K);
   const back = new Int8Array(nF * K);

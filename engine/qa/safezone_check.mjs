@@ -2,8 +2,10 @@
 //   1. 任何一段字幕都不能落进去；
 //   2. 任何一笔内容（画完后，在之后每个镜头位置上）都不能落进去。铅笔是临时经过的，不算。
 //      推近镜头（顿悟）只查焦点元素：推近时画面边缘的旧内容本来就会被推出画外、经过界面区域，观众此刻看的是焦点。
-//   3. 镜头停稳时文字不被画面边缘切断：每次镜头到位后，这一镜里看得到的文字要么整段在画面里（字幕衬底上方、不压平台界面），要么整段在画面外
-//      （审片看到推近后左边缘只剩「4」、算式只剩「0 =7」）。
+//   3. 镜头停稳时不切字、不留残边：每次镜头到位后，这一镜里看得到的
+//      文字要么整段在取景框 frame 里（字幕衬底上方、不压平台界面），要么整段在画布外（审片：推近后左边缘只剩「4」、算式只剩「0 =7」）；
+//      图形可以被画布边缘裁掉，但不能停在取景框外的边距里，也不能越过取景框下沿压向字幕
+//      （审片 v9：推近把标题推出画、下划线还挂在顶边；灯泡越过取景框下沿、坐在字幕板上）。
 //   4. 镜头停稳时内容不进字幕区：任何画出来的元素都不能有一部分落在字幕上沿到画布底那一条里（压在字幕衬底底下只露一半，像污渍）
 //   5. 推近时焦点在画面中部：顿悟推近停稳时，焦点中心离取景框中心不超过 aha.maxOffCenter（占取景框宽、高的比例）
 //      （理解度截帧：推近「灯就亮」时量表和灯挤在画面顶上，下面三分之二是空纸）
@@ -45,28 +47,7 @@ for (const s of tl.strokes) {
     if (hit) { contentHits.push(`${s.id} 在 ${t.toFixed(2)}s 落进 ${hit.pf} 的${hit.name}`); break; }
   }
 }
-// 3. 文字不被切断：文字类笔画（汉字 glyph、拉丁字母 line）按动作分组，在每个镜头到位时刻看它们的屏幕范围
-const inkBox = new Map();
-for (const s of tl.strokes) {
-  if (s.kind !== 'glyph' && s.kind !== 'line') continue;
-  const pr = new svgPathProperties(s.d), L = pr.getTotalLength(), b = inkBox.get(s.action) ?? { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, t0: Infinity };
-  for (let k = 0; k <= 8; k++) { const q = pr.getPointAtLength((L * k) / 8); b.x0 = Math.min(b.x0, q.x); b.y0 = Math.min(b.y0, q.y); b.x1 = Math.max(b.x1, q.x); b.y1 = Math.max(b.y1, q.y); }
-  b.t0 = Math.min(b.t0, s.t0);
-  inkBox.set(s.action, b);
-}
-const cuts = [];
-tl.camera.forEach((m, i) => {
-  const until = tl.camera[i + 1]?.t0 ?? tl.duration, c = m.to, W = tl.canvas.w, H = tl.canvas.h;
-  for (const [id, b] of inkBox) {
-    if (b.t0 >= until) continue; // 这一镜结束前还没开始写
-    const x0 = (b.x0 - c.x) * c.z + tl.view.cx, x1 = (b.x1 - c.x) * c.z + tl.view.cx, y0 = (b.y0 - c.y) * c.z + tl.view.cy, y1 = (b.y1 - c.y) * c.z + tl.view.cy;
-    const subTop = tl.subtitles.length ? tl.sub.top - (tl.style?.subtitle?.plate?.padY ?? 0) : H; // 字幕衬底也算画面边
-    const underUI = zones.some((z) => x1 > z.l && x0 < z.r && y1 > z.t && y0 < z.b); // 平台界面也算画面边
-    const inside = x0 >= 0 && x1 <= W && y0 >= 0 && y1 <= subTop && !underUI, outside = x1 <= 0 || x0 >= W || y1 <= 0 || y0 >= H;
-    if (!inside && !outside) cuts.push(`${id} 在 ${m.t1.toFixed(2)}s 被画面边缘、字幕或平台界面切断（屏幕 ${x0.toFixed(0)}–${x1.toFixed(0)} × ${y0.toFixed(0)}–${y1.toFixed(0)}）`);
-  }
-});
-// 4. 镜头停稳时内容不进字幕区：任何已画的元素都不能有一部分落在字幕衬底那一条（字幕上沿到画布底）里
+// 每个元素已画部分的包围盒（第 3、4 项共用）
 const allBox = new Map();
 for (const s of tl.strokes) {
   const pr = new svgPathProperties(s.d), L = pr.getTotalLength(), b = allBox.get(s.action) ?? { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, t0: Infinity };
@@ -74,6 +55,25 @@ for (const s of tl.strokes) {
   b.t0 = Math.min(b.t0, s.t0);
   allBox.set(s.action, b);
 }
+const textIds = new Set(tl.strokes.filter((s) => s.kind === 'glyph' || s.kind === 'line').map((s) => s.action));
+// 3. 元素不被切断：在每个镜头到位时刻看每个元素的屏幕范围，取景框 frame 内（没有 frame 的旧时间线按画布算）
+const cuts = [], FR = tl.frame ?? { l: 0, r: tl.canvas.w, t: 0, b: tl.canvas.h };
+tl.camera.forEach((m, i) => {
+  const until = tl.camera[i + 1]?.t0 ?? tl.duration, c = m.to, W = tl.canvas.w, H = tl.canvas.h;
+  for (const [id, b] of allBox) {
+    if (b.t0 >= until) continue; // 这一镜结束前还没开始画
+    const x0 = (b.x0 - c.x) * c.z + tl.view.cx, x1 = (b.x1 - c.x) * c.z + tl.view.cx, y0 = (b.y0 - c.y) * c.z + tl.view.cy, y1 = (b.y1 - c.y) * c.z + tl.view.cy;
+    const subTop = tl.subtitles.length ? tl.sub.top - (tl.style?.subtitle?.plate?.padY ?? 0) : H; // 字幕衬底也算画面边
+    const underUI = zones.some((z) => x1 > z.l && x0 < z.r && y1 > z.t && y0 < z.b); // 平台界面也算画面边
+    const B = Math.min(FR.b, subTop), outside = x1 <= 0 || x0 >= W || y1 <= 0 || y0 >= H;
+    if (outside) continue;
+    const bad = textIds.has(id)
+      ? !(x0 >= FR.l && x1 <= FR.r && y0 >= FR.t && y1 <= B) || underUI
+      : y1 > B || (x0 < FR.l && x0 > 0) || (x1 > FR.r && x1 < W) || (y0 < FR.t && y0 > 0); // 图形：被画布边缘裁掉可以，停在边距里、越过下沿不行
+    if (bad) cuts.push(`${id} 在 ${m.t1.toFixed(2)}s ${textIds.has(id) ? '是文字，没有整段在取景框里' : '停在取景框外的边距里或越过了取景框下沿'}（屏幕 ${x0.toFixed(0)}–${x1.toFixed(0)} × ${y0.toFixed(0)}–${y1.toFixed(0)}，取景框 ${FR.l}–${FR.r} × ${FR.t}–${FR.b}），也没有整段出画`);
+  }
+});
+// 4. 镜头停稳时内容不进字幕区：任何已画的元素都不能有一部分落在字幕衬底那一条（字幕上沿到画布底）里
 const inSub = [];
 if (tl.subtitles.length) tl.camera.forEach((m, i) => {
   const until = tl.camera[i + 1]?.t0 ?? tl.duration, c = m.to, subTop = tl.sub.top - (tl.style?.subtitle?.plate?.padY ?? 0);
@@ -109,7 +109,7 @@ for (const sp of wm?.spans ?? []) {
 check('水印避开字幕、平台界面和内容', !wmHits.length, wmHits.length ? wmHits.slice(0, 5).join('；') : wm ? `「${wm.text}」${wm.spans.length} 段，都离字幕、平台界面和内容 ${wm.margin}px 以上` : '没有水印（本机没有配置 brand.local.json），未查');
 check('推近时焦点在画面中部', !offC.length, offC.length ? offC.join('；') : maxOff === undefined || !fr ? '风格规范没有 aha.maxOffCenter 或时间线没有取景框，未查' : `${tl.camera.filter((m) => m.focus && (m.to.push ?? 1) > 1.001).length} 次推近，焦点中心都在取景框中心 ${(maxOff * 100).toFixed(0)}% 以内`);
 check('镜头停稳时内容不进字幕区', !inSub.length, inSub.length ? `${inSub.length} 处：` + inSub.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，画出来的东西都在字幕上方`);
-check('镜头停稳时文字不被画面边缘切断', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，文字都是整段在画面里或整段在画面外`);
+check('镜头停稳时不切字、不留残边', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，文字都整段在取景框里或整段在画外，图形没有停在边距里`);
 check('内容避开平台界面', !contentHits.length, contentHits.length ? `${contentHits.length} 笔：` + contentHits.slice(0, 5).join('；') : `${tl.strokes.length} 笔在所有镜头位置上都不被平台界面遮挡`);
 console.log(`\n安全区检查失败 ${fails.length} 项`);
 process.exit(fails.length ? 1 : 0);

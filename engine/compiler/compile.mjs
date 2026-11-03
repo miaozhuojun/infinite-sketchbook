@@ -219,6 +219,8 @@ const related = (a, b) => {
   const traced = (x, y) => x.type === 'retrace' && [x.target].flat().some((id) => y.after === id || actionsById.get(id)?.after === y.id);
   if (traced(a, b) || traced(b, a)) return true;
   if (a.type === 'text' && b.type === 'text') return false;
+  // 同一个门槛量表的几部分（底线和门槛虚线、数值柱）本来就画在一起：base 相同就是同一个量表
+  if (a.type === 'meter' && b.type === 'meter' && a.base === b.base) return true;
   return a.on === b.id || b.on === a.id || (a.on && a.on === b.on);
 };
 const sampleList = (list) => list.flatMap((s) => {
@@ -285,6 +287,24 @@ for (const a of allActions) {
   const px = textPx(a, phraseCam);
   if (px < MIN_TEXT - 0.5) layoutProblems.push(`标签「${a.text}」(${a.id}) 在屏幕上约 ${r2(px)}px 高，低于本画幅最小 ${MIN_TEXT}px` + (AUTOFIX ? '（已沿字号阶梯放大到上限仍不够），需要改分镜布局' : ''));
 }
+// 图形元素之间留空（见风格规范 type.shapeGapNote）：两个非文字元素的墨迹至少隔 shapeGapPen 个笔宽。
+// 有意贴着的不查：分镜里声明的关系（on、target、after），以及箭头、线的端点接在对方身上（离它不到 connectTol）
+{
+  const GAP_S = style.ink.penWidth * style.type.shapeGapPen, CONNECT = style.type.connectTol;
+  // 划掉、回描本来就画在别的东西上面，不查
+  const ids = [...geo.keys()].filter((id) => geo.get(id).length && !['text', 'strike', 'retrace'].includes(actionsById.get(id).type));
+  const pts = new Map(ids.map((id) => [id, sampleList(geo.get(id))])), box = new Map(ids.map((id) => [id, inkBox(pts.get(id))]));
+  const ends = (a) => (Array.isArray(a.from) && Array.isArray(a.to) ? [a.from, a.to] : []);
+  const touches = (p, list) => list.some(([x, y, w]) => Math.hypot(p[0] - x, p[1] - y) - w / 2 <= CONNECT);
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const A = actionsById.get(ids[i]), B = actionsById.get(ids[j]), a = box.get(A.id), b = box.get(B.id);
+    if (related(A, B) || a[0] - GAP_S > b[2] || b[0] - GAP_S > a[2] || a[1] - GAP_S > b[3] || b[1] - GAP_S > a[3]) continue;
+    if (ends(A).some((p) => touches(p, pts.get(B.id))) || ends(B).some((p) => touches(p, pts.get(A.id)))) continue;
+    let d = Infinity;
+    for (const [ax, ay, aw] of pts.get(A.id)) for (const [bx, by, bw] of pts.get(B.id)) d = Math.min(d, Math.hypot(ax - bx, ay - by) - (aw + bw) / 2);
+    if (d < GAP_S) layoutProblems.push(`图形「${A.id}」和「${B.id}」的墨迹只隔 ${r2(Math.max(0, d))}px（要求 ≥${r2(GAP_S)}px）：不是有意贴着就挪开；有意贴着（比如描在它上面）就在分镜里用 on 声明`);
+  }
+}
 if (fixes.length) console.log(`  版面自动修正 ${fixes.length} 处：\n    ` + fixes.join('\n    '));
 
 // ---------- 镜头目标（与时间无关）：普通句看全景；顿悟句（role=aha 或 camera=focus）推近到这句的元素 ----------
@@ -299,19 +319,24 @@ const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []);
 // 元素包围盒缓存（取景搜索要试上千个位置，每次重新采样路径太慢）；元素被重画后自动失效
 const boxCache = new Map();
 const geoBox = (id) => { const l = geo.get(id), c = boxCache.get(id); if (c && c.l === l) return c.b; const b = bboxOf(l); boxCache.set(id, { l, b }); return b; };
+// 镜头停稳时（比检查再收 4px）：
+//   文字要整段在取景框 frame 里（字幕衬底上方、不压平台界面），或者整段在画布外（审片：推近后左边缘只剩「4」、算式只剩「0 =7」）；
+//   图形可以被画布边缘裁掉（推近时画面边上的旧内容本来就会被推出去），但不能停在取景框外的边距里，也不能越过取景框下沿压向字幕
+//   （审片 v9：推近把标题推出画、下划线还挂在顶边；灯泡越过取景框下沿，坐在字幕板上）
+const FR = TGT.frame, isTextId = (id) => textInk.has(id);
 const cutTexts = (cam, pi) => {
-  const rect = (m) => ({ x0: cam.x + (-VIEW.cx + m) / cam.z, x1: cam.x + (TGT.w - VIEW.cx - m) / cam.z, y0: cam.y + (-VIEW.cy + m) / cam.z, y1: cam.y + (TGT.h - VIEW.cy - m) / cam.z });
-  const out = rect(-6), inn = { ...rect(24), y1: cam.y + (SUB_TOP - 24 - VIEW.cy) / cam.z };
+  const S = (b) => ({ x0: (b.x0 - cam.x) * cam.z + VIEW.cx, x1: (b.x1 - cam.x) * cam.z + VIEW.cx, y0: (b.y0 - cam.y) * cam.z + VIEW.cy, y1: (b.y1 - cam.y) * cam.z + VIEW.cy });
+  const L = FR.l + 4, R = FR.r - 4, T = FR.t + 4, B = Math.min(FR.b, SUB_TOP - 24) - 4, W = TGT.w, H = TGT.h;
   // 平台界面（顶部标签栏、右侧按钮列……）也算画面边：看得到的文字不能压进去（审片：推近时 ×4 ×3 ×2 落进 TikTok 顶栏）
-  const zones = UI_ZONES.map((z) => ({ x0: cam.x + (z.l - 8 - VIEW.cx) / cam.z, x1: cam.x + (z.r + 8 - VIEW.cx) / cam.z, y0: cam.y + (z.t - 8 - VIEW.cy) / cam.z, y1: cam.y + (z.b + 8 - VIEW.cy) / cam.z }));
-  const hits = (t, b) => t.x1 > b.x0 && t.x0 < b.x1 && t.y1 > b.y0 && t.y0 < b.y1;
-  const cutText = [...textInk].filter(([id, t]) => phraseOf.get(id) <= pi && hits(t, out) && (!(t.x0 >= inn.x0 && t.x1 <= inn.x1 && t.y0 >= inn.y0 && t.y1 <= inn.y1) || zones.some((z) => hits(t, z))));
-  // 任何已画的元素（不只文字）都不能半截压在字幕区里：推近时要么在字幕上方，要么整个推出画布
-  // （审片前自查：第一句就画的灯，推近输入那一排时一半压在字幕衬底底下）
-  const band = { x0: out.x0, x1: out.x1, y0: cam.y + (SUB_TOP - 8 - VIEW.cy) / cam.z, y1: out.y1 };
-  const inBand = [...geo].filter(([id]) => phraseOf.get(id) <= pi && geo.get(id).length).map(([id]) => [id, geoBox(id)]).filter(([, b]) => hits(b, band));
-  return [...cutText, ...inBand];
+  const underUI = (t) => UI_ZONES.some((z) => t.x1 > z.l - 8 && t.x0 < z.r + 8 && t.y1 > z.t - 8 && t.y0 < z.b + 8);
+  return [...geo].filter(([id]) => phraseOf.get(id) <= pi && geo.get(id).length).filter(([id]) => {
+    const t = S(geoBox(id));
+    if (t.x1 <= -6 || t.x0 >= W + 6 || t.y1 <= -6 || t.y0 >= H + 6) return false; // 整段在画外
+    if (isTextId(id)) return !(t.x0 >= L && t.x1 <= R && t.y0 >= T && t.y1 <= B) || underUI(t);
+    return t.y1 > B || (t.x0 < L && t.x0 > -6) || (t.x1 > R && t.x1 < W + 6) || (t.y0 < T && t.y0 > -6);
+  });
 };
+const blockers = []; // 每个顿悟句推不近时挡路的元素
 const focusCam = phrases.map((p, pi) => {
   if (p.role !== 'aha' && p.camera !== 'focus') return null;
   const ids = new Set([...p.actions.map((a) => a.id), ...(p.focus || [])]);
@@ -337,6 +362,9 @@ const focusCam = phrases.map((p, pi) => {
     cands.sort((a, b) => Math.hypot(a.x - cx0, a.y - cy0) - Math.hypot(b.x - cx0, b.y - cy0));
     const cam = cands.find((c) => centered(c) && !cutTexts(c, pi).length);
     if (cam) return { ...cam, push: z / ov.z };
+    // 推不了时记下挡路最少的那组元素，提醒里告诉写分镜的人该挪谁
+    const block = cands.filter(centered).map((c) => cutTexts(c, pi).map(([id]) => id)).sort((a, b) => a.length - b.length)[0];
+    if (block && (!blockers[pi] || block.length < blockers[pi].length)) blockers[pi] = block;
   }
   // 推不近（焦点本身就占满了画面，比如一整排输入）：上一句的取景装得下就原样停住，不为顿悟拉远；装不下才用这一句的全景
   const prev = pi > 0 ? phraseCam[pi - 1] : null;
@@ -344,7 +372,7 @@ const focusCam = phrases.map((p, pi) => {
   return prev && prev.z >= ov.z && fits(prev) && !cutTexts(prev, pi).length ? { ...prev, push: 1 } : { ...ov, push: 1 };
 });
 const targetCam = phrases.map((p, pi) => focusCam[pi] ?? phraseCam[pi]);
-for (const [pi, f] of focusCam.entries()) if (f && f.push < AHA.minPush - 1e-3) console.log(`  [提醒] 顿悟句「${phrases[pi].text}」只能推近 ${r2(f.push)} 倍：再推近要么焦点装不下（元素太分散，可用 focus 只圈关键元素），要么切到周围的字或把焦点挤出画面中部（可改版式，给焦点四周留空）`);
+for (const [pi, f] of focusCam.entries()) if (f && f.push < AHA.minPush - 1e-3) console.log(`  [提醒] 顿悟句「${phrases[pi].text}」只能推近 ${r2(f.push)} 倍：` + (blockers[pi] ? `居中推近时 ${blockers[pi].join('、')} 会被切断或停在取景框边距里，可改版式给焦点四周留空，或把它们挪开` : '焦点装不下（元素太分散，可用 focus 只圈关键元素）'));
 
 // ---------- 单笔调度（函数化：画面拖尾时自动给该动作提速再排一次） ----------
 // 画面右边外面的一个点（世界坐标）：在给出的每个镜头下都看不到，用来让笔暂时离开画面

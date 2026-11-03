@@ -1,0 +1,13 @@
+{
+ "note": "混音用的真实素材：都是 CC0（公有领域），可以商用、不用署名。文件本身不进仓库，用 audio/fetch_cc0.sh 下载到 assets.local/cc0/。没有这些文件时，混音退回程序合成的书写声和音乐",
+ "pencil": [
+  { "file": "pencil-01.ogg", "url": "https://bigsoundbank.com/UPLOAD/ogg/0221.ogg", "page": "https://bigsoundbank.com/pencil-s0221.html", "title": "Pencil #1", "author": "Joseph SARDIN (BigSoundBank)", "license": "CC0", "seconds": 33 },
+  { "file": "pencil-03.ogg", "url": "https://bigsoundbank.com/UPLOAD/ogg/3234.ogg", "page": "https://bigsoundbank.com/sound-3234-crayon-papier-3.html", "title": "Pencil #3", "author": "BigSoundBank", "license": "CC0", "seconds": 9 },
+  { "file": "pencil-04.ogg", "url": "https://bigsoundbank.com/UPLOAD/ogg/3235.ogg", "page": "https://bigsoundbank.com/sound-3235-crayon-papier-4.html", "title": "Pencil #4", "author": "BigSoundBank", "license": "CC0", "seconds": 11 }
+ ],
+ "music": [
+  { "file": "a-simple-trifle.ogg", "url": "https://opengameart.org/sites/default/files/ASimpleTrifle.ogg", "page": "https://opengameart.org/content/a-simple-trifle", "title": "A Simple Trifle", "author": "jestar", "license": "CC0" },
+  { "file": "good-morning.ogg", "url": "https://opengameart.org/sites/default/files/Cakeflaps%20-%20Good%20Morning.ogg", "page": "https://opengameart.org/content/good-morning", "title": "Good Morning", "author": "Cakeflaps (You're Perfect Studio)", "license": "CC0（作者同时给了 CC-BY 4.0、OGA-BY 3.0，这里按 CC0 用）" },
+  { "file": "slow-stride.ogg", "url": "https://opengameart.org/sites/default/files/Slow%20Stride%20Loop.ogg", "page": "https://opengameart.org/content/slow-stride", "title": "Slow Stride", "author": "isaiah658", "license": "CC0" }
+ ]
+}

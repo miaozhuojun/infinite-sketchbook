@@ -26,8 +26,9 @@ function run(name, cmd, args, opts = {}) {
   const problems = [...(out.match(/问题 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\[错误\] (.*)$/gm)].map((m) => m[1])]
     .map((l) => l.trim()).filter(Boolean);
   const artifacts = [...out.matchAll(/^(?:设备预览|联系表|理解度测试材料|组件预览|存证)：(\S+)/gm)].map((m) => m[1]);
+  const notes = [...out.matchAll(/^((?:书写声|音乐)：.*)$/gm)].map((m) => m[1]); // 混音用了哪些素材，写进报告
   const ok = r.status === 0 && checks.every((c) => c.ok) && !problems.length;
-  stages.push({ name, ok, secs: ((Date.now() - t0) / 1000).toFixed(1), checks, fixes, problems, artifacts, tail: ok ? '' : out.slice(-1500) });
+  stages.push({ name, ok, secs: ((Date.now() - t0) / 1000).toFixed(1), checks, fixes, problems, artifacts, notes, tail: ok ? '' : out.slice(-1500) });
   console.log(`${ok ? '✓' : '✗'} ${name}（${stages.at(-1).secs}s）${fixes.length ? `  自动修正 ${fixes.length} 处` : ''}`);
   return ok;
 }
@@ -87,6 +88,7 @@ for (const s of stages) {
   for (const c of s.checks) lines.push(`- ${c.ok ? '通过' : '**失败**'} ${c.name}：${c.detail}`);
   for (const p of s.problems) lines.push(`- **待改**：${p}`);
   for (const a of s.artifacts) lines.push(`- 产物：${a}`);
+  for (const n of s.notes ?? []) lines.push(`- ${n}`);
   if (s.tail) lines.push('', '```', s.tail, '```');
   lines.push('');
 }

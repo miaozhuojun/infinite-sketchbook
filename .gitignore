@@ -15,6 +15,7 @@ engine/build/
 engine/out/
 engine/public/
 engine/qa/fixtures/demo/out/
+engine/assets.local/
 
 # ---- 作品：每期的分镜与旁白稿（保留所有权利，不公开）。只放行引擎自带的演示分镜 ----
 engine/data/*

@@ -25,3 +25,7 @@ Copyright 2026 miaozhuojun
 - soundfile 0.14.0：BSD-3-Clause
 - Pillow 13.0.0：MIT-CMU
 - imageio-ffmpeg 0.8.0：BSD-2-Clause；它附带的 FFmpeg 二进制按 FFmpeg 自己的 LGPL/GPL 授权
+
+混音素材（不随仓库分发，由 engine/audio/fetch_cc0.sh 下载，来源见 engine/audio/cc0_sources.json）
+- 铅笔书写声：BigSoundBank「Pencil #1」「Pencil #3」「Pencil #4」，CC0
+- 背景音乐：OpenGameArt「A Simple Trifle」（jestar）、「Good Morning」（Cakeflaps / You're Perfect Studio，作者同时给出 CC0、CC-BY 4.0、OGA-BY 3.0，这里按 CC0 使用）、「Slow Stride」（isaiah658），CC0

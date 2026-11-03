@@ -590,8 +590,30 @@ for (const s of strokes) {
 }
 
 const end = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold) + PEN.tail;
-const exitTo = [penPos[0] + 1200, penPos[1] - 400]; // 从右上方离场，不划过字幕区
-const exitDur = moveDur(1270, 0.5, 1);
+// 离场：写完最后一笔，抬笔沿压过内容最少的方向出画，最后整支笔都在画外（审片 v9：原来按世界坐标往右上挪 1200，
+// 16x9 镜头拉远后推不出画面，笔扫过算式和灯，停在右缘直到片尾）。候选方向不往下走，免得划过字幕
+const exitTo = (() => {
+  const c = camAt(penFree), later = [c, ...camera.filter((m) => m.t1 > penFree).map((m) => m.to)];
+  const S = ([x, y], k = c) => [(x - k.x) * k.z + VIEW.cx, (y - k.y) * k.z + VIEW.cy], Wd = ([x, y]) => [(x - VIEW.cx) / c.z + c.x, (y - VIEW.cy) / c.z + c.y];
+  const tip = S(penPos), reach = (style.pencil.length + style.pencil.halfWidth) * style.pencil.scale * (Math.min(TGT.w, TGT.h) / 1080) * Math.max(...later.map((k) => k.z)) + 60;
+  const boxes = strokes.map((s) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of s.pts) { const [u, v] = S([x, y]); b[0] = Math.min(b[0], u); b[1] = Math.min(b[1], v); b[2] = Math.max(b[2], u); b[3] = Math.max(b[3], v); } return { b, w: s.kind === 'shape' ? 1 : 3 }; });
+  const r = (style.pencil.base * Math.PI) / 180, L = reach - 60;
+  const cost = ([tx, ty]) => {
+    let n = 0;
+    for (let k = 1; k <= 24; k++) {
+      const x = tip[0] + ((tx - tip[0]) * k) / 24, y = tip[1] + ((ty - tip[1]) * k) / 24;
+      for (let u = 0; u <= 1; u += 0.25) { const px = x + Math.cos(r) * L * u, py = y + Math.sin(r) * L * u; for (const { b, w } of boxes) if (px > b[0] && px < b[2] && py > b[1] && py < b[3]) n += w; }
+    }
+    return n + Math.hypot(tx - tip[0], ty - tip[1]) / 400;
+  };
+  const cands = [[TGT.w + reach, tip[1] - 300], [TGT.w + reach, tip[1]], [tip[0] + 300, -reach], [tip[0], -reach], [-reach, tip[1] - 300], [-reach, tip[1]]];
+  const best = cands.map((q) => [q, cost(q)]).sort((a, b) => a[1] - b[1])[0][0];
+  // 之后镜头还会拉远的话，离场点在每个镜头位置上都要看不到：不够远就沿同一方向再走远
+  let w = Wd(best);
+  for (let k = 0; k < 6 && later.some((cam) => { const [x, y] = S(w, cam); return x > -reach && x < TGT.w + reach && y > -reach && y < TGT.h + reach; }); k++) w = [penPos[0] + (w[0] - penPos[0]) * 1.5, penPos[1] + (w[1] - penPos[1]) * 1.5];
+  return w;
+})();
+const exitDur = moveDur(Math.hypot(exitTo[0] - penPos[0], exitTo[1] - penPos[1]), 0.5, camAt(penFree).z);
 penTrack.push({ kind: 'move', t0: penFree, t1: penFree + exitDur, from: penPos, to: exitTo });
 penTrack.push({ kind: 'rest', t0: penFree + exitDur, t1: end + 1, at: exitTo });
 
@@ -715,7 +737,32 @@ const out = {
     feas[f] = Uint8Array.from({ length: Math.ceil(P.maxAngle - P.minAngle) + 1 }, (_, d) => (ok(tip, P.minAngle + d, sc, sb, !flying) ? 1 : 0));
   }
   const feasible = (f, k) => { const row = feas[f]; if (!row) return true; const a = k * STEP; return row[Math.floor(a)] && row[Math.min(row.length - 1, Math.ceil(a))]; };
-  const cost = (f, k) => (feasible(f, k) ? 0 : 1000) + Math.abs(ang(k) - a0s[f]);
+  // 写字和移动时，笔身尽量不压别的元素已写出的字（审片 v9：16x9 画声波时笔身横压 x₁、x₂ 和「×3」）：
+  // 每帧按 2° 采样，数各角度下笔身（不算笔尖那段锥）压进已写文字的采样点，每点记 pencil.coverCost 的代价
+  const txt = strokes.filter((s) => s.kind !== 'shape').map((s) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of s.pts) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); } return { b, a: s.action, t1: s.t1 }; });
+  const cover = new Array(nF).fill(null), CS = 2;
+  for (let f = 0; f < nF; f++) {
+    const t = f / FPS, cam = cameraAt(camera, t), p = penAt(out, t);
+    const tip = { x: (p.x - cam.x) * cam.z + VIEW.cx, y: (p.y - cam.y) * cam.z + VIEW.cy };
+    if (tip.x < 0 || tip.x > TGT.w || tip.y < 0 || tip.y > TGT.h) continue;
+    const sc = pencilScale(out, cam.z), reach = (P.length + P.halfWidth) * sc, down = out.penTrack.find((sg) => sg.kind === 'down' && t >= sg.t0 && t < sg.t1);
+    const self = down ? strokes[down.stroke].action : null, pad = 4;
+    const near = txt.filter((q) => q.t1 <= t && q.a !== self).map(({ b }) => [(b[0] - cam.x) * cam.z + VIEW.cx - pad, (b[1] - cam.y) * cam.z + VIEW.cy - pad, (b[2] - cam.x) * cam.z + VIEW.cx + pad, (b[3] - cam.y) * cam.z + VIEW.cy + pad])
+      .filter((b) => b[2] > tip.x - reach && b[0] < tip.x + reach && b[3] > tip.y - reach && b[1] < tip.y + reach);
+    if (!near.length) continue;
+    const cone = 0.2 * P.length * sc;
+    cover[f] = Uint8Array.from({ length: Math.floor((P.maxAngle - P.minAngle) / CS) + 1 }, (_, d) => {
+      const a = P.minAngle + d * CS, r = (a * Math.PI) / 180;
+      let n = 0;
+      for (const [x, y] of pencilBodyPts(out, { x: tip.x, y: tip.y, ang: a, sc, lift: 0.3 })) {
+        if ((x - tip.x) * Math.cos(r) + (y - tip.y) * Math.sin(r) < cone) continue;
+        if (near.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3])) n++;
+      }
+      return Math.min(255, n);
+    });
+  }
+  const coverAt = (f, k) => (cover[f] ? cover[f][Math.min(cover[f].length - 1, Math.round((k * STEP) / CS))] : 0);
+  const cost = (f, k) => (feasible(f, k) ? 0 : 1000) + Math.abs(ang(k) - a0s[f]) + (P.coverCost ?? 0) * coverAt(f, k);
   let D = Float64Array.from({ length: K }, (_, k) => cost(0, k)), D2 = new Float64Array(K);
   const back = new Int8Array(nF * K);
   // 平常每帧最多转一步（turnPerFrame）；赶不及时允许转两步，但要付代价，只在必要时用。
@@ -744,6 +791,12 @@ const out = {
   for (let f = nF - 1; f >= 0; f--) { path[f] = k; if (f > 0) k += back[f * K + k]; }
   // 不受约束、离自然角度不到一步的帧直接用自然角度（不量化）
   const edge = Array.from(path, (k, f) => (!feas[f] && Math.abs(ang(k) - a0s[f]) <= STEP ? 0 : Math.round((ang(k) - a0s[f]) * 100) / 100));
+  // 在自然角度（不量化）和规划角度（按 turnPerFrame 量化）之间切换的那一帧会多跳最多一步：再按检查的上限压一遍每帧转角
+  // （写字、停笔 ≤0.45°，抬笔移动 ≤0.95°，比检查的 0.5°、1° 各留一点余量）
+  for (let f = 1; f < nF; f++) {
+    const lim = moving[f] ? 0.95 : 0.45, prev = a0s[f - 1] + edge[f - 1], cur = a0s[f] + edge[f];
+    if (Math.abs(cur - prev) > lim) edge[f] = Math.round((prev + Math.sign(cur - prev) * lim - a0s[f]) * 100) / 100;
+  }
   const stuck = [...path.keys()].filter((f) => !feasible(f, path[f]));
   for (const [a, b] of runsOf(stuck)) problems.push(`铅笔：${r2(a / FPS)}–${r2(b / FPS)}s 笔尖离画面边缘或字幕太近，转到 ${P.minAngle}°~${P.maxAngle}° 都避不开（会出画或压字幕），需要把这里的内容往画面中间挪`);
   out.pencil = { sway: swayS, lift: gauss(lift, P.liftSigma), edge };

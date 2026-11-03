@@ -260,6 +260,13 @@ expectBeats('两个图形的墨迹相切（关闭自动修复）', (b) => {
   const p = b.phrases.find((q) => q.actions.some((a) => a.type === 'circle')), c = p.actions.find((a) => a.type === 'circle');
   p.actions.push({ id: '_tan', type: 'circle', at: c.at, cx: c.cx + c.r * 2 + 3, cy: c.cy, r: c.r });
 }, compileNoFix('9x16'), '墨迹只隔');
+expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => {
+  // 写一段字、圈出来，再让一根箭头的尖正好落在圈上：圈是装饰，箭头尖碰到它不算「接上」
+  const p = b.phrases.at(-1), at = p.actions[0].at;
+  p.actions.push({ id: '_t', type: 'text', at, text: 'AB', x: 640, y: 1150, size: 72 });
+  p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
+  p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
+}, compileNoFix('9x16'), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/);
 expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/);
 expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) => {
   const t = firstText(b);

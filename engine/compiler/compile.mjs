@@ -212,8 +212,11 @@ for (const a of allActions) if (a.type === 'text' && a.size !== a._size0) fixes.
 // 2) 压线自动避让：标签离其他元素太近时，在周围由近到远找一个不碰任何元素的位置挪过去
 // 有意贴近的关系不查间距：标签写在图形上（on）、回描/划掉（target）、接写（after）。两段文字之间只认 after——
 // 文字用 on 互相挂靠时照样要查，否则手放的接写会压住前文（实测「=7」压住「4+3+0」，因为 on 让检查跳过了它们）
+// 同一行接写（after 一路接下去）的几段文字算一行：「=」「7」拆开写时，「7」和前面的「+0×2」也是同一行里的字距
+const chainOf = (x) => { const c = []; for (let y = x; y?.after; y = actionsById.get(y.after)) c.push(y.after); return c; };
 const related = (a, b) => {
   if (a.after === b.id || b.after === a.id || [a.target].flat().includes(b.id) || [b.target].flat().includes(a.id)) return true;
+  if (chainOf(a).includes(b.id) || chainOf(b).includes(a.id)) return true;
   // 划掉算式里的一项时，划线会贴着同一行接写的前后项（审片前自查：划「=7」时离「+0×2」3px）
   const struck = (x, y) => x.type === 'strike' && [x.target].flat().some((id) => actionsById.get(id)?.after === y.id || y.after === id);
   if (struck(a, b) || struck(b, a)) return true;
@@ -301,7 +304,9 @@ for (const a of allActions) {
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
     const A = actionsById.get(ids[i]), B = actionsById.get(ids[j]), a = box.get(A.id), b = box.get(B.id);
     if (related(A, B) || a[0] - GAP_S > b[2] || b[0] - GAP_S > a[2] || a[1] - GAP_S > b[3] || b[1] - GAP_S > a[3]) continue;
-    if (ends(A).some((p) => touches(p, pts.get(B.id))) || ends(B).some((p) => touches(p, pts.get(A.id)))) continue;
+    // 圈出（ring）是加在目标上的装饰，箭头尖碰到它不算「接上」（审片 v11：点题的红圈压在向上箭头上，被当成有意连接放过了）
+    const node = (x) => x.type !== 'ring';
+    if ((node(B) && ends(A).some((p) => touches(p, pts.get(B.id)))) || (node(A) && ends(B).some((p) => touches(p, pts.get(A.id))))) continue;
     let d = Infinity;
     for (const [ax, ay, aw] of pts.get(A.id)) for (const [bx, by, bw] of pts.get(B.id)) d = Math.min(d, Math.hypot(ax - bx, ay - by) - (aw + bw) / 2);
     if (d < GAP_S) layoutProblems.push(`图形「${A.id}」和「${B.id}」的墨迹只隔 ${r2(Math.max(0, d))}px（要求 ≥${r2(GAP_S)}px）：不是有意贴着就挪开；有意贴着（比如描在它上面）就在分镜里用 on 声明`);

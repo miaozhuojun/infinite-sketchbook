@@ -91,7 +91,8 @@ const InkStroke: React.FC<{ s: Stroke; i: number; t: number; mode: InkMode; st: 
 };
 
 // ---------- 铅笔（屏幕层，大小不随镜头缩放）：局部坐标里笔尖在原点、笔身沿 +x；姿态来自 pencilPose ----------
-const Pencil: React.FC<{ pose: PencilPose }> = ({ pose }) => {
+// 笔芯颜色跟着正在写的墨色：写红字时是红芯（像红蓝铅笔的红头），不是黑芯写出红字（审片 v11）
+const Pencil: React.FC<{ pose: PencilPose; lead: [string, string] }> = ({ pose, lead }) => {
   const { x, y, ang, lift, sc } = pose;
   return (
     <svg width={1} height={1} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
@@ -111,8 +112,8 @@ const Pencil: React.FC<{ pose: PencilPose }> = ({ pose }) => {
           <stop offset="1" stopColor="#c3955f" />
         </linearGradient>
         <linearGradient id="pc-lead" x1="0" y1="0" x2="15" y2="0" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#1f2023" />
-          <stop offset="1" stopColor="#4a4c51" />
+          <stop offset="0" stopColor={lead[0]} />
+          <stop offset="1" stopColor={lead[1]} />
         </linearGradient>
         <linearGradient id="pc-metal" x1="0" y1="-15" x2="0" y2="15" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#f4f5f6" />
@@ -157,6 +158,15 @@ const WatermarkLayer: React.FC<{ tl: Timeline; t: number }> = ({ tl, t }) => {
       font: `${st.subtitle.weight} ${wm.size}px ${st.subtitle.font}`, lineHeight: 1.25, color: st.palette.subtitle, letterSpacing: 1, whiteSpace: 'nowrap',
     }}>{wm.text}</div>
   );
+};
+
+// 笔芯颜色：最近一笔（正在写的，或者刚写完的）用的墨色。墨色 ink 是黑芯，其余墨色的笔芯就是那个颜色（尖上深一点）
+const leadAt = (tl: Timeline, t: number): [string, string] => {
+  let c = tl.style.palette.ink;
+  for (const sg of tl.penTrack) if (sg.kind === 'down' && sg.t0 <= t) c = tl.strokes[sg.stroke].color;
+  if (c === tl.style.palette.ink) return ['#1f2023', '#4a4c51'];
+  const dark = '#' + [1, 3, 5].map((i) => Math.round(parseInt(c.slice(i, i + 2), 16) * 0.75).toString(16).padStart(2, '0')).join('');
+  return [dark, c];
 };
 
 // ---------- 主画面 ----------
@@ -231,7 +241,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
         </svg>
       </World>
       <Vignette w={w} h={h} st={st} />
-      {showPen && <Pencil pose={pencilPose(tl, t, inkMode)} />}
+      {showPen && <Pencil pose={pencilPose(tl, t, inkMode)} lead={leadAt(tl, t)} />}
       {sub && (
         <div style={{
           position: 'absolute', left: tl.sub.cx - tl.sub.width / 2, width: tl.sub.width, top: tl.sub.top - st.subtitle.plate.padY, display: 'flex', justifyContent: 'center',

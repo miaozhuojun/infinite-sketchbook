@@ -110,6 +110,7 @@ if (process.argv.includes('--preview') && !fails.length) {
     camera: [{ t0: 0, t1: 0, from: { x: W / 2, y: H / 2, z: 1 }, to: { x: W / 2, y: H / 2, z: 1 } }], view: { cx: W / 2, cy: H / 2 },
     sub: { cx: W / 2, top: H, size: 40, width: W }, subtitles: [], style: styleSubset(style), platforms: [],
   };
+  fs.mkdirSync('build', { recursive: true }); // 刚克隆的仓库里还没有 build/
   fs.writeFileSync('build/library-preview.timeline.json', JSON.stringify(tl));
   execFileSync('node', ['compiler/gen-compositions.mjs'], { stdio: 'inherit' });
   fs.mkdirSync('out/library', { recursive: true });

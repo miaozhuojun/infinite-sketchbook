@@ -87,6 +87,17 @@ expectFail('停笔 1 秒压在刚写完的字上（不在推近镜头里）', (t
   const ss = [...Map.groupBy(tl.strokes, (x) => x.action).values()].reverse().find((g) => g.every(isText) && !inFocus(g.at(-1).t1 + 0.1));
   tl.penTrack.unshift(restAcross(tl, ss.flatMap((x) => x.pts), ss.at(-1).t1 + 0.05));
 }, pencil, '[失败] 停笔不压正在讲的东西');
+expectFail('写字时笔身横在别的字上 1.5 秒（不是停笔）', (tl) => {
+  // 找一个整段都是文字的动作，写完后插一段 1.5 秒的原地「移动」，笔身横在它正中（停够 0.5 秒的停笔归第 6 项管，这里要的是写字和移动时）
+  const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText));
+  const r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
+  tl.penTrack.unshift({ kind: 'move', t0: r.t0, t1: r.t0 + 1.5, from: r.at, to: r.at });
+}, pencil, '[失败] 写字时笔身不长时间压住别的字');
+expectFail('片尾铅笔停在画面中间', (tl) => {
+  const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);
+  last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中
+  tl.penTrack.at(-2).to = last.at;
+}, pencil, '[失败] 片尾不带笔');
 expectFail('字幕挪进 TikTok 底部信息栏', (tl) => { tl.sub.top = 1600; }, safezone, '[失败] 字幕避开平台界面');
 expectFail('内容整体右移 400px 进右侧按钮列', (tl) => { tl.view.cx += 400; }, safezone, '[失败] 内容避开平台界面');
 expectFail('推近镜头把一段文字切成半截', (tl) => {

@@ -144,6 +144,11 @@ expectFail('推近镜头把焦点内容推进 TikTok 顶部栏', (tl) => { const
 const wmOf = (tl) => (tl.watermark ??= { text: '测试水印', size: 30, opacity: 0.42, fade: 0.8, margin: 10, spans: [] });
 expectFail('水印挪进 TikTok 右侧按钮列', (tl) => { wmOf(tl).spans = [{ t0: 0, t1: tl.duration, x: 980, y: 1000, anchor: 'l' }]; }, safezone, '[失败] 水印避开字幕、平台界面和内容');
 expectFail('水印压在字幕上', (tl) => { const s = tl.subtitles[0]; wmOf(tl).spans = [{ t0: s.t0, t1: s.t1, x: tl.sub.cx, y: tl.sub.top, anchor: 'l' }]; }, safezone, '[失败] 水印避开字幕、平台界面和内容');
+expectFail('水印换位正好撞上顿悟句', (tl) => {
+  // 两段水印在顿悟句说到一半时换位（两个位置都离字幕、平台界面远，只看换位时刻）
+  const p = tl.report.phrases.find((q) => q.role === 'aha'), t = (p.at + p.audioEnd) / 2;
+  wmOf(tl).spans = [{ t0: 0, t1: t, x: 980, y: 1000, anchor: 'l' }, { t0: t, t1: tl.duration, x: 980, y: 1000, anchor: 'l' }];
+}, safezone, '[失败] 水印换位避开顿悟句');
 expectFail('水印压在画好的内容上', (tl) => {
   // 最后一笔画完后，水印放在它结尾时的屏幕位置上，一直显示到片尾
   const s = tl.strokes.at(-1), [x, y] = toScreen(tl, s.pts[Math.floor(s.pts.length / 2)], tl.duration);

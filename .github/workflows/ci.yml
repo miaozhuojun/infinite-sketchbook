@@ -34,7 +34,7 @@ jobs:
           node-version: '26'
           cache: npm
           cache-dependency-path: engine/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: npm ci
@@ -74,7 +74,7 @@ jobs:
           node-version: '26'
           cache: npm
           cache-dependency-path: engine/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: python -m py_compile tts/*.py engine/qa/*.py engine/audio/*.py engine/qa/fixtures/demo/make_demo.py

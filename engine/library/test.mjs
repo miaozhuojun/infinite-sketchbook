@@ -79,18 +79,19 @@ for (const [name, c] of lib) {
       }
     }
   }
+  // 一支笔：同一个组件画出来的每一笔线宽都一样（审片 v9：带权连线描三遍，看起来是粗、中、细三根）
+  { const ws = new Set(s1.map((s) => s.width)); if (ws.size > 1) F(name, `线宽不统一：${[...ws].join('、')}（一支笔，所有笔画同一线宽）`); }
   // 预览：4 列网格，每格 440×330，组件画在格子中上，下方写组件中文名（已经报错的组件不画，免得坏数据让整个测试崩掉、报不出错）
   if (fails.some((f) => f.startsWith(`${name}：`))) { cell++; continue; }
   const col = cell % 4, row = Math.floor(cell / 4), cx = 240 + col * 440, cy = 190 + row * 330;
-  // 预览画典型用法（meta.preview，多组参数一起画）；没有就画示例
-  (m.preview ?? [m.example]).forEach((ex, j) => {
-    let pa = { id: `pv-${name}-${j}`, type: name, ...shift(ex, cx, cy) };
-    // 示例比格子宽（比如长文字）时整体挪进画面，不让预览把它切掉
-    const xs = c.draw(structuredClone(pa), makeKit(pa, style, lib)).flatMap((s) => { const pr = new svgPathProperties(s.d), L = pr.getTotalLength(); return Array.from({ length: 9 }, (_, q) => pr.getPointAtLength((L * q) / 8).x); });
-    const dx = Math.max(0, 20 - Math.min(...xs));
-    if (dx) pa = { id: pa.id, type: name, ...shift(ex, cx + dx, cy) };
-    c.draw(structuredClone(pa), makeKit(pa, style, lib)).forEach((s, i) => previewStrokes.push({ ...s, id: `${pa.id}#${i}` }));
-  });
+  // 预览画典型用法（meta.preview，多组参数一起画）；没有就画示例。整组按实际墨迹挪进自己的格子（左右各留 20px），
+  // 也离画布边 ≥40px（审片 v9：「门槛 5」伸进了左边旋钮那一格，手写文字示例贴着画布左边）
+  const exs = m.preview ?? [m.example], drawAll = (dx) => exs.flatMap((ex, j) => { const pa = { id: `pv-${name}-${j}`, type: name, ...shift(ex, cx + dx, cy) }; return c.draw(structuredClone(pa), makeKit(pa, style, lib)).map((s, i) => ({ ...s, id: `${pa.id}#${i}` })); });
+  const xsOf = (list) => list.flatMap((s) => { const pr = new svgPathProperties(s.d), L = pr.getTotalLength(); return Array.from({ length: 9 }, (_, q) => pr.getPointAtLength((L * q) / 8).x); });
+  const xs0 = xsOf(drawAll(0)), lo = Math.max(cx - 200, 40), hi = cx + 200, w = Math.max(...xs0) - Math.min(...xs0);
+  const dx = w > hi - lo ? lo + (hi - lo - w) / 2 - Math.min(...xs0) : Math.max(0, lo - Math.min(...xs0)) - Math.max(0, Math.max(...xs0) - hi);
+  if (w > 440 - 40) F(name, `预览宽 ${Math.round(w)}px，超出一格（400px），示例改小一点`);
+  previewStrokes.push(...drawAll(dx));
   const title = m.title.replace(/\s*Σ/, ''), strokes = Math.max(0, ...[...title].filter((c) => CJK.test(c)).map((c) => glyphData(c).medians.length));
   const need = Math.max(style.type.minCjkSize, strokes * style.type.cjkSizePerStroke); // 和分镜校验同一条规则：笔画多的字要写大
   const la = { id: `pv-label-${name}`, type: 'text', text: title, x: cx, y: cy + 128, size: style.type.scale.find((v) => v >= need) };

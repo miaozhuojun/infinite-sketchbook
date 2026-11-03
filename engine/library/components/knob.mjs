@@ -20,11 +20,11 @@ export default {
       ring.push([cx + r * (1 + 0.025 * Math.sin(ang * 3)) * Math.cos(ang), cy + r * (1 + 0.025 * Math.sin(ang * 3)) * Math.sin(ang)]);
     }
     out.push(k.S(ring));
-    // 刻度：从 -225° 到 45°，一笔一根
+    // 刻度：从 -225° 到 45°，一笔一根（一支笔，和外圈同一线宽）
     const ticks = a.ticks ?? 7, A0 = (-225 * Math.PI) / 180, A1 = (45 * Math.PI) / 180;
     for (let i = 0; i < ticks; i++) {
       const ang = A0 + ((A1 - A0) * i) / (ticks - 1), r0 = r * 1.16, r1 = r * (i === 0 || i === ticks - 1 ? 1.4 : 1.3);
-      out.push({ ...k.S([[cx + r0 * Math.cos(ang), cy + r0 * Math.sin(ang)], [cx + r1 * Math.cos(ang), cy + r1 * Math.sin(ang)]], false), width: Math.max(2.5, k.width * 0.7) });
+      out.push(k.S([[cx + r0 * Math.cos(ang), cy + r0 * Math.sin(ang)], [cx + r1 * Math.cos(ang), cy + r1 * Math.sin(ang)]], false));
     }
     // 指针：从中心朝 value 对应的角度，一笔画出，末端略收
     const ang = A0 + (A1 - A0) * Math.min(1, Math.max(0, a.value));

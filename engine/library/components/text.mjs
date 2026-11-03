@@ -13,6 +13,7 @@ export default {
       plainX: { type: 'enum', values: [true, false], desc: '为 true 时变量 x 写成普通交叉形（默认 false）' },
     },
     example: { text: '感知机 x_1×w_1=4', x: 0, y: 0, size: 72 },
+    preview: [{ text: '感知机', x: 0, y: -50, size: 72 }, { text: 'x_1×w_1=4', x: 0, y: 40, size: 56 }],
     // 组件测试额外检查的写法（字形间距最容易出问题的组合）
     cases: [{ text: 'w_1=4 x_2+x_3', x: 0, y: 0, size: 40 }, { text: '1+3+0=4<5', x: 0, y: 0, size: 56 }, { text: '×4 ×1 =7', x: 0, y: 0, size: 112 }],
   },

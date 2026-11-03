@@ -139,7 +139,9 @@ export default [
     },
     draw(a, k) {
       const { x0, x1, top, base } = a, out = [k.S(k.wobble([[x0, base], [x0, top], [x1, top], [x1, base]], 1, k.rnd, 14), false)];
-      for (let yy = base - 16; yy > top + 8; yy -= 22) out.push({ ...k.S([[x0 + 4, yy + 8], [x1 - 4, yy - 8]], false), width: k.width * 0.85 }); // 排线下笔轻一点
+      // 排线：一支笔、同一线宽；柱子矮时把间距收小，至少三道
+      const gapY = Math.min(22, (base - 16 - (top + 8)) / 2.5);
+      for (let yy = base - 16; yy > top + 8; yy -= gapY) out.push(k.S([[x0 + 4, yy + 8], [x1 - 4, yy - 8]], false));
       return out;
     },
   },

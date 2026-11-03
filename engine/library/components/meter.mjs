@@ -20,7 +20,7 @@ export default {
     },
     example: { part: 'value', x: 0, base: 70, unit: 20, threshold: 5, value: 7, label: '7' },
     preview: [
-      { part: 'threshold', x: 0, base: 70, unit: 16, threshold: 5, span: [-60, 110], label: '门槛 5', labelSize: 72 },
+      { part: 'threshold', x: 0, base: 70, unit: 16, threshold: 5, span: [-50, 110], label: '门槛 5', labelSize: 72 },
       { part: 'value', x: 0, base: 70, unit: 16, threshold: 5, value: 7, label: '7' },
       { part: 'value', x: 60, base: 70, unit: 16, threshold: 5, value: 4, label: '4', color: 'accent' },
     ],
@@ -49,7 +49,9 @@ export default {
     if (drawBase) out.push(base());
     const w = a.barWidth ?? 42, x0 = a.x - w / 2, x1 = a.x + w / 2, top = a.base - a.value * a.unit;
     out.push(k.S(k.wobble([[x0, a.base], [x0, top], [x1, top], [x1, a.base]], 1, k.rnd, 14), false));
-    for (let yy = a.base - 16; yy > top + 8; yy -= 22) out.push({ ...k.S([[x0 + 4, yy + 8], [x1 - 4, yy - 8]], false), width: k.width * 0.85 });
+    // 排线：一支笔、同一线宽；柱子矮时把间距收小，至少三道（审片 v9：红色 4 号柱只有两道排线，缩小看像个「日」）
+    const hatchH = a.base - 16 - (top + 8), gapY = Math.min(22, hatchH / 2.5);
+    for (let yy = a.base - 16; yy > top + 8; yy -= gapY) out.push(k.S([[x0 + 4, yy + 8], [x1 - 4, yy - 8]], false));
     if (a.label) {
       const aboveY = top - size * 0.75;
       // 柱顶标签离门槛虚线太近（不到 0.9 个字号）就挪到柱子右侧，避免和虚线、门槛标签挤在一行；

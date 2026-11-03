@@ -23,17 +23,30 @@ export const textWidth = (text, size) => [...text].reduce((w, c) => w + (/[　-�
 export const NO_LINE_START = /[，。、：；！？）」』”’,.!?:;)\]]/;
 const NO_LINE_END = /[（「『“‘(\[]/;
 const PAUSE = /[，。、：；！？,.!?:;]/;
+// 词边界（按字符下标）：在词中间断行（「自己」断成「自 / 己」）比两行不等长更难读。用 Node 自带的 ICU 分词
+const SEG = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter('zh', { granularity: 'word' }) : null;
+const wordStarts = (chars) => {
+  const s = new Set([0, chars.length]);
+  if (!SEG) { for (let k = 0; k <= chars.length; k++) s.add(k); return s; }
+  const at = []; let cu = 0; // UTF-16 下标 → 字符下标
+  chars.forEach((c, i) => { at[cu] = i; cu += c.length; });
+  for (const g of SEG.segment(chars.join(''))) s.add(at[g.index]);
+  return s;
+};
+
 export function breakLines(text, size, width) {
   const lines = [];
   let rest = [...text];
   while (rest.length && textWidth(rest.join(''), size) > width) {
+    const starts = wordStarts(rest);
     let n = 0; // 这一行最多放得下几个字
     while (n < rest.length && textWidth(rest.slice(0, n + 1).join(''), size) <= width) n++;
     const target = rest.length / Math.ceil(textWidth(rest.join(''), size) / width); // 剩下的平均每行字数
     let best = -1, bestScore = Infinity;
     for (let k = 1; k <= n && k < rest.length; k++) {
       if (NO_LINE_START.test(rest[k]) || NO_LINE_END.test(rest[k - 1])) continue;
-      const score = Math.abs(k - target) + (PAUSE.test(rest[k - 1]) || rest[k] === ' ' ? 0 : 6);
+      // 两行字数尽量均分；标点处断行只在不太失衡时优先（审片：「每个输入，/都要乘上自己的权重：4、3、2」5 字对 15 字）
+      const score = 1.5 * Math.abs(k - target) + (PAUSE.test(rest[k - 1]) || rest[k] === ' ' ? 0 : 4) + (starts.has(k) ? 0 : 20);
       if (score < bestScore) { bestScore = score; best = k; }
     }
     if (best < 0) best = n; // 整行都是标点之类的极端情况

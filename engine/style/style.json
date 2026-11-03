@@ -70,7 +70,7 @@
  "pencil": {
   "base": 42, "swing": 3, "length": 276, "halfWidth": 14, "scale": 0.95, "followZoom": true,
   "swaySigma": 0.25, "liftSigma": 0.06,
-  "coverCost": 3, "maxCoverSec": 1.0, "coverNote": "写字和移动时笔身尽量不压别的元素已写出的字：角度轨迹里每个压字的采样点记 coverCost（约等于偏离自然角度 3°）；检查要求连续压字不超过 maxCoverSec 秒（审片 v9：画声波时笔身横压 x₁、x₂ 和「×3」约 1.9 秒）",
+  "coverCost": 12, "maxCoverSec": 1.0, "maxCoverPhraseSec": 2.0, "coverNote": "写字和移动时笔身尽量不压别的元素已写出的字：角度轨迹里每个压字的采样点记 coverCost（约等于偏离自然角度 12°；e02 上 3 和 6 都还留着超过 1 秒的压字）；检查要求连续压字不超过 maxCoverSec 秒、一句里累计不超过 maxCoverPhraseSec 秒（审片 v9、v10：画声波时笔身横压 x₁、x₂ 和「×3」）。右手握笔、笔身朝右下，在圆的左边画东西时笔身一定会经过圆：e02 16x9 声波在圆左侧，这一句累计约 1.9 秒，要再少得改版式",
   "edgeMargin": 8, "minAngle": 10, "maxAngle": 100, "turnPerFrame": 0.2, "travelTurnSteps": 4, "travelTurnNote": "抬笔移动时每帧最多转 travelTurnSteps × turnPerFrame 度（0.8°，检查上限 1°），写字和停笔时最多 0.4°（检查上限 0.5°，不晃眼）",
   "park": { "minRest": 0.5, "dist": 70, "note": "写完一句、要停一会儿时，笔尖往右下退开 dist 屏幕像素，别压着刚写的东西（理解度测试：停笔时笔身压住了刚画的声波和算式）" }
  },
@@ -82,8 +82,8 @@
  },
 
  "watermark": {
-  "note": "可见水印：品牌名小字、半透明，用字幕字体。每 every 秒换到下一个候选位置（淡出淡入 fade 秒），编译时跳过这段时间里会压到字幕、平台界面或已画内容的位置（离它们至少 margin 像素）。文字取自本机 brand.local.json，没有就不加",
-  "opacity": 0.42, "every": 12, "fade": 0.8, "margin": 10, "swapWindow": 4,
+  "note": "可见水印：品牌名小字、半透明，用字幕字体。每 every 秒换到下一个候选位置（淡出淡入 fade 秒），编译时跳过这段时间里会压到字幕、平台界面或已画内容的位置（离字幕和平台界面至少 margin 像素，离内容至少 contentMargin 像素，免得像谁的标注）。文字取自本机 brand.local.json，没有就不加",
+  "opacity": 0.42, "every": 12, "fade": 0.8, "margin": 10, "contentMargin": 36, "swapWindow": 4,
   "swapNote": "换位时刻在每 every 秒的前后 swapWindow 秒里挑：优先落在两句旁白之间的停顿里，并避开顿悟句（从开口到说完再停 aha.holdAfter 秒，前后各留 fade 秒）。审片 v9：60 秒那次换位正好撞上灯灭",
   "size": { "9x16": 30, "16x9": 28, "1x1": 26 },
   "slots": {

@@ -9,7 +9,7 @@
 //   4. 镜头停稳时内容不进字幕区：任何画出来的元素都不能有一部分落在字幕上沿到画布底那一条里（压在字幕衬底底下只露一半，像污渍）
 //   5. 推近时焦点在画面中部：顿悟推近停稳时，焦点中心离取景框中心不超过 aha.maxOffCenter（占取景框宽、高的比例）
 //      （理解度截帧：推近「灯就亮」时量表和灯挤在画面顶上，下面三分之二是空纸）
-//   6. 水印避开字幕、平台界面和内容：每一段水印显示期间（每 0.1 秒看一次），离平台界面、正在显示的字幕、已开始画的内容都至少 margin 像素
+//   6. 水印避开字幕、平台界面和内容：每一段水印显示期间（每 0.1 秒看一次），离平台界面、正在显示的字幕至少 margin 像素，离已开始画的内容至少 contentMargin 像素
 //   7. 水印换位避开顿悟句：水印淡出、换位、淡入的时刻不落在顿悟句里（从开口到说完再停 aha.holdAfter 秒，前后各留 fade 秒）（审片 v9：60 秒那次换位正好撞上灯灭）
 // 用法：node qa/safezone_check.mjs build/<id>.timeline.json
 import fs from 'node:fs';
@@ -102,12 +102,13 @@ for (const sp of wm?.spans ?? []) {
   if (z) { wmHits.push(`${at}压到 ${z.pf} 的${z.name}`); continue; }
   const s = tl.subtitles.find((x) => x.t0 < sp.t1 && x.t1 > sp.t0 && boxesOverlap(box, subtitleBox(tl, x.lines)));
   if (s) { wmHits.push(`${at}压到字幕「${s.text}」`); continue; }
+  const far = watermarkBox(wm, sp, wm.contentMargin ?? wm.margin); // 离内容要更远，免得像谁的标注（审片 v10：水印贴在灯泡正下方，像灯泡的标签）
   for (let i = 0; sp.t0 + i * 0.1 <= sp.t1 + 1e-6; i++) {
-    const t = sp.t0 + i * 0.1, c = cameraAt(tl.camera, t), hit = tl.strokes.find((x) => x.t0 <= t && boxesOverlap(box, strokeScreenBox(tl, x, c)));
+    const t = sp.t0 + i * 0.1, c = cameraAt(tl.camera, t), hit = tl.strokes.find((x) => x.t0 <= t && boxesOverlap(far, strokeScreenBox(tl, x, c)));
     if (hit) { wmHits.push(`${at}在 ${t.toFixed(2)}s 压到 ${hit.id}`); break; }
   }
 }
-check('水印避开字幕、平台界面和内容', !wmHits.length, wmHits.length ? wmHits.slice(0, 5).join('；') : wm ? `「${wm.text}」${wm.spans.length} 段，都离字幕、平台界面和内容 ${wm.margin}px 以上` : '没有水印（本机没有配置 brand.local.json），未查');
+check('水印避开字幕、平台界面和内容', !wmHits.length, wmHits.length ? wmHits.slice(0, 5).join('；') : wm ? `「${wm.text}」${wm.spans.length} 段，都离字幕、平台界面 ${wm.margin}px、离内容 ${wm.contentMargin ?? wm.margin}px 以上` : '没有水印（本机没有配置 brand.local.json），未查');
 // 7. 水印换位避开顿悟句
 const hold = tl.style?.motion?.aha?.holdAfter ?? 0, swapHits = [];
 for (const sp of wm?.spans ?? []) for (const t of [sp.t0, sp.t1].filter((x) => x > 0.01 && x < tl.duration - 0.01)) {

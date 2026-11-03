@@ -163,7 +163,7 @@ export const inBox = (b: Box, [x, y]: [number, number]) => x > b.l && x < b.r &&
 export const boxesOverlap = (a: Box, b: Box) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
 // 可见水印（屏幕层）：品牌名小字，按 spans 在几个角之间轮换。编译器选位置、渲染、安全区检查共用这个框（字宽估算同字幕）
 export type WatermarkSpan = { t0: number; t1: number; x: number; y: number; anchor: 'l' | 'r' };
-export type Watermark = { text: string; size: number; opacity: number; fade: number; margin: number; spans: WatermarkSpan[] };
+export type Watermark = { text: string; size: number; opacity: number; fade: number; margin: number; contentMargin?: number; spans: WatermarkSpan[] };
 export function watermarkBox(wm: Watermark, sp: { x: number; y: number; anchor: 'l' | 'r' }, margin = 0): Box {
   const w = [...wm.text].reduce((a, c) => a + (/[　-鿿＀-￯]/.test(c) ? 1 : 0.55), 0) * (wm.size + 1), l = sp.anchor === 'r' ? sp.x - w : sp.x;
   return { l: l - margin, r: l + w + margin, t: sp.y - margin, b: sp.y + wm.size * 1.25 + margin };

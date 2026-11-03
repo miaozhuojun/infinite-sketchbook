@@ -150,9 +150,11 @@ const buildOne = (a) => {
       const at = (r, deg) => [t0.cx + r * Math.cos((deg * Math.PI) / 180), t0.cy + r * Math.sin((deg * Math.PI) / 180)];
       geo.set(a.id, drawAction({ ...a, type: 'line', color: a.color ?? 'accent', from: at(Math.min(...rs) - 1, mid + tilt), to: at(Math.max(...rs) + 12, mid - tilt), bow: 1 }));
     } else {
-      // 划掉：从目标墨迹（一组时取整体）左下到右上斜划一道，两头各出头一点
-      const b = bboxOf(ts.flatMap((t) => geo.get(t.id))), ex = 8;
-      geo.set(a.id, drawAction({ ...a, type: 'line', color: a.color ?? 'accent', from: [b.x0 - ex, b.y1 + ex / 2], to: [b.x1 + ex, b.y0 - ex / 2], bow: 2 }));
+      // 划掉：从目标墨迹（一组时取整体）左下到右上斜划一道，两头各出头一点。
+      // 目标是「图形 + 标签」（量表的柱子和数值）时只划图形，上下不出头（审片 v10：划 7 号柱的红杠拉到「7」右上，把「7」也划掉了）
+      const ink = ts.flatMap((t) => geo.get(t.id)), shapes = ink.filter((s) => s.kind === 'shape'), mixed = shapes.length && shapes.length < ink.length;
+      const b = bboxOf(mixed ? shapes : ink), ex = 8, ey = mixed ? -4 : ex / 2;
+      geo.set(a.id, drawAction({ ...a, type: 'line', color: a.color ?? 'accent', from: [b.x0 - ex, b.y1 + ey], to: [b.x1 + ex, b.y0 - ey], bow: 2 }));
     }
   } else geo.set(a.id, drawAction(a));
 };
@@ -658,15 +660,15 @@ const out = {
   const brand = fs.existsSync('brand.local.json') ? JSON.parse(fs.readFileSync('brand.local.json', 'utf8')) : null;
   if (brand?.watermark?.text && slots?.length) {
     const { cameraAt, subtitleBox, watermarkBox, boxesOverlap, strokeScreenBox } = await import('../src/timeline.ts');
-    const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, spans: [] };
+    const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, contentMargin: WM.contentMargin, spans: [] };
     // 和安全区检查同样每 0.1 秒看一次，框再多留 4px，保证检查一定过
     const clashes = (slot, t0, t1) => {
-      const box = watermarkBox(wm, slot, WM.margin + 4);
+      const box = watermarkBox(wm, slot, WM.margin + 4), far = watermarkBox(wm, slot, WM.contentMargin + 4);
       if (UI_ZONES.some((z) => boxesOverlap(box, z))) return true;
       if (subtitles.some((s) => s.t0 < t1 && s.t1 > t0 && boxesOverlap(box, subtitleBox(out, s.lines)))) return true;
       for (let i = 0; t0 + i * 0.1 <= t1 + 1e-6; i++) {
         const t = t0 + i * 0.1, c = cameraAt(camera, t);
-        if (strokes.some((s) => s.t0 <= t && boxesOverlap(box, strokeScreenBox(out, s, c)))) return true;
+        if (strokes.some((s) => s.t0 <= t && boxesOverlap(far, strokeScreenBox(out, s, c)))) return true;
       }
       return false;
     };
@@ -751,8 +753,9 @@ const out = {
   }
   const feasible = (f, k) => { const row = feas[f]; if (!row) return true; const a = k * STEP; return row[Math.floor(a)] && row[Math.min(row.length - 1, Math.ceil(a))]; };
   // 写字和移动时，笔身尽量不压别的元素已写出的字（审片 v9：16x9 画声波时笔身横压 x₁、x₂ 和「×3」）：
-  // 每帧按 2° 采样，数各角度下笔身（不算笔尖那段锥）压进已写文字的采样点，每点记 pencil.coverCost 的代价
-  const txt = strokes.filter((s) => s.kind !== 'shape').map((s) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of s.pts) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); } return { b, a: s.action, t1: s.t1 }; });
+  // 每帧按 2° 采样，数各角度下笔身（不算笔尖那段锥）压进已写文字的采样点，每点记 pencil.coverCost 的代价。
+  // 试过把图形也算进来（记半点）：e02 的 9x16 反而多出两段超过 1 秒的压字，所以只算文字
+  const txt = strokes.filter((s) => s.kind !== 'shape').map((s) => { const b = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of s.pts) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); } return { b, a: s.action, t1: s.t1, w: 2 }; });
   const cover = new Array(nF).fill(null), CS = 2;
   for (let f = 0; f < nF; f++) {
     const t = f / FPS, cam = cameraAt(camera, t), p = penAt(out, t);
@@ -760,7 +763,7 @@ const out = {
     if (tip.x < 0 || tip.x > TGT.w || tip.y < 0 || tip.y > TGT.h) continue;
     const sc = pencilScale(out, cam.z), reach = (P.length + P.halfWidth) * sc, down = out.penTrack.find((sg) => sg.kind === 'down' && t >= sg.t0 && t < sg.t1);
     const self = down ? strokes[down.stroke].action : null, pad = 4;
-    const near = txt.filter((q) => q.t1 <= t && q.a !== self).map(({ b }) => [(b[0] - cam.x) * cam.z + VIEW.cx - pad, (b[1] - cam.y) * cam.z + VIEW.cy - pad, (b[2] - cam.x) * cam.z + VIEW.cx + pad, (b[3] - cam.y) * cam.z + VIEW.cy + pad])
+    const near = txt.filter((q) => q.t1 <= t && q.a !== self).map(({ b, w }) => [(b[0] - cam.x) * cam.z + VIEW.cx - pad, (b[1] - cam.y) * cam.z + VIEW.cy - pad, (b[2] - cam.x) * cam.z + VIEW.cx + pad, (b[3] - cam.y) * cam.z + VIEW.cy + pad, w])
       .filter((b) => b[2] > tip.x - reach && b[0] < tip.x + reach && b[3] > tip.y - reach && b[1] < tip.y + reach);
     if (!near.length) continue;
     const cone = 0.2 * P.length * sc;
@@ -769,12 +772,13 @@ const out = {
       let n = 0;
       for (const [x, y] of pencilBodyPts(out, { x: tip.x, y: tip.y, ang: a, sc, lift: 0.3 })) {
         if ((x - tip.x) * Math.cos(r) + (y - tip.y) * Math.sin(r) < cone) continue;
-        if (near.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3])) n++;
+        const hit = near.filter((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3]);
+        if (hit.length) n += Math.max(...hit.map((b) => b[4]));
       }
       return Math.min(255, n);
     });
   }
-  const coverAt = (f, k) => (cover[f] ? cover[f][Math.min(cover[f].length - 1, Math.round((k * STEP) / CS))] : 0);
+  const coverAt = (f, k) => (cover[f] ? cover[f][Math.min(cover[f].length - 1, Math.round((k * STEP) / CS))] / 2 : 0); // 表里存的是半点数
   const cost = (f, k) => (feasible(f, k) ? 0 : 1000) + Math.abs(ang(k) - a0s[f]) + (P.coverCost ?? 0) * coverAt(f, k);
   let D = Float64Array.from({ length: K }, (_, k) => cost(0, k)), D2 = new Float64Array(K);
   const back = new Int8Array(nF * K);

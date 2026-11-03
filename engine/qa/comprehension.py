@@ -30,12 +30,13 @@ if cmd == "pack":
         effects = [a["end"] + 0.15 for a in tl["report"]["actions"] if a["phrase"] == i and not a["pen"]]
         nxt = subs[i + 1]["t0"] if i + 1 < len(subs) else tl["duration"]
         lo = max(p["drawEnd"] + 0.2, s["t0"] + 0.3, *effects)
-        t = min(lo, nxt - 0.1, tl["duration"] - 0.05)
+        # 也不截在字幕淡出里（最后 0.12 秒，渲染端按这个淡出）：理解度测试看到字幕条发白、对比度很低
+        t = min(lo, nxt - 0.1, s["t1"] - 0.15, tl["duration"] - 0.05)
         # 截在铅笔飞行途中，笔会盖住它路过的字（理解度测试把「7 超过了 5」那帧飞过「+0×2」的笔读成停在「0」上）。
         # 落在抬笔移动里就挪到落地之后；字幕撤掉前落不了地，就提前到起飞那一刻（笔还在刚画完的地方），但不早于字幕出现和效果走完。
         # 挪后不越过这句字幕的结尾：最后一句的笔飞出画外要很久，挪到落地时字幕早没了（理解度测试：最后一帧没有字幕）
         fly = next((m for m in tl["penTrack"] if m["kind"] == "move" and m["t0"] <= t < m["t1"]), None)
-        if fly and fly["t1"] + 0.02 <= min(nxt - 0.1, s["t1"] - 0.1, tl["duration"] - 0.05):
+        if fly and fly["t1"] + 0.02 <= min(nxt - 0.1, s["t1"] - 0.15, tl["duration"] - 0.05):
             t = fly["t1"] + 0.02
         elif fly and fly["t0"] + 0.02 >= max([s["t0"] + 0.3, *effects]):
             t = fly["t0"] + 0.02

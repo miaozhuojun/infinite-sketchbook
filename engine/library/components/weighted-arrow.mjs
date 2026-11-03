@@ -11,7 +11,7 @@ export default {
       bow: { type: 'number', desc: '弧度（像素）' }, color: { type: 'inkColor' },
     },
     example: { from: [-120, 0], to: [120, 0], weight: 4, bow: 6 },
-    preview: [{ from: [-130, -80], to: [110, -80], weight: 4, bow: 6 }, { from: [-130, -5], to: [110, -5], weight: 3, bow: 6 }, { from: [-130, 70], to: [110, 70], weight: 2, bow: 6 }],
+    preview: [{ from: [-130, -60], to: [110, -60], weight: 4, bow: 6 }, { from: [-130, 40], to: [110, 40], weight: 3, bow: 6 }],
   },
   draw(a, k) {
     const [x0, y0] = a.from, [x1, y1] = a.to;
@@ -21,7 +21,8 @@ export default {
     const p = shaft[shaft.length - 3], ang = Math.atan2(y1 - p[1], x1 - p[0]), hl = 20, hw = 0.5;
     const out = [k.S(shaft), k.S([[x1 - hl * Math.cos(ang - hw), y1 - hl * Math.sin(ang - hw)], [x1, y1], [x1 - hl * Math.cos(ang + hw), y1 - hl * Math.sin(ang + hw)]], false)];
     // 标签写在连线中点旁边：屏幕坐标 y 朝下，前进方向的左侧是 -(nx, ny)
-    const size = a.labelSize ?? 56, m = shaft[Math.floor(shaft.length / 2)], s = a.side === 'right' ? 1 : -1, d = size * 0.55 + 8;
+    // 标签贴着自己这条线（离线约 0.2 个字号），两条线挨着画时一眼看出标签属于哪条（审片 v10：预览里 ×3、×2 夹在两根线正中）
+    const size = a.labelSize ?? 56, m = shaft[Math.floor(shaft.length / 2)], s = a.side === 'right' ? 1 : -1, d = size * 0.45 + 4;
     out.push(...k.text({ text: `×${a.weight}`, size, x: m[0] + (s * nx * d) / L, y: m[1] + (s * ny * d) / L, anchor: 'c' }));
     return out;
   },

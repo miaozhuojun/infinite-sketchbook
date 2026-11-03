@@ -94,6 +94,7 @@ export function validateBeats(beats, style, reg) {
     if (!p.text) E(P, '缺少 text');
     if (p.role && !ROLES.has(p.role)) E(`${P}.role`, `只能是 ${[...ROLES].join(' / ')}`);
     if (p.camera && !['focus', 'overview'].includes(p.camera)) E(`${P}.camera`, '只能是 focus（推近这句的元素）或 overview');
+    if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
     if (p.focus) for (const fid of p.focus) if (!beats.phrases.some((q) => (q.actions || []).some((x) => x.id === fid))) E(`${P}.focus`, `「${fid}」不是分镜里的元素`);
     const st = strip(p.text || '');
     for (const a of p.actions || []) {

@@ -85,10 +85,11 @@ if (libOk && beatsOk) {
     run(`[${t}] 平台安全区检查`, 'node', ['qa/safezone_check.mjs', tl]);
     run(`[${t}] 设备预览`, PY_QA, ['qa/device_preview.py', tl, video, path.join(outDir, `preview_${t}.png`)]);
     run(`[${t}] 审片联系表`, PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review')]);
+    // 旁白检查每个画幅都跑：各画幅的旁白是分别拼、分别混的（用户在横版里听出的畸变，原来只查竖版）
+    const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
+    if (noSpeech) skip(`[${t}] 旁白检查`, noSpeech);
+    else run(`[${t}] 旁白检查`, PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' });
     if (t === compiled[0]) {
-      const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
-      if (noSpeech) skip(`[${t}] 旁白检查`, noSpeech);
-      else run(`[${t}] 旁白检查`, PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' });
       if ((beats.quiz || []).length) run(`[${t}] 理解度测试材料`, PY_QA, ['qa/comprehension.py', 'pack', beatsPath, tl, video, path.join(outDir, 'comprehension')]);
     }
   }

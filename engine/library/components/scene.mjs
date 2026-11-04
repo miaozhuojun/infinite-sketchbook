@@ -30,13 +30,15 @@ function lamp(k, cx, cy, r, colorName, lit = false) {
 // 彩笔涂满一个圆：一笔来回的斜向排线（像小孩拿彩色铅笔涂色，线和线之间透一点纸色），亮着的灯就这样画。
 // 原来灯亮用不动笔的光晕，看着是一团红晕、绿晕，不像笔画出来的（用户看 E01 v7）。
 // 线距约两个笔宽：涂得满但看得出笔触；排线收在圆里面半个笔宽，不压外圈
+// 线距约两个半笔宽、每道略有长短和疏密（审片 v8：线距一样、每道顶到圆边，像一根弹簧；线太密，一盏灯要涂 1.1 秒）
 function colorIn(k, cx, cy, r, colorName) {
-  const R = r - k.width * 0.9, gap = k.width * 2.1, th = (-32 + (k.rnd() - 0.5) * 8) * Math.PI / 180;
+  const R = r - k.width * 0.9, gap = k.width * 2.6, th = (-32 + (k.rnd() - 0.5) * 8) * Math.PI / 180;
   const c = Math.cos(th), s = Math.sin(th), pts = [];
   let dir = 1;
-  for (let u = -R + gap / 2; u < R; u += gap) {
-    const h = Math.sqrt(Math.max(0, R * R - u * u)) * (0.9 + k.rnd() * 0.08);
-    for (const v of dir > 0 ? [-h, h] : [h, -h]) pts.push([cx + u * c - v * s, cy + u * s + v * c]);
+  for (let u = -R + gap * 0.6; u < R - gap * 0.3; u += gap * (0.8 + k.rnd() * 0.4)) {
+    const h = Math.sqrt(Math.max(0, R * R - u * u));
+    const v0 = -h * (0.78 + k.rnd() * 0.2), v1 = h * (0.78 + k.rnd() * 0.2), du = (k.rnd() - 0.5) * gap * 0.3;
+    for (const v of dir > 0 ? [v0, v1] : [v1, v0]) pts.push([cx + (u + (v === v1 ? du : 0)) * c - v * s, cy + (u + (v === v1 ? du : 0)) * s + v * c]);
     dir = -dir;
   }
   return { ...k.S(pts, false), color: lampColor(k, colorName) };

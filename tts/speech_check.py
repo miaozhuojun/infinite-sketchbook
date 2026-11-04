@@ -55,11 +55,15 @@ if floor:
     # 按句量：判断「听得见的部分」要拿这一句自己的响度做参照，和配音时逐句自检一致；拿整段旁白做参照时，
     # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
     # 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾
+    # 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上，会退回整段量）
     def sentence_ranges():
-        for s in timing0.get("sentences", []):
-            cs = [c for c in tl["audioClips"] if c["srcIn"] >= s["start"] - 0.02 and c["srcOut"] <= s["end"] + 0.02]
+        S = timing0.get("sentences", [])
+        overlap = lambda c, s: min(c["srcOut"], s["end"]) - max(c["srcIn"], s["start"])
+        owner = [max(range(len(S)), key=lambda k: overlap(c, S[k])) if S else None for c in tl["audioClips"]]
+        for k in range(len(S)):
+            cs = [c for c, o in zip(tl["audioClips"], owner) if o == k]
             if cs:
-                yield cs[0]["at"], max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
+                yield min(c["at"] for c in cs), max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
     ranges = list(sentence_ranges()) or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
     drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
     def phrase_at(t):

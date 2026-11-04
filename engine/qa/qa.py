@@ -104,10 +104,11 @@ for s in samples:
     sx, sy = (x - c["x"]) * c["z"] + tl["view"]["cx"], (y - c["y"]) * c["z"] + tl["view"]["cy"]
     r = 6
     patch = img[int(sy) - r:int(sy) + r + 1, int(sx) - r:int(sx) + r + 1]
-    # 墨迹 = 深色（铅笔灰）或明显偏红（红笔），纸面约 (243,236,220)
-    dark = int(((patch.sum(axis=2) < 330) | ((patch[..., 0] - patch[..., 2]) > 90)).sum())
-    if dark < 3:
-        misses.append(f"帧{fr} {stroke['id']} 屏幕({sx:.0f},{sy:.0f}) 暗像素{dark}")
+    # 墨迹 = 和纸色差得远的像素，不管是什么墨色（原来只认深灰和偏红，通行绿的字会被当成没墨）
+    paper = np.array([int(tl["style"]["palette"]["paper"][i:i + 2], 16) for i in (1, 3, 5)])
+    ink = int((np.sqrt(((patch.astype(int) - paper) ** 2).sum(axis=2)) > 80).sum())
+    if ink < 3:
+        misses.append(f"帧{fr} {stroke['id']} 屏幕({sx:.0f},{sy:.0f}) 墨迹像素{ink}")
 check("笔尖落在正在画的笔迹上", not misses, f"抽检 {len(samples)} 处，未命中 {len(misses)}" + (("：" + "；".join(misses)) if misses else ""))
 
 # 运笔流畅、笔身晃动、压字幕：见 qa/pencil_check.mjs（直接复用渲染端的姿态函数）

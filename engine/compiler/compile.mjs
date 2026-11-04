@@ -345,7 +345,12 @@ const SUB_TOP = TGT.sub.top - style.subtitle.plate.padY;
 const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []);
 // 元素包围盒缓存（取景搜索要试上千个位置，每次重新采样路径太慢）；元素被重画后自动失效
 const boxCache = new Map();
-const geoBox = (id) => { const l = geo.get(id), c = boxCache.get(id); if (c && c.l === l) return c.b; const b = bboxOf(l); boxCache.set(id, { l, b }); return b; };
+// 和安全区检查同一份几何：路径范围再向外扩半个笔宽（检查按实际墨迹算，取景只看路径中心线时会差几像素，推近停在字的边上）
+const geoBox = (id) => {
+  const l = geo.get(id), c = boxCache.get(id); if (c && c.l === l) return c.b;
+  const r = bboxOf(l), hw = Math.max(0, ...l.map((s) => s.width ?? 0)) / 2, b = { x0: r.x0 - hw, y0: r.y0 - hw, x1: r.x1 + hw, y1: r.y1 + hw };
+  boxCache.set(id, { l, b }); return b;
+};
 // 镜头停稳时（比检查再收 4px）：
 //   文字要整段在取景框 frame 里（字幕衬底上方、不压平台界面），或者整段在画布外（审片：推近后左边缘只剩「4」、算式只剩「0 =7」）；
 //   图形也一样整段在取景框里或整段出画（审片 E01 v1：推近后箭头只剩半截、灯泡左半被切、框角挂在画面顶上）；
@@ -377,7 +382,9 @@ const focusCam = phrases.map((p, pi) => {
   const ov = phraseCam[pi], F = bboxOf(list), fr = TGT.frame, cx0 = (F.x0 + F.x1) / 2, cy0 = (F.y0 + F.y1) / 2;
   const centered = (c) => Math.abs((cx0 - c.x) * c.z) <= (AHA.maxOffCenter ?? 1) * (fr.r - fr.l) && Math.abs((cy0 - c.y) * c.z) <= (AHA.maxOffCenter ?? 1) * (fr.b - fr.t);
   const zHi = Math.min(AHA.zoomMax ?? ZMAX, ov.z * AHA.maxPush), zLo = ov.z * AHA.minPush;
-  for (let k = 0; k <= 8 && zHi >= zLo; k++) {
+  // 分镜写了 noPush：这个画幅就不推近，直接用下面的不推近取景（创作意图优先；原来只是不报建议，镜头照样推近，审片 E01 v3）
+  const skipPush = (p.noPush || []).includes(targetName);
+  for (let k = 0; !skipPush && k <= 8 && zHi >= zLo; k++) {
     const z = zHi - ((zHi - zLo) * k) / 8, pad = 40 / z;
     const xr = [F.x1 - (fr.r - VIEW.cx) / z + pad, F.x0 - (fr.l - VIEW.cx) / z - pad], yr = [F.y1 - (fr.b - VIEW.cy) / z + pad, F.y0 - (fr.t - VIEW.cy) / z - pad];
     if (xr[0] > xr[1] || yr[0] > yr[1]) continue; // 这个倍数下焦点装不下
@@ -415,7 +422,7 @@ const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l &
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
   const strokes = [], penTrack = [], effects = [], audioClips = [], report = { phrases: [], actions: [] };
-  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）
+  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
     const clipIn = p.cutIn, clipOut = p.cutOut;
@@ -440,7 +447,9 @@ function schedule(boost) {
       const ss = geo.get(a.id);
       const speed = (a.speed || 1) * (boost.get(a.id) || 1);
       // 这一句里镜头可能正从上一句的取景过渡过来，取两者较大的放大倍数
-      const z = Math.max(targetCam[pi]?.z ?? 1, targetCam[pi - 1]?.z ?? 0);
+      // 从铅笔上次落笔的那句到这句，镜头可能一直停在某次推近上（中间隔着不画的句子），取这段里最大的放大倍数；
+      // 只看这句和上一句时，隔一句的推近（1.5 倍）被漏掉，铅笔挪位按 1.25 倍算快了，屏幕上一帧跳 63px（E01 v4 9:16）
+      const z = Math.max(...targetCam.slice(Math.min(penPhrase, pi), pi + 1).map((c) => c?.z ?? 1), targetCam[pi - 1]?.z ?? 0);
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
       const fromPos = penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
       const travel = moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
@@ -521,6 +530,7 @@ function schedule(boost) {
         penTrack.push({ kind: 'down', t0: t, t1: t + dur, stroke: idx });
         t += dur;
         penPos = [en.x, en.y];
+        penPhrase = pi;
       });
       penFree = t;
       report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(start), end: r2(t), lag: r2(start - cue), pen: true, audioStart: r2(audioStart), audioEnd: r2(audioEnd), speed: r2(speed) });

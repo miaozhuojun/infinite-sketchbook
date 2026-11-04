@@ -56,9 +56,13 @@ for (const s of tl.strokes) {
 }
 // 每个元素已画部分的包围盒（第 3、4 项共用）
 const allBox = new Map();
+// 按实际墨迹算：渲染用的全部采样点，再向外扩半个笔宽（只取路径上 9 个点、不算笔宽时，
+// 「律」字最后一点露在 16:9 画面左缘 4px 也被当成整段在画外，审片 E01 v2）
 for (const s of tl.strokes) {
-  const pr = new svgPathProperties(s.d), L = pr.getTotalLength(), b = allBox.get(s.action) ?? { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, t0: Infinity };
-  for (let k = 0; k <= 8; k++) { const q = pr.getPointAtLength((L * k) / 8); b.x0 = Math.min(b.x0, q.x); b.y0 = Math.min(b.y0, q.y); b.x1 = Math.max(b.x1, q.x); b.y1 = Math.max(b.y1, q.y); }
+  const b = allBox.get(s.action) ?? { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, t0: Infinity }, hw = (s.width ?? 0) / 2;
+  let pts = s.pts;
+  if (!pts?.length) { const pr = new svgPathProperties(s.d), L = pr.getTotalLength(); pts = Array.from({ length: 33 }, (_, k) => { const q = pr.getPointAtLength((L * k) / 32); return [q.x, q.y]; }); }
+  for (const [x, y] of pts) { b.x0 = Math.min(b.x0, x - hw); b.y0 = Math.min(b.y0, y - hw); b.x1 = Math.max(b.x1, x + hw); b.y1 = Math.max(b.y1, y + hw); }
   b.t0 = Math.min(b.t0, s.t0);
   allBox.set(s.action, b);
 }

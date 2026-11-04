@@ -1,21 +1,22 @@
 {
  "name": "无限草稿本",
- "version": "0.5.0",
- "note": "唯一的风格来源。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。0.4.2：水印换位避开顿悟句、尽量落在停顿里（watermark.swapWindow）；YouTube Shorts 补上顶部图标的遮挡区；铅笔角度避开已写的字（pencil.coverCost），离场走压内容最少的方向、片尾整支笔出画；图形元素之间留空（type.shapeGapPen）；镜头停稳时每个元素整段在取景框里或整段在画外。同色墨迹合成一层、不同墨色正常叠放（ink.layerBlend），交叠处不再发黑。0.4.3：书写声和音乐用真实的 CC0 录音（audio.pencilSamples、audio.music.track），没有文件时退回合成。0.5.0：章节（chapters，分镜写节名，发布清单按平台给章节；镜头只框当前这一节）；发布清单加上抖音和哔哩哔哩。",
+ "version": "0.5.1",
+ "note": "唯一的风格来源。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。0.4.2：水印换位避开顿悟句、尽量落在停顿里（watermark.swapWindow）；YouTube Shorts 补上顶部图标的遮挡区；铅笔角度避开已写的字（pencil.coverCost），离场走压内容最少的方向、片尾整支笔出画；图形元素之间留空（type.shapeGapPen）；镜头停稳时每个元素整段在取景框里或整段在画外。同色墨迹合成一层、不同墨色正常叠放（ink.layerBlend），交叠处不再发黑。0.4.3：书写声和音乐用真实的 CC0 录音（audio.pencilSamples、audio.music.track），没有文件时退回合成。0.5.0：章节（chapters，分镜写节名，发布清单按平台给章节；镜头只框当前这一节）；发布清单加上抖音和哔哩哔哩。0.5.1：通行绿 go（只给本来就是绿色的东西用，比如绿灯；红灯发红光、绿灯发绿光）；换节镜头至少移 motion.chapterMoveMin 秒；图形也要整段在取景框里或整段出画，长路线箭头这类元素在分镜里写 bleed 放行。",
 
  "palette": {
   "paper": "#f3ecdc",
   "grid": "#9fb3bd",
   "ink": "#36383d",
   "accent": "#c4432f",
+  "go": "#5f8f5a",
   "highlight": "#f3c64a",
   "subtitle": "#3b3027",
   "plate": "#f8f2e4",
   "lamp": "#fff6dc",
   "shade": "#3c2a12"
  },
- "inkColors": ["ink", "accent"],
- "effectColors": ["highlight"],
+ "inkColors": ["ink", "accent", "go"],
+ "effectColors": ["highlight", "accent", "go"],
 
  "paper": { "gridSize": 48, "gridOpacity": 0.3, "fiberOpacity": 0.5, "lampOpacity": 0.62, "vignetteOpacity": 0.22 },
 
@@ -64,7 +65,8 @@
   "maxSpeedBoost": 1.8,
   "aha": { "lead": 0.3, "moveDur": 0.9, "hold": 0.8, "minPush": 1.1, "maxPush": 1.35, "pad": 110, "zoomMax": 1.5, "holdAfter": 0.5, "pauseAfter": 0.6, "maxOffCenter": 0.2, "offCenterNote": "推近后焦点中心离取景框中心不超过取景框宽、高的这个比例（最偏落在三分线附近）；只求不切字时，推近会把焦点挤到画面顶上、下面大半空着" },
   "finalOverviewHold": 1.4,
-  "minCameraGap": 1.2
+  "minCameraGap": 1.2,
+  "chapterMoveMin": 1.8, "chapterMoveNote": "换节时镜头沿纸面移过去至少这么久（秒），前一句太短时让第一笔晚一点落；审片 E01 v1：一次换节只用 1.05 秒，像甩镜头"
  },
 
  "pencil": {
@@ -172,7 +174,8 @@
    { "name": "顶部搜索与菜单图标", "l": 760, "r": 1080, "t": 0, "b": 130 }
   ],
   "youtube": [
-   { "name": "暂停时进度条与控件", "l": 0, "r": 1920, "t": 1000, "b": 1080 }
+   { "name": "暂停时进度条与控件", "l": 0, "r": 1920, "t": 1000, "b": 1080 },
+   { "name": "悬停或暂停时顶部标题栏", "l": 0, "r": 1920, "t": 0, "b": 80 }
   ],
   "douyin": [
    { "name": "右侧按钮列", "l": 948, "r": 1080, "t": 760, "b": 1620 },

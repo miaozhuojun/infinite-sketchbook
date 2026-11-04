@@ -73,7 +73,7 @@ export default [
   },
   {
     meta: {
-      name: 'bulb', title: '灯泡', desc: '玻璃泡 + 两道底座 + 螺旋灯丝，共四笔。表示"输出/亮了/想到了"。点亮用 glow（可带 rays 光芒），熄灭用 off。',
+      name: 'bulb', title: '灯泡', desc: '玻璃泡 + 两道底座 + 灯丝（两根支架，顶上折成 M），共四笔。表示"输出/亮了/想到了"。点亮用 glow（可带 rays 光芒），熄灭用 off。',
       params: { cx: { type: 'number', required: true }, cy: { type: 'number', required: true }, r: { type: 'number', required: true }, ...common },
       example: { cx: 0, cy: 0, r: 48 }, extent: (a) => [a.cx - a.r * 1.2, a.cy - a.r * 1.2, a.cx + a.r * 1.2, a.cy + a.r * 1.5],
     },
@@ -88,12 +88,8 @@ export default [
       out.push(k.S([neckL, ...glass.slice(1, -1), neckR]));
       out.push(k.S([[cx - r * 0.44, cy + r * 1.2], [cx + r * 0.44, cy + r * 1.2]], false));
       out.push(k.S([[cx - r * 0.38, cy + r * 1.38], [cx + r * 0.38, cy + r * 1.38]], false));
-      const coil = [];
-      for (let i = 0; i <= 36; i++) {
-        const u = i / 36, ang = u * Math.PI * 2 * 3.5;
-        coil.push([cx - r * 0.24 + r * 0.48 * u, cy + r * 0.02 + r * 0.13 * Math.sin(ang)]);
-      }
-      out.push(k.S([[cx - r * 0.24, cy + r * 1.08], [cx - r * 0.24, cy + r * 0.45], ...coil, [cx + r * 0.24, cy + r * 0.45], [cx + r * 0.24, cy + r * 1.08]]));
+      // 灯丝：两根支架从灯口往上，顶上折成一个 M（审片 E01 v1：原来的锯齿顶像小城堡或梳子；绕小圈的螺旋在常用字号下糊成一条横杠）
+      out.push(k.S([[cx - r * 0.22, cy + r * 1.08], [cx - r * 0.24, cy + r * 0.32], [cx - r * 0.12, cy - r * 0.08], [cx, cy + r * 0.22], [cx + r * 0.12, cy - r * 0.08], [cx + r * 0.24, cy + r * 0.32], [cx + r * 0.22, cy + r * 1.08]], false));
       return out;
     },
   },

@@ -143,6 +143,14 @@ expectFail('图形停在取景框外的顶边距里（像推近后挂在顶边�
   const [m, ys] = shotWithShape(tl), z = Math.min(m.to.z, (tl.frame.t - 20) / (Math.max(...ys) - Math.min(...ys)));
   m.to = { ...m.to, z, y: Math.max(...ys) - (tl.frame.t - 10 - tl.view.cy) / z }; // 整个图形落在画布顶边和取景框上沿之间
 }, safezone, '[失败] 镜头停稳时不切字、不留残边');
+expectFail('镜头停稳时一个图形被画布左边缘切掉一截、其余伸进取景框（像推近后切掉一半的灯泡）', (tl) => {
+  // 镜头不动，在最后一个镜头里加一条横线：左端在画布外 60px，右端伸进取景框 200px，高度取取景框正中。
+  // 旧规则（图形被画布边缘裁掉可以）会放过它，别的元素都不受影响
+  const m = tl.camera.at(-1), c = m.to; // 最后一镜：之后没有别的镜头位置再看到这条线
+  const w = (sx, sy) => [(sx - tl.view.cx) / c.z + c.x, (sy - tl.view.cy) / c.z + c.y], y = (tl.frame.t + tl.frame.b) / 2;
+  const [ax, ay] = w(-60, y), [bx, by] = w(tl.frame.l + 200, y);
+  tl.strokes.push({ id: '_cut#0', action: '_cut', group: '_cut', kind: 'shape', color: 'ink', d: `M ${ax} ${ay} L ${bx} ${by}`, len: Math.hypot(bx - ax, by - ay), t0: Math.min(m.t1 + 0.1, tl.duration - 0.4), t1: Math.min(m.t1 + 0.3, tl.duration - 0.2), pts: [[ax, ay, 0.5], [bx, by, 0.5]] });
+}, safezone, '_cut 在 ');
 expectFail('推近把焦点挤到画面顶上（下面大半空着）', (tl) => {
   const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
   m.to = { ...m.to, y: m.to.y + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z }; // 焦点中心往上挪 35% 个取景框高

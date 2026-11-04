@@ -51,20 +51,22 @@ check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似�
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
 floor = voice.get("pitchFloorHz", 0)
 timing0 = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
+# 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾。
+# 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上）
+def sentence_ranges():
+    S = timing0.get("sentences", [])
+    overlap = lambda c, s: min(c["srcOut"], s["end"]) - max(c["srcIn"], s["start"])
+    owner = [max(range(len(S)), key=lambda k: overlap(c, S[k])) if S else None for c in tl["audioClips"]]
+    for k in range(len(S)):
+        cs = [c for c, o in zip(tl["audioClips"], owner) if o == k]
+        if cs:
+            yield k, min(c["at"] for c in cs), max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
+
+
 if floor:
     # 按句量：判断「听得见的部分」要拿这一句自己的响度做参照，和配音时逐句自检一致；拿整段旁白做参照时，
     # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
-    # 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾
-    # 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上，会退回整段量）
-    def sentence_ranges():
-        S = timing0.get("sentences", [])
-        overlap = lambda c, s: min(c["srcOut"], s["end"]) - max(c["srcIn"], s["start"])
-        owner = [max(range(len(S)), key=lambda k: overlap(c, S[k])) if S else None for c in tl["audioClips"]]
-        for k in range(len(S)):
-            cs = [c for c, o in zip(tl["audioClips"], owner) if o == k]
-            if cs:
-                yield min(c["at"] for c in cs), max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
-    ranges = list(sentence_ranges()) or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
+    ranges = [(a, b) for _, a, b in sentence_ranges()] or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
     drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
     def phrase_at(t):
         c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
@@ -75,7 +77,7 @@ if floor:
 #     句内起伏 = 浊音基频 5%–95% 分位差几个半音；句间变化 = 各句音区（中位基频）的标准差。念课文式的配音两项都偏小
 from voice import pitch_range_st, pitch_median_hz
 if voice.get("pitchRangeSt") or voice.get("registerSpreadSt"):
-    xs, xsr = mono(root / "public" / beats["narration"]["audio"])
+    xs, xsr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
     tm = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
     P = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
     ranges, regs, k = [], [], 0
@@ -97,8 +99,24 @@ if voice.get("pitchRangeSt") or voice.get("registerSpreadSt"):
               f"句间音区变化 {spread:.1f} 个半音（真实 ≥{need_s}）" + ("" if ok else "；最平的：" + "、".join(f"「{t[:12]}」{r:.1f}" for r, t in flat)
               + "。可以在分镜 narration.mood 里按句指定情绪参考音"))
 
+# 0d. 背景干净：每句旁白的 DNSMOS BAK（背景噪声分，1–5，越高越干净）不低于 voice.json 的 minBak。
+#     用户听 E01 v7「说话时有明显背景噪音」，音色相似度、谐噪比、电平都看不出来；BAK 按句排，最差的几句（「那怎么办？」2.66）明显比别的句子脏
+min_bak = voice.get("minBak", 0)
+if min_bak:
+    # 在源配音上逐句量（timing 的 sentences 就是每句配音在源文件里的起止）：成片旁白是同一批采样（「拼接后声音完整」已核对），
+    # 但成片里句中插了停顿，DNSMOS 对前后文敏感，同一句能差到 0.9 分；源上量和配音生成时逐句自检完全是同一段声音，结论一致
+    from dnsmos import score as dnsmos_score
+    xs0, ssr0 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans0 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    noisy = []
+    for sp0 in spans0:
+        bk = dnsmos_score(xs0[int(sp0["start"] * ssr0):int(sp0["end"] * ssr0)], ssr0)[0][1]
+        if bk < min_bak:
+            noisy.append(f"「{sp0['text'][:10]}」{bk:.2f}")
+    check("背景干净", not noisy, f"{len(noisy)} 句 DNSMOS BAK 低于 {min_bak}：" + "；".join(noisy[:6]) if noisy else f"{len(spans0)} 句配音的 DNSMOS BAK 都不低于 {min_bak}")
+
 # 1. 拼接切点
-src, ssr = mono(root / "public" / beats["narration"]["audio"])
+src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)
 bad = []
 for c in tl["audioClips"]:

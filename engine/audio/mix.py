@@ -215,9 +215,14 @@ music *= fade
 
 # 人声出现时把音乐压低（侧链式闪避），用旁白片段时间表，平滑过渡
 duck_db = np.full(N, 0.0)
-for c in tl["audioClips"]:
-    a, b = int(c["at"] * SR), int((c["at"] + c["srcOut"] - c["srcIn"]) * SR)
-    duck_db[a:b] = AU["duckDb"]
+clips = sorted((c["at"], c["at"] + c["srcOut"] - c["srcIn"]) for c in tl["audioClips"])
+for a, b in clips:
+    duck_db[int(a * SR):int(b * SR)] = AU["duckDb"]
+# 句间停顿短于 duckHoldGap 秒时音乐不回升：每个小停顿里音乐都冒上来，听着像说话时有背景噪音（用户听 E01 v7；DNSMOS 说话段最差窗 1.76 → 2.60）
+hold = AU.get("duckHoldGap", 0)
+for (a0, b0), (a1, b1) in zip(clips, clips[1:]):
+    if a1 - b0 < hold:
+        duck_db[int(b0 * SR):int(a1 * SR)] = AU["duckDb"]
 k = int(0.25 * SR)
 duck_db = np.convolve(duck_db, np.ones(k) / k, mode="same")
 music *= 10 ** (duck_db / 20)

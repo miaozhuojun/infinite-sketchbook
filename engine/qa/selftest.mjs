@@ -199,6 +199,23 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 没有掉嗓子');
+speechCase('一句配音底下垫着嘶嘶的背景噪声（用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
+  // 源配音里最后一段旁白整段叠上白噪声（比这段说话低 20dB），只改源文件；背景干净按源配音逐句量
+  const src = path.resolve('public', base.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, json, numpy as np
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(base.audioClips.at(-1)))})
+a, b = int(c['srcIn'] * sr), int(c['srcOut'] * sr)
+seg = x[a:b] if x.ndim == 1 else x[a:b, 0]
+n = np.random.default_rng(1).standard_normal(b - a) * np.sqrt((seg ** 2).mean()) * 10 ** (-20 / 20)
+if x.ndim == 1: x[a:b] += n
+else: x[a:b] += n[:, None]
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 背景干净');
 speechCase('旁白里一个字的开头被抹掉 80ms', (tl) => {
   const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `

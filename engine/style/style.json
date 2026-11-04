@@ -120,6 +120,8 @@
   "musicRel": -21,
   "chimeRel": -14,
   "duckDb": -8,
+  "duckHoldGap": 0,
+  "duckHoldGapNote": "句间停顿短于这么多秒时音乐保持压低、不回升（0 表示每个停顿都回升）。回升让音乐有呼吸，但小停顿里频繁冒出来会像说话时有背景噪音；取多少是创作取舍，私有配置里定",
   "foleyDuck": 0.75,
   "voiceComp": { "threshold": -24, "ratio": 2, "window": 0.01, "tau": 0.05, "note": "人声轻压缩：TTS 原声峰响比 18dB，直接拉到 -16 LUFS 会削顶；压一点再做真峰值限幅，响度和峰值都到位" },
   "limiterLook": 0.003,

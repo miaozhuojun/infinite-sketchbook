@@ -3,7 +3,7 @@
 输出与 edge_baseline.py 相同的 timing JSON，引擎编译器可直接换用。
 用法：.venv-mlx/bin/python qwen_clone.py <文本> <输出前缀> [--seed N] [--gap 0.4] [--voice voice.json]
 音色配置（参考音、真人录音、相似度下限）只在 voice.json；参考文本取参考音同名 .txt，默认种子 2。
-按句生成，每句自检（回转拼音、掉音、掉嗓子、时长、剪掉句首尾静音后逐字对齐不到 50ms）不过就换种子；最后检查整段回转和音色一致性，任何一项不过都非零退出。
+按句生成，每句自检（回转拼音、掉音、掉嗓子、时长、剪掉句首尾静音后逐字对齐不到 50ms、背景噪声）不过就换种子；最后检查整段回转和音色一致性，任何一项不过都非零退出。
 通过自检的句子按「句子 + 参考音 + 模型 + 参数」缓存在输出目录的 cache/ 里：改稿后只重配改动的句子（--no-cache 全部重来）。
 分镜可以按句指定情绪（--mood「句子=情绪」），那一句改用 voice.json 的 moods 里对应的参考音克隆，语气跟着内容变。
 参考音和真人录音只在本机使用，不进仓库；只克隆本人或已取得书面同意的声音（见 voice.example.json）。
@@ -46,6 +46,12 @@ if args.max_tries is None:
 FLOOR = voice.get("pitchFloorHz", 0)  # 最低自然音高，见 voice.py 的 pitch_drops
 # 生成时比成片检查严 3%：贴着下限的句子（如 193Hz 对 196Hz）在成片里分帧起点、前后停顿不同，会一边过一边不过；生成时就留出余量
 GEN_FLOOR = FLOOR * 1.03
+# 背景干净：DNSMOS 的 BAK 分（见 dnsmos.py），每句不低于 voice.json 的 minBak。旁白检查也在源配音上逐句量，和这里是同一段声音，不用留余量
+MIN_BAK = voice.get("minBak", 0)
+GEN_BAK = MIN_BAK
+if MIN_BAK:
+    from dnsmos import score as dnsmos_score
+    bak_of = lambda a, r: dnsmos_score(a, r)[0][1]
 
 # 1. 参考音文本：克隆需要参考音的准确文本；没给就用 ASR 转写（结果打印出来供人工核对）
 def load_ref(path, text=None):
@@ -195,6 +201,9 @@ def synth_sentence(text, seed0, R):
         if squashed(rel):
             print(f"    种子 {seed}：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
             continue
+        if GEN_BAK and (bk := bak_of(audio, sr)) < GEN_BAK:
+            print(f"    种子 {seed}：背景不干净（DNSMOS BAK {bk:.2f}，要 ≥{GEN_BAK}），换种子重来")
+            continue
         return audio, sr, seed, note, rel
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
 
@@ -225,6 +234,9 @@ for i, sent in enumerate(sents):
         x_c, sr_c = sf.read(key + ".wav", dtype="float32")
         if len(x_c) - len(trim_edges(x_c, sr_c)) > 0.3 * sr_c or squashed(json.load(open(key + ".json", encoding="utf-8"))["words"]):
             print(f"  缓存里的「{sent}」句首尾静音过长或对齐有字不到 50ms，重新生成")
+            cached = False
+        elif GEN_BAK and bak_of(x_c, sr_c) < GEN_BAK:
+            print(f"  缓存里的「{sent}」背景不干净，重新生成")
             cached = False
     if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")

@@ -422,7 +422,7 @@ const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l &
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
   const strokes = [], penTrack = [], effects = [], audioClips = [], report = { phrases: [], actions: [] };
-  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）
+  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
     const clipIn = p.cutIn, clipOut = p.cutOut;
@@ -447,7 +447,9 @@ function schedule(boost) {
       const ss = geo.get(a.id);
       const speed = (a.speed || 1) * (boost.get(a.id) || 1);
       // 这一句里镜头可能正从上一句的取景过渡过来，取两者较大的放大倍数
-      const z = Math.max(targetCam[pi]?.z ?? 1, targetCam[pi - 1]?.z ?? 0);
+      // 从铅笔上次落笔的那句到这句，镜头可能一直停在某次推近上（中间隔着不画的句子），取这段里最大的放大倍数；
+      // 只看这句和上一句时，隔一句的推近（1.5 倍）被漏掉，铅笔挪位按 1.25 倍算快了，屏幕上一帧跳 63px（E01 v4 9:16）
+      const z = Math.max(...targetCam.slice(Math.min(penPhrase, pi), pi + 1).map((c) => c?.z ?? 1), targetCam[pi - 1]?.z ?? 0);
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
       const fromPos = penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
       const travel = moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
@@ -528,6 +530,7 @@ function schedule(boost) {
         penTrack.push({ kind: 'down', t0: t, t1: t + dur, stroke: idx });
         t += dur;
         penPos = [en.x, en.y];
+        penPhrase = pi;
       });
       penFree = t;
       report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(start), end: r2(t), lag: r2(start - cue), pen: true, audioStart: r2(audioStart), audioEnd: r2(audioEnd), speed: r2(speed) });

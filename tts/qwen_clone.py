@@ -5,6 +5,7 @@
 音色配置（参考音、真人录音、相似度下限）只在 voice.json；参考文本取参考音同名 .txt，默认种子 2。
 按句生成，每句自检（回转拼音、掉音、时长）不过就换种子；最后检查整段回转和音色一致性，任何一项不过都非零退出。
 通过自检的句子按「句子 + 参考音 + 模型 + 参数」缓存在输出目录的 cache/ 里：改稿后只重配改动的句子（--no-cache 全部重来）。
+分镜可以按句指定情绪（--mood「句子=情绪」），那一句改用 voice.json 的 moods 里对应的参考音克隆，语气跟着内容变。
 参考音和真人录音只在本机使用，不进仓库；只克隆本人或已取得书面同意的声音（见 voice.example.json）。
 """
 import argparse
@@ -33,6 +34,7 @@ ap.add_argument("--max-tries", type=int, default=5, help="拼音错误率不为 
 ap.add_argument("--gap", type=float, default=0.4, help="句与句之间的停顿秒数")
 ap.add_argument("--no-cache", action="store_true", help="不用已缓存的句子，全部重新生成")
 ap.add_argument("--reseed", action="append", default=[], help="「句子=偏移」：这一句换个种子重新生成（听出畸变、怪腔调时用；可重复）")
+ap.add_argument("--mood", action="append", default=[], help="「句子=情绪」：这一句用 voice.json 的 moods 里那段情绪参考音克隆（语气跟着内容变；可重复）")
 args = ap.parse_args()
 
 asr = load_stt("models/Qwen3-ASR-0.6B")
@@ -42,13 +44,29 @@ if not args.ref:
 FLOOR = voice.get("pitchFloorHz", 0)  # 最低自然音高，见 voice.py 的 pitch_drops
 
 # 1. 参考音文本：克隆需要参考音的准确文本；没给就用 ASR 转写（结果打印出来供人工核对）
-ref_text = args.ref_text
-ref_txt_file = args.ref.rsplit(".", 1)[0] + ".txt"
-if not ref_text and os.path.exists(ref_txt_file):
-    ref_text = open(ref_txt_file, encoding="utf-8").read().strip()
-if not ref_text:
-    ref_text = asr.generate(args.ref, language="Chinese").text.strip()
-    print(f"参考音转写：{ref_text}")
+def load_ref(path, text=None):
+    """参考音 → {path, text, sig}。文本取同名 .txt；sig 是音频内容的哈希，进缓存键。"""
+    txt = path.rsplit(".", 1)[0] + ".txt"
+    if not text and os.path.exists(txt):
+        text = open(txt, encoding="utf-8").read().strip()
+    if not text:
+        text = asr.generate(path, language="Chinese").text.strip()
+        print(f"参考音 {path} 转写：{text}")
+    return {"path": path, "text": text, "sig": hashlib.sha1(open(path, "rb").read()).hexdigest()}
+
+
+REF = load_ref(args.ref, args.ref_text)
+ref_text = REF["text"]
+# 情绪参考：分镜按句指定情绪（narration.mood），没指定的句子用默认参考音
+MOODS = voice.get("moods", {})
+mood_of = {}
+for m in args.mood:
+    sent, name = (x.strip() for x in m.rsplit("=", 1))
+    if name not in MOODS:
+        raise SystemExit(f"情绪「{name}」不在 voice.json 的 moods 里（现有：{'、'.join(MOODS) or '无'}）")
+    mood_of[sent] = name
+mood_refs = {name: load_ref(MOODS[name]) for name in set(mood_of.values())}
+ref_for = lambda sent: mood_refs[mood_of[sent.strip()]] if sent.strip() in mood_of else REF
 
 aligner = load_stt("models/Qwen3-ForcedAligner-0.6B")
 
@@ -108,7 +126,7 @@ PUNCT = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
 asr_text = lambda path: re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower().translate(DIG)
 
 
-def synth_sentence(text, seed0):
+def synth_sentence(text, seed0, R):
     """生成一句并自检：拼音错误率必须为 0、不能有字中间掉音、不能掉嗓子（浊音掉到这个孩子最低自然音高以下）；开头串进多余字就剪掉；不过就换种子重来。"""
     ref = re.sub(PUNCT, "", text).lower().translate(DIG)
     tmp = args.out + ".sent.wav"
@@ -119,7 +137,7 @@ def synth_sentence(text, seed0):
         # 12Hz 模型每秒 12.5 个 token，按每字 0.5 秒、另加 2 秒余量封顶
         n_chars = len(re.sub(PUNCT, "", text))
         cap = int(12.5 * (0.5 * n_chars + 2))
-        chunks = list(tts.generate(text=text, ref_audio=args.ref, ref_text=ref_text, lang_code="chinese", temperature=args.temperature, max_tokens=cap))
+        chunks = list(tts.generate(text=text, ref_audio=R["path"], ref_text=R["text"], lang_code="chinese", temperature=args.temperature, max_tokens=cap))
         audio = np.concatenate([np.array(c.audio) for c in chunks]).astype(np.float32)
         sr = chunks[0].sample_rate
         dur = len(audio) / sr
@@ -153,11 +171,13 @@ pieces, words, t_cursor, sr = [], [], 0.0, 24000
 # 句子缓存：键里有句子、参考音（内容）、参考文本、模型和生成参数，任何一样变了都重新生成；缓存的句子当时已通过逐句自检
 CACHE = os.path.join(os.path.dirname(os.path.abspath(args.out)), "cache")
 os.makedirs(CACHE, exist_ok=True)
-ref_sig = hashlib.sha1(open(args.ref, "rb").read()).hexdigest()
 # 换种子：程序听不出的畸变（自检都过、人耳听着怪）就给那一句换个起始种子，只重配这一句
 reseed = {k.strip(): int(v) for k, v in (r.rsplit("=", 1) for r in args.reseed)}
 seed_of = lambda sent: args.seed + reseed.get(sent.strip(), 0) * args.max_tries  # 偏移按「整轮重试」跳，不和原来那轮的种子重叠
-cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_sig, ref_text, TTS_MODEL, args.temperature, seed_of(sent), args.max_tries], ensure_ascii=False).encode()).hexdigest()
+cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_for(sent)["sig"], ref_for(sent)["text"], TTS_MODEL, args.temperature, seed_of(sent), args.max_tries], ensure_ascii=False).encode()).hexdigest()
+stray = [t for t in mood_of if t not in {x.strip() for x in sents}]
+if stray:
+    raise SystemExit("--mood 里这些不是旁白稿里的一整句：" + "；".join(stray))
 n_cached = 0
 for i, sent in enumerate(sents):
     t0 = time.time()
@@ -173,7 +193,7 @@ for i, sent in enumerate(sents):
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
     else:
-        audio, sr, seed, note = synth_sentence(sent, seed_of(sent))
+        audio, sr, seed, note = synth_sentence(sent, seed_of(sent), ref_for(sent))
         sf.write(args.out + ".sent.wav", audio, sr)
         items = aligner.generate(audio=args.out + ".sent.wav", text=sent_clean, language="Chinese")
         rel = [{"text": it.text, "start": float(it.start_time), "end": float(it.end_time)} for it in items]
@@ -183,7 +203,8 @@ for i, sent in enumerate(sents):
     gap = np.zeros(int(args.gap * sr), dtype=np.float32) if i < len(sents) - 1 else np.zeros(0, dtype=np.float32)
     pieces += [audio, gap]
     t_cursor += (len(audio) + len(gap)) / sr
-    print(f"  第 {i + 1}/{len(sents)} 句（种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
+    mood = mood_of.get(sent.strip())
+    print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
 if os.path.exists(args.out + ".sent.wav"):
     os.remove(args.out + ".sent.wav")
 print(f"  {len(sents)} 句里 {n_cached} 句用了缓存，{len(sents) - n_cached} 句新生成")

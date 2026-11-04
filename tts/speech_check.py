@@ -5,6 +5,7 @@
   2. 吞字：配音时逐句对齐的逐字时间映射到成片旁白，每个字时长 ≥ 50ms，且能量不低于中位数 18 dB 以上。
   3. 断音/爆音：两侧都在发声的 ≥5ms 全零段（字中间掉音）不得出现，不得有相邻采样突跳。
   4. 总混可懂度：带书写声和音乐的总混，ASR 回转字错率 ≤ 2%。
+另有一项只给建议、不判失败：语气起伏（句内起伏和句间音区变化，和 voice.json 里按真人录音标定的值比）。
 用法：.venv-mlx/bin/python speech_check.py <timeline.json> [engine 根目录]
 """
 import json
@@ -55,6 +56,32 @@ if floor:
         c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
         return f"「{c['phrase'][:10]}」" if c else ""
     check("没有掉嗓子", not drops, f"{len(drops)} 处：" + "；".join(f"{a:.2f}–{b:.2f}s{phrase_at(a)} 低到 {f:.0f}Hz" for a, b, f in drops[:5]) + f"（下限 {floor}Hz）" if drops else f"浊音都在这个声音的最低自然音高 {floor}Hz 以上")
+
+# 0c. 语气起伏（建议，不判失败：语气是创作取舍）：在源配音上逐句量，和这个孩子真实说话比。
+#     句内起伏 = 浊音基频 5%–95% 分位差几个半音；句间变化 = 各句音区（中位基频）的标准差。念课文式的配音两项都偏小
+from voice import pitch_range_st, pitch_median_hz
+if voice.get("pitchRangeSt") or voice.get("registerSpreadSt"):
+    xs, xsr = mono(root / "public" / beats["narration"]["audio"])
+    tm = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
+    P = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
+    ranges, regs, k = [], [], 0
+    for sent in [t for t in re.findall(r"[^。？！]+[。？！]?", tm["text"]) if re.sub(P, "", t)]:
+        n, got, a = len(re.sub(P, "", sent)), 0, None
+        while got < n and k < len(tm["words"]):
+            w = tm["words"][k]; a = w["start"] if a is None else a; b = w["end"]; got += len(w["text"]); k += 1
+        seg = xs[int(a * xsr):int(b * xsr)]
+        r = pitch_range_st(seg, xsr)
+        if r is not None:
+            ranges.append((r, sent)); regs.append(pitch_median_hz(seg, xsr))
+    if ranges:
+        med_r = float(np.median([r for r, _ in ranges]))
+        spread = float(np.std(12 * np.log2(np.array(regs) / np.median(regs))))
+        need_r, need_s = voice.get("pitchRangeSt", 0), voice.get("registerSpreadSt", 0)
+        flat = sorted(ranges)[:3]
+        ok = med_r >= need_r and spread >= need_s
+        print(f"[{'通过' if ok else '建议'}] 语气有起伏：{len(ranges)} 句，句内起伏中位 {med_r:.1f} 个半音（这个孩子真实说话 ≥{need_r}），"
+              f"句间音区变化 {spread:.1f} 个半音（真实 ≥{need_s}）" + ("" if ok else "；最平的：" + "、".join(f"「{t[:12]}」{r:.1f}" for r, t in flat)
+              + "。可以在分镜 narration.mood 里按句指定情绪参考音"))
 
 # 1. 拼接切点
 src, ssr = mono(root / "public" / beats["narration"]["audio"])

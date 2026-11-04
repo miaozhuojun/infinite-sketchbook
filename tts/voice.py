@@ -68,3 +68,18 @@ def pitch_drops(x, sr, floor_hz, min_sec=0.06):
             runs.append((cur[0][0], cur[-1][0] + 0.03, min(f for _, f in cur)))
         cur = []
     return runs
+
+
+def pitch_range_st(x, sr):
+    """一句话的语气起伏：浊音基频 5%–95% 分位之间差几个半音（平铺直叙的念稿小，像孩子说话那样有起有落就大）。
+    浊音太少（不到 0.3 秒）返回 None。"""
+    f = np.array([v for _, v in f0_track(x, sr) if v])
+    if len(f) < 60:
+        return None
+    lo, hi = np.percentile(f, [5, 95])
+    return float(12 * np.log2(hi / lo))
+
+
+def pitch_median_hz(x, sr):
+    f = [v for _, v in f0_track(x, sr) if v]
+    return float(np.median(f)) if f else None

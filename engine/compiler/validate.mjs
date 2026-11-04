@@ -106,6 +106,11 @@ export function validateBeats(beats, style, reg) {
     if (!sentences.includes(t)) E('narration.reseed', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
     if (!Number.isInteger(k) || k < 1) E('narration.reseed', `「${t}」的偏移要写正整数`);
   }
+  // mood：按句选情绪参考音（语气跟着内容变）。哪句用什么情绪是创作取舍，这里只查格式；情绪名在不在本机 voice.json 里，配音时查
+  for (const [t, m] of Object.entries(beats.narration?.mood ?? {})) {
+    if (!sentences.includes(t)) E('narration.mood', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
+    if (typeof m !== 'string' || !m.trim() || m.includes('=')) E('narration.mood', `「${t}」的情绪要写 voice.json 的 moods 里的名字`);
+  }
   for (const m of (beats.narration?.script ?? '').matchAll(/\d[：:]/g)) E('narration.script', `「${beats.narration.script.slice(Math.max(0, m.index - 4), m.index + 4)}」数字后面的冒号会被配音读成「比」，改成逗号`);
   for (const t of beats.targets ?? []) if (!style.targets[t]) E('targets', `未知画幅「${t}」，可用：${Object.keys(style.targets).join('、')}`);
   if (!Array.isArray(beats.phrases) || !beats.phrases.length) { E('phrases', '不能为空'); return { errors, warnings }; }

@@ -547,7 +547,7 @@ for (const x of trailOf(sched)) problems.push(`「${actionsById.get(x.id).text ?
 for (const s of strokes) s.pts = samplePts(s);
 
 // ---------- 镜头关键帧：普通句在第一笔前移到全景；顿悟句在提示词前 lead 秒推近到位，停留 ≥hold 秒；结尾回到全景 ----------
-const camera = [];
+const camera = [], newChapter = new Set(); // newChapter：换节的那次镜头移动，不和前一次合并
 const pushMove = (t0, t1, to, focus) => {
   const prev = camera.length ? camera[camera.length - 1] : null;
   const from = prev ? prev.to : to;
@@ -574,16 +574,20 @@ phrases.forEach((p, pi) => {
   } else {
     // 普通句：镜头在第一笔前 cameraMove[0] 秒起移、第一笔后 cameraMove[1] 秒到位（边写边稳住）。
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位
+    // 换节时第一笔在另一块纸面上，铅笔要飞一大段（1 秒多）：镜头和手同时起步，别让笔先飞出取景、划过字幕（E01 实测 27.2s）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
-    const t0 = Math.max(first.t0 - lead, holdUntil);
-    pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc);
+    const into = penTrack.find((m) => m.kind === 'move' && Math.abs(m.t1 - first.t0) < 0.02);
+    const t0 = Math.max(Math.min(first.t0 - lead, into?.t0 ?? Infinity), holdUntil);
+    pushMove(t0, Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], first.t0 + M.cameraMove[1]), tc);
+    if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);
   }
 });
 // 两次普通（非推近）镜头移动挨得太近（间隔不到 minCameraGap 秒）就合并成一次，直接移到后一次的取景
 // （审片：29.4–31.7s 连着两次重新取景，中间只停稳 0.4 秒，镜头显得忙）
 for (let i = camera.length - 1; i > 0; i--) {
   const a = camera[i - 1], b = camera[i];
-  if (!a.focus && !b.focus && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
+  // 换节那次不合并：合并后前一句还没写完镜头就往下一节走了（E01 实测 16:9 第一节最后画的灯框出了画）
+  if (!a.focus && !b.focus && !newChapter.has(b) && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
 }
 // 结尾回到全景，让观众看到整张图
 const lastAudio = audioClips[audioClips.length - 1];

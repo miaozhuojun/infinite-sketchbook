@@ -288,6 +288,7 @@ expectBeats('手写汉字字号太小（会糊）', (b) => { acts(b).find((a) =>
 expectBeats('旁白里数字后面跟冒号（会读成「比」）', (b) => { b.narration.script = b.narration.script.replace(/(\d)。?/, '$1：'); }, validate, '读成「比」');
 expectBeats('旁白里的数字没有出处', (b) => { b.facts = []; }, validate, '没有出处');
 expectBeats('按句选情绪写的不是旁白稿里的一整句', (b) => { b.narration.mood = { '旁白稿里没有这句。': '好奇' }; }, validate, 'narration.mood');
+expectBeats('回看的句子指向还没画过的元素', (b) => { b.phrases[0].revisit = [b.phrases.at(-1).actions?.[0]?.id ?? 'nope']; b.phrases[0].actions = []; }, validate, 'revisit');
 expectBeats('提示词不在这句旁白里', (b) => { acts(b).at(-1).at = '这句旁白里没有的词'; }, validate, '不在这句旁白里');
 expectBeats('节名太长、章节不从第一句开始', (b) => { b.phrases.at(-1).chapter = '这是一个特别特别长的小节名字超过了十五个字'; }, validate, /节名要写，最多|从第一句开始/);
 expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; }, validate, '必须有 role=hook', { advice: true });

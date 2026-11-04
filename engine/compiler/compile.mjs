@@ -186,6 +186,12 @@ const computePhraseCam = () => {
   const acc = [], out = [];
   for (const p of phrases) {
     if (p.chapter) acc.length = 0;
+    // 回看：这句不画新东西，镜头回到前面画过的那几样（片尾回顾时沿纸面一样样看回去）
+    if (p.revisit?.length) {
+      const b = bboxOf(p.revisit.flatMap((id) => geo.get(id) ?? []));
+      out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(ZMIN, Math.min(ZMAX, fitZ(b, 70))), revisit: true });
+      continue;
+    }
     for (const a of p.actions) if (geo.has(a.id)) acc.push(...geo.get(a.id));
     if (!acc.length) { out.push(null); continue; }
     const b = bboxOf(acc);
@@ -612,7 +618,12 @@ phrases.forEach((p, pi) => {
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
     const fly = p.chapter && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02);
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
-    else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
+    else if (tc.revisit) {
+      // 回看：从句子开头起移，走得和换节一样从容（距离往往有好几屏，按普通取景的 1.6 秒走会晃）；不和前后合并
+      const t0 = Math.max(report.phrases[pi].at, holdUntil);
+      pushMove(t0, t0 + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0), tc);
+      newChapter.add(camera[camera.length - 1]);
+    } else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
     if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);
   }
 });

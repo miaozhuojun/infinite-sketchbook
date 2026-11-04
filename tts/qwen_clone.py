@@ -46,10 +46,10 @@ if args.max_tries is None:
 FLOOR = voice.get("pitchFloorHz", 0)  # 最低自然音高，见 voice.py 的 pitch_drops
 # 生成时比成片检查严 3%：贴着下限的句子（如 193Hz 对 196Hz）在成片里分帧起点、前后停顿不同，会一边过一边不过；生成时就留出余量
 GEN_FLOOR = FLOOR * 1.03
-# 背景干净：DNSMOS 的 BAK 分（见 dnsmos.py），每句不低于 voice.json 的 minBak。旁白检查也在源配音上逐句量，和这里是同一段声音，不用留余量
-MIN_BAK = voice.get("minBak", 0)
-GEN_BAK = MIN_BAK
-if MIN_BAK:
+# 背景干净：逐句用 DNSMOS 的 BAK 分（起点错开 8 次取平均）筛掉明显偏脏的配音，低于 voice.json 的 takeMinBak 就换种子。
+# 单句的分数挪几个采样就差 0.1–0.2，只当筛子（下限放得比较低），不当关卡；关卡是旁白检查里全片的中位数（minBak）
+GEN_BAK = voice.get("takeMinBak", 0)
+if GEN_BAK:
     from dnsmos import score as dnsmos_score
     bak_of = lambda a, r: dnsmos_score(a, r)[0][1]
 
@@ -201,10 +201,11 @@ def synth_sentence(text, seed0, R):
         if squashed(rel):
             print(f"    种子 {seed}：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
             continue
+        bk = None
         if GEN_BAK and (bk := bak_of(audio, sr)) < GEN_BAK:
             print(f"    种子 {seed}：背景不干净（DNSMOS BAK {bk:.2f}，要 ≥{GEN_BAK}），换种子重来")
             continue
-        return audio, sr, seed, note, rel
+        return audio, sr, seed, note, rel, bk
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
 
 
@@ -235,18 +236,23 @@ for i, sent in enumerate(sents):
         if len(x_c) - len(trim_edges(x_c, sr_c)) > 0.3 * sr_c or squashed(json.load(open(key + ".json", encoding="utf-8"))["words"]):
             print(f"  缓存里的「{sent}」句首尾静音过长或对齐有字不到 50ms，重新生成")
             cached = False
-        elif GEN_BAK and bak_of(x_c, sr_c) < GEN_BAK:
-            print(f"  缓存里的「{sent}」背景不干净，重新生成")
-            cached = False
+        elif GEN_BAK:
+            meta_c = json.load(open(key + ".json", encoding="utf-8"))
+            if "bak" not in meta_c:  # 分数记进缓存：DNSMOS 一句要两三秒，每次都重算太慢
+                meta_c["bak"] = round(bak_of(x_c, sr_c), 3)
+                json.dump(meta_c, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+            if meta_c["bak"] < GEN_BAK:
+                print(f"  缓存里的「{sent}」背景不干净（DNSMOS BAK {meta_c['bak']:.2f}），重新生成")
+                cached = False
     if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")
         meta = json.load(open(key + ".json", encoding="utf-8"))
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
     else:
-        audio, sr, seed, note, rel = synth_sentence(sent, seed_of(sent), ref_for(sent))
+        audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
         sf.write(key + ".wav", audio, sr)
-        json.dump({"text": sent, "seed": seed, "note": note, "words": rel}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+        json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     takes.append([audio, sr, seed, note, rel])
     mood = mood_of.get(sent.strip())
     print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
@@ -275,11 +281,11 @@ for rnd in range(4):
         raise SystemExit("重配 3 轮后仍有字偏弱：" + "；".join(m for _, m in weak))
     for i in bad:
         print(f"  拼好后第 {i + 1} 句有字偏弱（{'；'.join(m for k, m in weak if words[k]['sent'] == i)}），换下一个种子重配")
-        audio, sr, seed, note, rel = synth_sentence(sents[i], takes[i][2] + 1, ref_for(sents[i]))
+        audio, sr, seed, note, rel, bk = synth_sentence(sents[i], takes[i][2] + 1, ref_for(sents[i]))
         takes[i] = [audio, sr, seed, note, rel]
         key = os.path.join(CACHE, cache_key(sents[i]))
         sf.write(key + ".wav", audio, sr)
-        json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+        json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
 for w in words:
     w.pop("sent")
 if os.path.exists(args.out + ".sent.wav"):

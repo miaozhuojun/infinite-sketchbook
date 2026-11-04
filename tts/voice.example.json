@@ -21,5 +21,6 @@
  "maxTries": 5,
  "maxTriesNote": "每句自检不过时最多换几次种子。参考音起伏大时句末容易掉到 pitchFloorHz 以下，可以调大",
  "minBak": 0,
- "minBakNote": "背景干净（可选，0 表示不查）：DNSMOS 的 BAK 分。要先把模型 sig_bak_ovr.onnx 放到 engine/assets.local/dnsmos/（来源见 dnsmos.py），再用它给你满意的配音逐句打分，取 10% 分位附近作下限；生成时自动多要 0.2 分"
+ "minBakNote": "背景干净（可选，0 表示不查）：DNSMOS 的 BAK 分。要先把模型 sig_bak_ovr.onnx 放到 engine/assets.local/dnsmos/（来源见 dnsmos.py）。minBak 是全片 9 秒窗中位数的下限（旁白检查的关卡）；takeMinBak 是生成时逐句的筛子，单句分数不稳，下限要放低一些",
+ "takeMinBak": 0
 }

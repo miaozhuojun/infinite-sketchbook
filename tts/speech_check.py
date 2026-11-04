@@ -103,17 +103,14 @@ if voice.get("pitchRangeSt") or voice.get("registerSpreadSt"):
 #     用户听 E01 v7「说话时有明显背景噪音」，音色相似度、谐噪比、电平都看不出来；BAK 按句排，最差的几句（「那怎么办？」2.66）明显比别的句子脏
 min_bak = voice.get("minBak", 0)
 if min_bak:
-    # 在源配音上逐句量（timing 的 sentences 就是每句配音在源文件里的起止）：成片旁白是同一批采样（「拼接后声音完整」已核对），
-    # 但成片里句中插了停顿，DNSMOS 对前后文敏感，同一句能差到 0.9 分；源上量和配音生成时逐句自检完全是同一段声音，结论一致
+    # 在源配音上量（和配音生成时拼好的整段是同一个文件）。DNSMOS 对短片段很敏感：同一句挪 5 个采样 BAK 能差 0.2–0.3，
+    # 9 秒窗挪 37 个采样能差 0.8，单句、单窗都当不了关卡；全片 9 秒窗的中位数稳定（挪动只差 ±0.05），
+    # 用它拦「整条配音都脏」（比如参考音有底噪）。个别句子偏脏在配音生成时逐句筛（takeMinBak）
     from dnsmos import score as dnsmos_score
     xs0, ssr0 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
-    spans0 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
-    noisy = []
-    for sp0 in spans0:
-        bk = dnsmos_score(xs0[int(sp0["start"] * ssr0):int(sp0["end"] * ssr0)], ssr0)[0][1]
-        if bk < min_bak:
-            noisy.append(f"「{sp0['text'][:10]}」{bk:.2f}")
-    check("背景干净", not noisy, f"{len(noisy)} 句 DNSMOS BAK 低于 {min_bak}：" + "；".join(noisy[:6]) if noisy else f"{len(spans0)} 句配音的 DNSMOS BAK 都不低于 {min_bak}")
+    _, bw0 = dnsmos_score(xs0, ssr0, jitter=1)
+    med_b = float(np.median(bw0))
+    check("背景干净", med_b >= min_bak, f"整条配音 DNSMOS BAK 9 秒窗中位 {med_b:.2f}（下限 {min_bak}），10% 分位 {np.percentile(bw0, 10):.2f}")
 
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))

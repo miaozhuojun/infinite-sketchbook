@@ -199,18 +199,16 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 没有掉嗓子');
-speechCase('一句配音底下垫着嘶嘶的背景噪声（用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
-  // 源配音里最后一段旁白整段叠上白噪声（比这段说话低 20dB），只改源文件；背景干净按源配音逐句量
+speechCase('整条配音底下垫着嘶嘶的背景噪声（参考音带底噪时会这样；用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
+  // 源配音整条叠上白噪声（比说话低 20dB）；背景干净看全片 9 秒窗 DNSMOS BAK 的中位数
   const src = path.resolve('public', base.source), dst = path.resolve('public/audio/_selftest.source.wav');
   spawnSync(PY_QA, ['-c', `
-import soundfile as sf, json, numpy as np
+import soundfile as sf, numpy as np
 x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
-c = json.loads(${JSON.stringify(JSON.stringify(base.audioClips.at(-1)))})
-a, b = int(c['srcIn'] * sr), int(c['srcOut'] * sr)
-seg = x[a:b] if x.ndim == 1 else x[a:b, 0]
-n = np.random.default_rng(1).standard_normal(b - a) * np.sqrt((seg ** 2).mean()) * 10 ** (-20 / 20)
-if x.ndim == 1: x[a:b] += n
-else: x[a:b] += n[:, None]
+m = x if x.ndim == 1 else x[:, 0]
+lv = np.sqrt((m.reshape(-1)[: len(m) // 480 * 480].reshape(-1, 480) ** 2).mean(1)); r = np.sqrt((lv[lv > lv.max() * 0.01] ** 2).mean())
+n = np.random.default_rng(1).standard_normal(len(m)) * r * 10 ** (-20 / 20)
+x = x + (n if x.ndim == 1 else n[:, None])
 sf.write(${JSON.stringify(dst)}, x, sr)`]);
   tl.source = 'audio/_selftest.source.wav';
   delete tl.audio;

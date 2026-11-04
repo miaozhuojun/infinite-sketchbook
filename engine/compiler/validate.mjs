@@ -100,6 +100,12 @@ export function validateBeats(beats, style, reg) {
   if (!['episode', 'segment'].includes(beats.kind)) E('kind', '应为 episode（完整一集）或 segment（片段）');
   if (!beats.narration?.audio && !beats.narration?.script) E('narration', '需要 audio（已有配音）或 script（待生成的旁白稿）');
   // 配音会按读数规则读的写法：数字后面的冒号读成「比」（实测「定在5：超过它」读成「五比超过它」）
+  // reseed：听出畸变的句子换个种子重配，键必须是旁白稿里的一整句（含句末标点），值是正整数
+  const sentences = (beats.narration?.script ?? '').match(/[^。？！]+[。？！]?/g) ?? [];
+  for (const [t, k] of Object.entries(beats.narration?.reseed ?? {})) {
+    if (!sentences.includes(t)) E('narration.reseed', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
+    if (!Number.isInteger(k) || k < 1) E('narration.reseed', `「${t}」的偏移要写正整数`);
+  }
   for (const m of (beats.narration?.script ?? '').matchAll(/\d[：:]/g)) E('narration.script', `「${beats.narration.script.slice(Math.max(0, m.index - 4), m.index + 4)}」数字后面的冒号会被配音读成「比」，改成逗号`);
   for (const t of beats.targets ?? []) if (!style.targets[t]) E('targets', `未知画幅「${t}」，可用：${Object.keys(style.targets).join('、')}`);
   if (!Array.isArray(beats.phrases) || !beats.phrases.length) { E('phrases', '不能为空'); return { errors, warnings }; }

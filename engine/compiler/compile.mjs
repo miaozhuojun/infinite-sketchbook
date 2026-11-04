@@ -382,7 +382,9 @@ const focusCam = phrases.map((p, pi) => {
   const ov = phraseCam[pi], F = bboxOf(list), fr = TGT.frame, cx0 = (F.x0 + F.x1) / 2, cy0 = (F.y0 + F.y1) / 2;
   const centered = (c) => Math.abs((cx0 - c.x) * c.z) <= (AHA.maxOffCenter ?? 1) * (fr.r - fr.l) && Math.abs((cy0 - c.y) * c.z) <= (AHA.maxOffCenter ?? 1) * (fr.b - fr.t);
   const zHi = Math.min(AHA.zoomMax ?? ZMAX, ov.z * AHA.maxPush), zLo = ov.z * AHA.minPush;
-  for (let k = 0; k <= 8 && zHi >= zLo; k++) {
+  // 分镜写了 noPush：这个画幅就不推近，直接用下面的不推近取景（创作意图优先；原来只是不报建议，镜头照样推近，审片 E01 v3）
+  const skipPush = (p.noPush || []).includes(targetName);
+  for (let k = 0; !skipPush && k <= 8 && zHi >= zLo; k++) {
     const z = zHi - ((zHi - zLo) * k) / 8, pad = 40 / z;
     const xr = [F.x1 - (fr.r - VIEW.cx) / z + pad, F.x0 - (fr.l - VIEW.cx) / z - pad], yr = [F.y1 - (fr.b - VIEW.cy) / z + pad, F.y0 - (fr.t - VIEW.cy) / z - pad];
     if (xr[0] > xr[1] || yr[0] > yr[1]) continue; // 这个倍数下焦点装不下

@@ -293,6 +293,18 @@ expectBeats('顿悟句推不近又没声明', (b) => {
   p.actions.push({ id: '_far', type: 'text', at: p.actions[0].at, text: '1=1', x: top.x, y: top.y + 1000, size: 72 });
   p.focus = [top.id, '_far'];
 }, (p) => ['compiler/compile.mjs', p, '--target', '9x16'], /推不近.*noPush/, { advice: true });
+{
+  // 分镜写了 noPush，这个画幅的顿悟句就不能推近（原来只是不报建议，镜头照样推近 1.5 倍）
+  const b = structuredClone(beatsSrc); b.id = '_selftest';
+  const p = b.phrases.find((q) => q.role === 'aha'); p.noPush = ['9x16'];
+  fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+  const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', '9x16'], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+  const tl = fs.existsSync('build/_selftest-9x16.timeline.json') ? JSON.parse(fs.readFileSync('build/_selftest-9x16.timeline.json', 'utf8')) : null;
+  const ids = new Set(p.actions.map((a) => a.id)), pushed = tl?.camera.find((m) => m.focus && m.focus.some((id) => ids.has(id)) && (m.to.push ?? 1) > 1.001);
+  record('分镜声明 noPush 的顿悟句真的不推近', !!tl && !pushed, out + (pushed ? `\n推近了：${JSON.stringify(pushed.to)}` : ''));
+  fs.rmSync('data/_selftest.beats.json', { force: true });
+  for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+}
 expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/, { advice: true });
 expectBeats('两段文字压在一起（关闭自动修复，仍判错误）', (b) => {
   const t = firstText(b);

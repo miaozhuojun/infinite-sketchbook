@@ -10,7 +10,7 @@ function box(k, x0, y0, x1, y1, r) {
 }
 // 虚线框：「新情况」「没见过的」用虚线，和实线的例子一眼分开
 function dashedBox(k, x0, y0, x1, y1) {
-  const out = [], dash = 18, gap = 11;
+  const out = [], dash = 30, gap = 14; // 段长一点、段数少一点：虚线框是陪衬，不该比框里的内容画得还久
   for (const [a, b] of [[[x0, y0], [x1, y0]], [[x1, y0], [x1, y1]], [[x1, y1], [x0, y1]], [[x0, y1], [x0, y0]]]) {
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.floor(L / (dash + gap));
     for (let i = 0; i <= n; i++) {
@@ -49,7 +49,7 @@ export default [
   },
   {
     meta: {
-      name: 'exampleCard', title: '例子卡片', desc: '一张小卡片：左边画场景（一两盏小灯），右边写结果。scene：red 红灯、green 绿灯、both 两盏一起亮（左右并排）、none 不画灯。kind：example 实线框（见过的例子），new 虚线框（没教过的新情况）。卡片左上角在 (x, y)，默认 200×130。',
+      name: 'exampleCard', title: '例子卡片', desc: '一张小卡片：左边画场景（一两盏小灯），右边写结果；先画灯再画框。结果想在别的时刻写（比如先画「?」、后写答案），就不写 label，另加文字动作。scene：red 红灯、green 绿灯、both 两盏一起亮（左右并排）、none 不画灯。kind：example 实线框（见过的例子），new 虚线框（没教过的新情况）。卡片左上角在 (x, y)，默认 200×130。',
       params: {
         x: { type: 'number', required: true }, y: { type: 'number', required: true },
         scene: { type: 'enum', values: ['red', 'green', 'both', 'none'], required: true },
@@ -65,11 +65,12 @@ export default [
     },
     draw(a, k) {
       const w = a.w ?? 200, h = a.h ?? 130, x0 = a.x, y0 = a.y, x1 = x0 + w, y1 = y0 + h, out = [];
-      out.push(...(a.kind === 'new' ? dashedBox(k, x0, y0, x1, y1) : [box(k, x0, y0, x1, y1, Math.min(w, h) * 0.12)]));
-      // 场景占左边 55%，灯半径按卡片高度算，两盏灯左右并排、间距 2.5r，离框至少 0.6r
-      const sw = w * 0.55, cy = y0 + h / 2, r = Math.min(h * 0.22, sw / 5.9); // 两盏并排时左右各留 ≥0.6r
+      // 先画场景（灯）再画框：说到「两个灯一起亮」时先看到灯，框是陪衬（审片 E01 v3：虚线框画了 3 秒，灯晚了 2 秒）
+      // 场景占左边 55%，灯半径按卡片高度算；两盏并排时圆心相距 2.8r（中间留 0.8r），离框至少 0.6r
+      const sw = w * 0.55, cy = y0 + h / 2, r = Math.min(h * 0.22, sw / 6);
       if (a.scene === 'red' || a.scene === 'green') out.push(lamp(k, x0 + sw / 2, cy, r, a.scene === 'red' ? 'accent' : 'go'));
-      if (a.scene === 'both') { out.push(lamp(k, x0 + sw / 2 - 1.25 * r, cy, r, 'accent')); out.push(lamp(k, x0 + sw / 2 + 1.25 * r, cy, r, 'go')); }
+      if (a.scene === 'both') { out.push(lamp(k, x0 + sw / 2 - 1.4 * r, cy, r, 'accent')); out.push(lamp(k, x0 + sw / 2 + 1.4 * r, cy, r, 'go')); }
+      out.push(...(a.kind === 'new' ? dashedBox(k, x0, y0, x1, y1) : [box(k, x0, y0, x1, y1, Math.min(w, h) * 0.12)]));
       if (a.label) out.push(...k.text({ text: a.label, size: a.labelSize ?? 72, x: x0 + sw + (w - sw) / 2, y: cy, anchor: 'c', color: a.labelColor }));
       return out;
     },

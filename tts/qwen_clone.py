@@ -32,6 +32,7 @@ ap.add_argument("--temperature", type=float, default=0.7)
 ap.add_argument("--max-tries", type=int, default=5, help="拼音错误率不为 0 或有字中间掉音时，自动换种子重生成的最多次数（每句单独计）")
 ap.add_argument("--gap", type=float, default=0.4, help="句与句之间的停顿秒数")
 ap.add_argument("--no-cache", action="store_true", help="不用已缓存的句子，全部重新生成")
+ap.add_argument("--reseed", action="append", default=[], help="「句子=偏移」：这一句换个种子重新生成（听出畸变、怪腔调时用；可重复）")
 args = ap.parse_args()
 
 asr = load_stt("models/Qwen3-ASR-0.6B")
@@ -148,7 +149,10 @@ pieces, words, t_cursor, sr = [], [], 0.0, 24000
 CACHE = os.path.join(os.path.dirname(os.path.abspath(args.out)), "cache")
 os.makedirs(CACHE, exist_ok=True)
 ref_sig = hashlib.sha1(open(args.ref, "rb").read()).hexdigest()
-cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_sig, ref_text, TTS_MODEL, args.temperature, args.seed, args.max_tries], ensure_ascii=False).encode()).hexdigest()
+# 换种子：程序听不出的畸变（自检都过、人耳听着怪）就给那一句换个起始种子，只重配这一句
+reseed = {k.strip(): int(v) for k, v in (r.rsplit("=", 1) for r in args.reseed)}
+seed_of = lambda sent: args.seed + reseed.get(sent.strip(), 0) * args.max_tries  # 偏移按「整轮重试」跳，不和原来那轮的种子重叠
+cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_sig, ref_text, TTS_MODEL, args.temperature, seed_of(sent), args.max_tries], ensure_ascii=False).encode()).hexdigest()
 n_cached = 0
 for i, sent in enumerate(sents):
     t0 = time.time()
@@ -160,7 +164,7 @@ for i, sent in enumerate(sents):
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
     else:
-        audio, sr, seed, note = synth_sentence(sent, args.seed)
+        audio, sr, seed, note = synth_sentence(sent, seed_of(sent))
         sf.write(args.out + ".sent.wav", audio, sr)
         items = aligner.generate(audio=args.out + ".sent.wav", text=sent_clean, language="Chinese")
         rel = [{"text": it.text, "start": float(it.start_time), "end": float(it.end_time)} for it in items]

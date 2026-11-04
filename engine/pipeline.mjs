@@ -112,11 +112,12 @@ for (const s of stages) {
   lines.push('');
 }
 const produced = targets.filter((t) => fs.existsSync(path.join(outDir, `${t}.mp4`)));
-lines.push('## 发布清单（每个平台只传一个文件）', '', '| 平台 | 上传文件 | 画幅 |', '|---|---|---|');
+// 文件名写成和本报告同一文件夹里的相对名字：版本目录（out/<id>-vN/）是整个复制出来的，写死 out/<id>/ 会在清理工作目录后指向不存在的文件
+lines.push('## 发布清单（每个平台只传一个文件，文件和本报告在同一个文件夹）', '', '| 平台 | 上传文件 | 画幅 |', '|---|---|---|');
 for (const [pf, prefs] of Object.entries(styleJson.publish)) {
   if (pf === 'note') continue;
   const t = prefs.find((x) => produced.includes(x));
-  lines.push(`| ${pf} | ${t ? `\`${outDir}/${t}.mp4\`` : '（本期没出合适画幅）'} | ${t ?? '—'} |`);
+  lines.push(`| ${pf} | ${t ? `\`${t}.mp4\`` : '（本期没出合适画幅）'} | ${t ?? '—'} |`);
 }
 lines.push('');
 // 章节：同一份节名和起点，按各平台自己的章节功能给（进度条不画进视频；目前只支持风格规范 chapters.platforms 里的 YouTube、抖音、B 站）

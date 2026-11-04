@@ -434,9 +434,14 @@ function schedule(boost) {
       // 画面里的位置必须在下一镜里看得到（不被镜头推出去），画面外只在画面里每个位置都会压到要紧东西时才用。
       const PK = style.pencil.park, fr = TGT.frame, cam = targetCam[pi] ?? { x: VIEW.cx, y: VIEW.cy, z: 1 };
       const st = [first.x, first.y], wait = t - penFree;
-      if (penPos === OFF || wait - travel < PK.minRest) {
-        if (penPos !== OFF && t - travel > penFree) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
-        penTrack.push({ kind: 'move', t0: t - travel, t1: t, from: fromPos, to: st });
+      // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
+      // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
+      const flight = penPos !== OFF && p.chapter && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      if (penPos === OFF || wait - travel < PK.minRest || flight) {
+        if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
+        // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞
+        const holdEnd = release ? release - M.cameraMove[0] - M.cameraMove[1] : 0;
+        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, Math.max(penFree, holdEnd)) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });
       } else {
         const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
@@ -574,11 +579,11 @@ phrases.forEach((p, pi) => {
   } else {
     // 普通句：镜头在第一笔前 cameraMove[0] 秒起移、第一笔后 cameraMove[1] 秒到位（边写边稳住）。
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位
-    // 换节时第一笔在另一块纸面上，铅笔要飞一大段（1 秒多）：镜头和手同时起步，别让笔先飞出取景、划过字幕（E01 实测 27.2s）
+    // 换节：镜头和铅笔的飞行同起同落（见排程里的 flight）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
-    const into = penTrack.find((m) => m.kind === 'move' && Math.abs(m.t1 - first.t0) < 0.02);
-    const t0 = Math.max(Math.min(first.t0 - lead, into?.t0 ?? Infinity), holdUntil);
-    pushMove(t0, Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], first.t0 + M.cameraMove[1]), tc);
+    const fly = p.chapter && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02);
+    if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
+    else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
     if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);
   }
 });

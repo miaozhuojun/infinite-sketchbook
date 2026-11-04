@@ -1,7 +1,8 @@
 // 一键流水线：分镜数据 → 各画幅成片 + 检查报告 + 审片材料。
 // 三层分工：每期只写数据（data/<id>.beats.json）；组件库（library/）和风格规范（style/style.json）可增长、有测试；
 // 这里的关卡固定不变：能自动修的在各步骤内修（切点、限速、字号、避让、配音重试），修不了的写进报告，精确到元素和数值，进程以非零退出。
-// 用法：node pipeline.mjs data/<id>.beats.json [--targets 9x16,16x9,1x1] [--out out/<目录>]（默认 out/<id>）
+// 用法：node pipeline.mjs data/<id>.beats.json [--targets 9x16,16x9,1x1] [--out out/<目录>]（默认 out/<id>）[--draft]
+// --draft：改稿时用，只配音、编译、查时间线（铅笔、安全区），不混音不渲染，几十秒出结果；定稿再去掉 --draft 跑全量
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +12,7 @@ const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
 const arg = (k) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : null);
 const styleJson = JSON.parse(fs.readFileSync('style/style.json', 'utf8'));
+const DRAFT = process.argv.includes('--draft');
 // 画幅：命令行 --targets 优先，其次分镜里的 targets，否则用风格规范的默认母版（9:16 + 16:9）。每个平台只传一个文件，见报告里的发布清单
 const targets = arg('--targets')?.split(',') ?? beats.targets ?? styleJson.defaultTargets;
 const outDir = arg('--out') ?? path.join('out', beats.id);
@@ -27,9 +29,12 @@ function run(name, cmd, args, opts = {}) {
     .map((l) => l.trim()).filter(Boolean);
   const artifacts = [...out.matchAll(/^(?:设备预览|联系表|理解度测试材料|组件预览|存证)：(\S+)/gm)].map((m) => m[1]);
   const notes = [...out.matchAll(/^((?:书写声|音乐)：.*)$/gm)].map((m) => m[1]); // 混音用了哪些素材，写进报告
+  // 建议：创作取舍（风格规范 gates 里的 advice 级），写进报告，不判失败
+  const advice = [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])]
+    .map((l) => l.trim()).filter(Boolean);
   const ok = r.status === 0 && checks.every((c) => c.ok) && !problems.length;
-  stages.push({ name, ok, secs: ((Date.now() - t0) / 1000).toFixed(1), checks, fixes, problems, artifacts, notes, tail: ok ? '' : out.slice(-1500) });
-  console.log(`${ok ? '✓' : '✗'} ${name}（${stages.at(-1).secs}s）${fixes.length ? `  自动修正 ${fixes.length} 处` : ''}`);
+  stages.push({ name, ok, secs: ((Date.now() - t0) / 1000).toFixed(1), checks, fixes, problems, advice, artifacts, notes, tail: ok ? '' : out.slice(-1500) });
+  console.log(`${ok ? '✓' : '✗'} ${name}（${stages.at(-1).secs}s）${fixes.length ? `  自动修正 ${fixes.length} 处` : ''}${advice.length ? `  建议 ${advice.length} 条` : ''}`);
   return ok;
 }
 // 没条件执行的关卡也进报告，写明原因；有未执行的关卡时，结论不写「全部通过」
@@ -43,13 +48,16 @@ const libOk = run('组件库测试', 'node', ['library/test.mjs', '--preview']);
 run('墨迹叠色检查（交叠处不发黑、红压灰仍是红）', 'node', ['qa/ink_check.mjs']);
 const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、字幕）', 'node', ['compiler/validate.mjs', beatsPath]);
 
-// 1. 配音：分镜里写了旁白稿但还没有音频时，本地克隆生成（内置回转检查、开头多字修剪、换种子重试）
+// 1. 配音：分镜里写了旁白稿就每次都按稿生成（内置回转检查、开头多字修剪、换种子重试）。
+// 配音按句缓存，没改的句子直接复用，所以每次跑也只多十几秒；这样音频一定和当前的稿子对得上，不会拿旧音频配新稿
 const audioPath = path.join('public', beats.narration.audio || '');
-if (beatsOk && beats.narration.script && !fs.existsSync(audioPath)) {
+// 合成提示音（演示分镜，narration.synthetic）不走克隆配音，音频由夹具脚本生成
+if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
-  if (!PY_MLX) stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
+  if (PY_MLX) { if (run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
+  else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
+  else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
     problems: [`没有音频 ${audioPath}，也没有本地配音环境（PY_MLX）：在 tts/ 装好配音环境，或把音频放到这个位置`] });
-  else if (run('配音生成', PY_MLX, ['qwen_clone.py', beats.narration.script, base], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath);
 }
 
 // 2. 各画幅：编译 → 混音 → 渲染 → 写版权信息与存证 → 检查 → 设备预览
@@ -59,7 +67,15 @@ if (libOk && beatsOk && !branded) skip('水印、版权信息与存证', '本机
 if (libOk && beatsOk) {
   const compiled = targets.filter((t) => run(`[${t}] 编译（时间线、版面、镜头）`, 'node', ['compiler/compile.mjs', beatsPath, '--target', t]));
   spawnSync('node', ['compiler/gen-compositions.mjs']);
-  for (const t of compiled) {
+  if (DRAFT) {
+    for (const t of compiled) {
+      const tl = `build/${beats.id}-${t}.timeline.json`;
+      run(`[${t}] 铅笔与运笔检查`, 'node', ['qa/pencil_check.mjs', tl]);
+      run(`[${t}] 平台安全区检查`, 'node', ['qa/safezone_check.mjs', tl]);
+    }
+    skip('混音、渲染、画面检查、旁白检查、预览与审片材料', '草稿模式（--draft）');
+  }
+  for (const t of DRAFT ? [] : compiled) {
     const id = `${beats.id}-${t}`, tl = `build/${id}.timeline.json`, video = path.join(outDir, `${t}.mp4`);
     if (!run(`[${t}] 混音`, PY_QA, ['audio/mix.py', tl])) continue;
     if (!run(`[${t}] 渲染`, 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error'])) continue;
@@ -80,13 +96,16 @@ if (libOk && beatsOk) {
 
 // 3. 报告
 const failed = stages.filter((s) => !s.ok), skipped = stages.filter((s) => s.skipped);
-const verdict = failed.length ? `未通过（${failed.length} 个步骤失败）` : skipped.length ? `已执行的程序关卡全部通过，${skipped.length} 项未执行` : '程序关卡全部通过';
+const nAdvice = stages.reduce((n, s) => n + (s.advice?.length ?? 0), 0);
+const verdict = (failed.length ? `未通过（${failed.length} 个步骤失败）` : skipped.length ? `已执行的程序关卡全部通过，${skipped.length} 项未执行` : '程序关卡全部通过')
+  + (nAdvice ? `；另有 ${nAdvice} 条创作建议（不拦截，按需采纳）` : '');
 const lines = [`# ${beats.id} 流水线报告`, '', `结果：**${verdict}**　画幅：${targets.join('、')}`, ''];
 for (const s of stages) {
   lines.push(s.skipped ? `## – ${s.name}（未执行：${s.skipped}）` : `## ${s.ok ? '✓' : '✗'} ${s.name}（${s.secs}s）`);
   for (const f of s.fixes) lines.push(`- 自动修正：${f}`);
   for (const c of s.checks) lines.push(`- ${c.ok ? '通过' : '**失败**'} ${c.name}：${c.detail}`);
   for (const p of s.problems) lines.push(`- **待改**：${p}`);
+  for (const a of s.advice ?? []) lines.push(`- 建议：${a}`);
   for (const a of s.artifacts) lines.push(`- 产物：${a}`);
   for (const n of s.notes ?? []) lines.push(`- ${n}`);
   if (s.tail) lines.push('', '```', s.tail, '```');

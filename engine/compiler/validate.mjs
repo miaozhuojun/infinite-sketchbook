@@ -1,5 +1,6 @@
 // 分镜校验（渲染前、纯静态）：一次列出全部问题，每条都精确到位置，交给写分镜的一方改。
-// 管"表达正确性和风格合规"，不管创意本身：组件与参数、风格规范、叙事结构、事实出处、字幕长度。
+// 错误（hard）只管机械上会坏的：组件与参数、引用、事实出处、字幕折行、平台章节规格。
+// 创作取舍（叙事结构、字号阶梯、手写字号下限）按风格规范 gates 的级别，默认只给建议，不拦截。
 // 用法：node compiler/validate.mjs data/<id>.beats.json
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,20 @@ import { CJK, glyphData } from '../library/kit.mjs';
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROJECT = path.resolve(ENGINE, '../..');
-export const loadStyle = () => JSON.parse(fs.readFileSync(path.join(ENGINE, 'style/style.json'), 'utf8'));
+// 生效的风格 = 默认 style/style.json < 本机私有创作配置 style/profile.local.json（不进仓库）< 这一期分镜的 style。
+// 每期分镜可以加颜色、换字号阶梯、调节奏参数，但不能改关卡级别、画幅、平台界面和章节规格（那是机械约束和平台规格）
+const PROTECTED = new Set(['gates', 'targets', 'platformUI', 'chapters', 'publish']);
+const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+const merge = (a, b) => { const o = { ...a }; for (const [k, v] of Object.entries(b || {})) o[k] = isObj(v) && isObj(a?.[k]) ? merge(a[k], v) : v; return o; };
+export const loadStyle = (beats) => {
+  let s = JSON.parse(fs.readFileSync(path.join(ENGINE, 'style/style.json'), 'utf8'));
+  const prof = process.env.SKETCH_PROFILE || path.join(ENGINE, 'style/profile.local.json'); // SKETCH_PROFILE：换一份创作配置（自测用）
+  if (fs.existsSync(prof)) s = merge(s, JSON.parse(fs.readFileSync(prof, 'utf8')));
+  if (beats?.style) s = merge(s, Object.fromEntries(Object.entries(beats.style).filter(([k]) => !PROTECTED.has(k))));
+  return s;
+};
+// 关卡级别：gates 里写 advice 的只给建议；没列出的都是 hard
+export const gateLevel = (style, id) => (style.gates?.[id] === 'advice' ? 'advice' : 'hard');
 export const strip = (s) => s.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '');
 const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed']);
 const ROLES = new Set(['hook', 'setup', 'aha', 'recap', 'next']);
@@ -71,7 +85,7 @@ function checkType(spec, v, style, ctx) {
     case 'inkColor': return style.inkColors.includes(v) ? null : `「${v}」不是规范里的墨色，可用：${style.inkColors.join('、')}（不能写色值）`;
     case 'effectColor': return style.effectColors.includes(v) ? null : `「${v}」不是规范里的效果色，可用：${style.effectColors.join('、')}`;
     case 'strokeWidth': { const r = style.ink.shapeWidth; return isNum(v) && v >= r.min && v <= r.max ? null : `线宽应在 ${r.min}~${r.max}`; }
-    case 'typeSize': return style.type.scale.includes(v) ? null : `字号 ${v} 不在字号阶梯 [${style.type.scale.join(', ')}] 上`;
+    case 'typeSize': return isNum(v) && v > 0 ? null : '应为正数'; // 是否落在字号阶梯上是创作取舍，见 validateBeats 的 type.scale
     case 'actionId': return ctx.drawnBefore.has(v) ? null : `引用的「${v}」不存在或还没画`;
     case 'actionIds': { const miss = [v].flat().filter((x) => !ctx.drawnBefore.has(x)); return [v].flat().length && !miss.length ? null : `引用的「${miss.join('、')}」不存在或还没画`; }
     default: return `未知参数类型 ${t}`;
@@ -79,7 +93,9 @@ function checkType(spec, v, style, ctx) {
 }
 
 export function validateBeats(beats, style, reg) {
-  const errors = [], warnings = [];
+  const errors = [], warnings = [], advice = [];
+  // G：创作取舍，按 gates 级别进错误或建议
+  const G = (gate, where, msg) => (gateLevel(style, gate) === 'advice' ? advice : errors).push(`${where}：${msg}`);
   const E = (where, msg) => errors.push(`${where}：${msg}`);
   if (!['episode', 'segment'].includes(beats.kind)) E('kind', '应为 episode（完整一集）或 segment（片段）');
   if (!beats.narration?.audio && !beats.narration?.script) E('narration', '需要 audio（已有配音）或 script（待生成的旁白稿）');
@@ -118,6 +134,7 @@ export function validateBeats(beats, style, reg) {
           if (obj[k] === undefined) { if (spec.required && !partial && !(a.after && (k === 'x' || k === 'y'))) E(`${where}.${k}`, '必填'); continue; }
           const m = checkType(spec, obj[k], style, { drawnBefore });
           if (m) E(`${where}.${k}`, m);
+          else if (spec.type === 'typeSize' && !style.type.scale.includes(obj[k])) G('type.scale', `${where}.${k}`, `字号 ${obj[k]} 不在字号阶梯 [${style.type.scale.join(', ')}] 上`);
         }
         for (const k of Object.keys(obj)) if (!def.params[k] && !SCHED_KEYS.has(k)) warnings.push(`${where}.${k}：组件 ${a.type} 没有这个参数，会被忽略`);
       };
@@ -130,7 +147,7 @@ export function validateBeats(beats, style, reg) {
           // 笔画越多的字要写越大：下限 = max(minCjkSize, 最多笔画数 × cjkSizePerStroke)
           const strokes = Math.max(...[...m[tk]].filter((c) => CJK.test(c)).map((c) => glyphData(c).medians.length));
           const need = Math.max(style.type.minCjkSize, strokes * (style.type.cjkSizePerStroke ?? 0));
-          if (m[sk] < need) E(`${where}.${sk}`, `「${m[tk]}」含汉字（最多 ${strokes} 笔），字号 ${m[sk]} 小于手写汉字下限 ${need}（笔画多的字会糊）`);
+          if (m[sk] < need) G('type.minCjk', `${where}.${sk}`, `「${m[tk]}」含汉字（最多 ${strokes} 笔），字号 ${m[sk]} 小于手写汉字下限 ${need}（笔画多的字会糊）`);
         }
       };
       cjkSize({}, A);
@@ -159,10 +176,10 @@ export function validateBeats(beats, style, reg) {
   // 叙事结构（创意自由，但完整一集必须有这些骨架）
   const rules = style.narrative[beats.kind] || { requireRoles: [], minQuiz: 0 };
   const roles = beats.phrases.map((p) => p.role).filter(Boolean);
-  for (const r of rules.requireRoles) if (!roles.includes(r)) E('phrases.role', `完整一集必须有 role=${r} 的句子`);
-  if (rules.requireRoles.includes('hook') && beats.phrases[0].role !== 'hook') E('phrases[0].role', '第一句必须是钩子（role=hook）');
+  for (const r of rules.requireRoles) if (!roles.includes(r)) G('narrative.roles', 'phrases.role', `完整一集必须有 role=${r} 的句子`);
+  if (rules.requireRoles.includes('hook') && beats.phrases[0].role !== 'hook') G('narrative.roles', 'phrases[0].role', '第一句必须是钩子（role=hook）');
   const quiz = beats.quiz || [];
-  if (quiz.length < rules.minQuiz) E('quiz', `至少 ${rules.minQuiz} 道自测题`);
+  if (quiz.length < rules.minQuiz) G('narrative.quiz', 'quiz', `至少 ${rules.minQuiz} 道自测题`);
   quiz.forEach((q, i) => { if (!q.q || !q.a || !Array.isArray(q.keywords) || !q.keywords.length) E(`quiz[${i}]`, '需要 q（问题）、a（答案）、keywords（判分关键词组）'); });
 
   // 事实出处：旁白里的数字、年份、英文专有名词都要有出处，或明确标为示意数值
@@ -187,18 +204,19 @@ export function validateBeats(beats, style, reg) {
       if (n > style.subtitle.maxLines) E(`字幕[${t}]`, `「${p.caption || p.text}」要折成 ${n} 行，超过 ${style.subtitle.maxLines} 行，请拆句`);
     }
   }
-  return { errors, warnings };
+  return { errors, warnings, advice };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const beats = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-  const { errors, warnings } = validateBeats(beats, loadStyle(), await loadLibrary());
+  const { errors, warnings, advice } = validateBeats(beats, loadStyle(beats), await loadLibrary());
   for (const w of warnings) console.log(`[提醒] ${w}`);
+  for (const a of advice) console.log(`[建议] ${a}`);
   for (const e of errors) console.log(`[错误] ${e}`);
   console.log(errors.length ? `分镜校验：${errors.length} 个错误` : '分镜校验：通过');
   process.exit(errors.length ? 1 : 0);
 }
 
 // 时间线里带给渲染器和混音的风格子集（编译器、组件预览共用）
-export const styleSubset = (style) => ({ name: style.name, version: style.version, palette: style.palette, paper: style.paper, ink: style.ink, subtitle: style.subtitle, pencil: style.pencil, audio: style.audio, motion: style.motion });
+export const styleSubset = (style) => ({ name: style.name, version: style.version, gates: style.gates, palette: style.palette, paper: style.paper, ink: style.ink, subtitle: style.subtitle, pencil: style.pencil, audio: style.audio, motion: style.motion });
 export { checkType };

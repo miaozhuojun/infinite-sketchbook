@@ -1,7 +1,16 @@
 {
  "name": "无限草稿本",
- "version": "0.5.1",
- "note": "唯一的风格来源。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。0.4.2：水印换位避开顿悟句、尽量落在停顿里（watermark.swapWindow）；YouTube Shorts 补上顶部图标的遮挡区；铅笔角度避开已写的字（pencil.coverCost），离场走压内容最少的方向、片尾整支笔出画；图形元素之间留空（type.shapeGapPen）；镜头停稳时每个元素整段在取景框里或整段在画外。同色墨迹合成一层、不同墨色正常叠放（ink.layerBlend），交叠处不再发黑。0.4.3：书写声和音乐用真实的 CC0 录音（audio.pencilSamples、audio.music.track），没有文件时退回合成。0.5.0：章节（chapters，分镜写节名，发布清单按平台给章节；镜头只框当前这一节）；发布清单加上抖音和哔哩哔哩。0.5.1：通行绿 go（只给本来就是绿色的东西用，比如绿灯；红灯发红光、绿灯发绿光）；换节镜头至少移 motion.chapterMoveMin 秒；图形也要整段在取景框里或整段出画，长路线箭头这类元素在分镜里写 bleed 放行。",
+ "version": "0.6.0",
+ "note": "默认风格（无限草稿本）。实际生效的是三层叠加：这份默认 < 本机私有创作配置 profile.local.json（不进仓库）< 每期分镜里的 style。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。0.4.2：水印换位避开顿悟句、尽量落在停顿里（watermark.swapWindow）；YouTube Shorts 补上顶部图标的遮挡区；铅笔角度避开已写的字（pencil.coverCost），离场走压内容最少的方向、片尾整支笔出画；图形元素之间留空（type.shapeGapPen）；镜头停稳时每个元素整段在取景框里或整段在画外。同色墨迹合成一层、不同墨色正常叠放（ink.layerBlend），交叠处不再发黑。0.4.3：书写声和音乐用真实的 CC0 录音（audio.pencilSamples、audio.music.track），没有文件时退回合成。0.5.0：章节（chapters，分镜写节名，发布清单按平台给章节；镜头只框当前这一节）；发布清单加上抖音和哔哩哔哩。0.5.1：通行绿 go（只给本来就是绿色的东西用，比如绿灯；红灯发红光、绿灯发绿光）；换节镜头至少移 motion.chapterMoveMin 秒；图形也要整段在取景框里或整段出画，长路线箭头这类元素在分镜里写 bleed 放行。0.6.0：引擎只管机械正确性，创作取舍只给建议（gates）；私有创作配置 profile.local.json 叠在这份上面，每期分镜可用 style 加颜色、字号等（不能改关卡级别、画幅、平台界面和章节规格）。",
+
+ "gates": {
+  "note": "关卡分两级。hard：机械上坏了（字被切、压字幕、进平台界面、出镜头、两处同时落笔、铅笔出画或瞬移、字幕折行超限、事实没出处、平台章节规格），流水线判失败。advice：创作上的取舍（叙事结构、节奏、镜头、留白、字号），只写进报告的「建议」，不拦截。这里只列 advice 级的关卡，没列的都是 hard。私有创作配置 profile.local.json 可以把任何一项改成 hard；每期分镜不能改关卡级别。",
+  "narrative.roles": "advice", "narrative.quiz": "advice", "narrative.hook": "advice", "narrative.ahaGap": "advice",
+  "type.scale": "advice", "type.minCjk": "advice", "type.minScreen": "advice", "layout.textGap": "advice", "layout.shapeGap": "advice",
+  "camera.ahaPush": "advice", "camera.ahaNoZoomOut": "advice", "camera.ahaCentered": "advice", "framing.shapeCut": "advice",
+  "sync.trail": "advice", "sync.lag": "advice", "pace.pause": "advice",
+  "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice"
+ },
 
  "palette": {
   "paper": "#f3ecdc",

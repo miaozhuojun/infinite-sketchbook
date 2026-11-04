@@ -16,6 +16,9 @@ engine/out/
 engine/public/
 engine/qa/fixtures/demo/out/
 engine/assets.local/
+# 本机私有的创作配置和组件（用户自己的风格取舍、某一期专用的画法）
+engine/style/profile.local.json
+engine/library/components.local/
 
 # ---- 作品：每期的分镜与旁白稿（保留所有权利，不公开）。只放行引擎自带的演示分镜 ----
 engine/data/*

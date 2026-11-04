@@ -171,9 +171,12 @@ function bboxOf(list) {
 }
 const fitZ = (b, pad) => Math.min(VIEW.w / (b.x1 - b.x0 + 2 * pad), VIEW.h / (b.y1 - b.y0 + 2 * pad));
 // 全景取景：到这一句为止的全部内容
+// 每句的全景取景：框住这一节到这句为止画过的东西。分了章节时，换节就从新的一块纸开始框，镜头沿纸面移过去
+// （整集几分钟、好几节内容画在纸上不同的地方；一直框住全部，越往后字越小）
 const computePhraseCam = () => {
   const acc = [], out = [];
   for (const p of phrases) {
+    if (p.chapter) acc.length = 0;
     for (const a of p.actions) if (geo.has(a.id)) acc.push(...geo.get(a.id));
     if (!acc.length) { out.push(null); continue; }
     const b = bboxOf(acc);
@@ -431,9 +434,14 @@ function schedule(boost) {
       // 画面里的位置必须在下一镜里看得到（不被镜头推出去），画面外只在画面里每个位置都会压到要紧东西时才用。
       const PK = style.pencil.park, fr = TGT.frame, cam = targetCam[pi] ?? { x: VIEW.cx, y: VIEW.cy, z: 1 };
       const st = [first.x, first.y], wait = t - penFree;
-      if (penPos === OFF || wait - travel < PK.minRest) {
-        if (penPos !== OFF && t - travel > penFree) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
-        penTrack.push({ kind: 'move', t0: t - travel, t1: t, from: fromPos, to: st });
+      // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
+      // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
+      const flight = penPos !== OFF && p.chapter && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      if (penPos === OFF || wait - travel < PK.minRest || flight) {
+        if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
+        // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞
+        const holdEnd = release ? release - M.cameraMove[0] - M.cameraMove[1] : 0;
+        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, Math.max(penFree, holdEnd)) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });
       } else {
         const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
@@ -544,7 +552,7 @@ for (const x of trailOf(sched)) problems.push(`「${actionsById.get(x.id).text ?
 for (const s of strokes) s.pts = samplePts(s);
 
 // ---------- 镜头关键帧：普通句在第一笔前移到全景；顿悟句在提示词前 lead 秒推近到位，停留 ≥hold 秒；结尾回到全景 ----------
-const camera = [];
+const camera = [], newChapter = new Set(); // newChapter：换节的那次镜头移动，不和前一次合并
 const pushMove = (t0, t1, to, focus) => {
   const prev = camera.length ? camera[camera.length - 1] : null;
   const from = prev ? prev.to : to;
@@ -571,16 +579,20 @@ phrases.forEach((p, pi) => {
   } else {
     // 普通句：镜头在第一笔前 cameraMove[0] 秒起移、第一笔后 cameraMove[1] 秒到位（边写边稳住）。
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位
+    // 换节：镜头和铅笔的飞行同起同落（见排程里的 flight）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
-    const t0 = Math.max(first.t0 - lead, holdUntil);
-    pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc);
+    const fly = p.chapter && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02);
+    if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
+    else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
+    if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);
   }
 });
 // 两次普通（非推近）镜头移动挨得太近（间隔不到 minCameraGap 秒）就合并成一次，直接移到后一次的取景
 // （审片：29.4–31.7s 连着两次重新取景，中间只停稳 0.4 秒，镜头显得忙）
 for (let i = camera.length - 1; i > 0; i--) {
   const a = camera[i - 1], b = camera[i];
-  if (!a.focus && !b.focus && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
+  // 换节那次不合并：合并后前一句还没写完镜头就往下一节走了（E01 实测 16:9 第一节最后画的灯框出了画）
+  if (!a.focus && !b.focus && !newChapter.has(b) && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
 }
 // 结尾回到全景，让观众看到整张图
 const lastAudio = audioClips[audioClips.length - 1];
@@ -656,10 +668,16 @@ const subtitles = phrases.map((p, i) => {
 });
 
 // narration：每个画幅插的停顿不同，拼好的旁白也各存一份
+// 章节：每节从它第一句旁白开口的时刻算起，第一节从 0 秒算（YouTube 章节第一行必须是 0:00）
+const chapters = phrases.map((p, i) => (p.chapter ? { title: p.chapter, t: i === 0 ? 0 : r2(report.phrases[i].at) } : null)).filter(Boolean);
+chapters.forEach((c, i) => {
+  const len = (chapters[i + 1]?.t ?? end) - c.t;
+  if (len < style.chapters.minSec) problems.push(`第 ${i + 1} 节「${c.title}」只有 ${r2(len)} 秒（每节至少 ${style.chapters.minSec} 秒，YouTube 章节的下限）`);
+});
 const out = {
   id: OUT_ID, target: targetName, canvas: { w: TGT.w, h: TGT.h, fps: FPS }, fps: FPS, durationInFrames: Math.ceil(end * FPS), duration: r2(end),
   narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
-  subtitles, style: styleSubset(style),
+  subtitles, chapters, style: styleSubset(style),
   platforms: TGT.platforms, platformUI: Object.fromEntries(TGT.platforms.map((pf) => [pf, style.platformUI[pf]])),
   report: { ...report, problems, fixes },
 };

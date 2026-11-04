@@ -24,6 +24,7 @@ export type Timeline = {
   pencil?: { sway: number[]; lift: number[]; edge?: number[] }; // 编译器预算并平滑好的铅笔姿态曲线（逐帧）；edge = 避开边缘/字幕的转角
   sub: { cx: number; top: number; size: number; width: number };
   watermark?: Watermark; // 本机配置了品牌（brand.local.json）时才有
+  chapters?: { title: string; t: number }[]; // 分镜里写了节名时才有：每节的起点（秒），发布时填进各平台的章节功能
 };
 export type InkMode = 'mono' | 'kai';
 // 时间线里带的风格规范子集（来自 style/style.json），渲染只读它

@@ -457,6 +457,12 @@ function schedule(boost) {
       // 只看这句和上一句时，隔一句的推近（1.5 倍）被漏掉，铅笔挪位按 1.25 倍算快了，屏幕上一帧跳 63px（E01 v4 9:16）
       const z = Math.max(...targetCam.slice(Math.min(penPhrase, pi), pi + 1).map((c) => c?.z ?? 1), targetCam[pi - 1]?.z ?? 0);
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
+      // 回看之后：镜头停在前面某一节，铅笔还留在最后写字的地方（多半在这一镜画外）。按原处起飞，镜头和笔从不同的地方出发，
+      // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
+      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === p.actions[0]) {
+        const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
+        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
+      }
       const fromPos = penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
       const travel = moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
       let t = Math.max(cue - (a.lead ?? PEN.cueLead), penFree + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）

@@ -151,6 +151,13 @@ expectFail('镜头停稳时一个图形被画布左边缘切掉一截、其余�
   const [ax, ay] = w(-60, y), [bx, by] = w(tl.frame.l + 200, y);
   tl.strokes.push({ id: '_cut#0', action: '_cut', group: '_cut', kind: 'shape', color: 'ink', d: `M ${ax} ${ay} L ${bx} ${by}`, len: Math.hypot(bx - ax, by - ay), t0: Math.min(m.t1 + 0.1, tl.duration - 0.4), t1: Math.min(m.t1 + 0.3, tl.duration - 0.2), pts: [[ax, ay, 0.5], [bx, by, 0.5]] });
 }, safezone, '_cut 在 ');
+expectFail('镜头停稳时一个字的最后一笔露在画面左缘几像素（路径在画外，笔宽伸进来）', (tl) => {
+  // 最后一镜里加一笔「字」：路径中心线在画布左缘外 2px，笔宽 12px，墨迹伸进画面 4px。只看路径点、不算笔宽时会当成整段在画外
+  const m = tl.camera.at(-1), c = m.to, y = (tl.frame.t + tl.frame.b) / 2;
+  const w = (sx, sy) => [(sx - tl.view.cx) / c.z + c.x, (sy - tl.view.cy) / c.z + c.y];
+  const [ax, ay] = w(-2, y - 30), [bx, by] = w(-2, y + 30);
+  tl.strokes.push({ id: '_edge#0', action: '_edge', group: '_edge', kind: 'glyph', color: 'ink', width: 12 / c.z, d: `M ${ax} ${ay} L ${bx} ${by}`, len: Math.hypot(bx - ax, by - ay), t0: Math.min(m.t1 + 0.1, tl.duration - 0.4), t1: Math.min(m.t1 + 0.3, tl.duration - 0.2), pts: [[ax, ay, 0.5], [bx, by, 0.5]] });
+}, safezone, '_edge 在 ');
 expectFail('推近把焦点挤到画面顶上（下面大半空着）', (tl) => {
   const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
   m.to = { ...m.to, y: m.to.y + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z }; // 焦点中心往上挪 35% 个取景框高

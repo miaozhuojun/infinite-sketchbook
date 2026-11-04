@@ -487,13 +487,8 @@ function schedule(boost) {
       if (flight) t = Math.max(t, takeoff + flyDur);
       // 起飞后离落笔还早（提示词在句尾）：按正常时长飞到，到了先停着等，不把整句都拉成一次慢吞吞的飞行（审片 v10：回顾第一站飞了 6.3 秒）
       const slack = flight ? t - takeoff - Math.max(flyDur, travel) : 0;
-      if (flight && slack > 1) {
-        penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: fromPos, to: st, chapter: true, phrase: pi });
-        penTrack.push({ kind: 'rest', t0: takeoff + flyDur, t1: t, at: st });
-      } else if (penPos === OFF || wait - travel < PK.minRest || flight) {
-        if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
-        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true, phrase: pi } : {}) });
-      } else {
+      // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
+      const pickRest = (from, freeAt, views, allowOff = true) => {
         const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
         const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
@@ -512,7 +507,6 @@ function schedule(boost) {
         }));
         // 等的这段时间里镜头可能推近再拉回（上一句是顿悟）：停的位置在这几个取景里都要看得到，
         // 只看下一镜的话，推近时笔会被镜头拖着滑出画面边（实测 9x16「灯就亮！」推近时笔停在 ×4 旁被推出上边）
-        const views = [targetCam[pi - 1], focusCam[pi - 1], cam].filter(Boolean);
         const inNext = (q) => views.every((c) => { const sx = (q[0] - c.x) * c.z + VIEW.cx, sy = (q[1] - c.y) * c.z + VIEW.cy; return sx > fr.l + 40 && sx < fr.r - 200 && sy > fr.t + 40 && sy < fr.b - 200; });
         const around = (o) => [[0, 0], [1, 1], [1.4, 0], [1, -0.7], [0, 1.3], [-0.8, 1.1], [2, 2], [2.4, 0], [0, 2.4], [-1.6, 2], [2, -1.2]].map(([dx, dy]) => [o[0] + (dx * PK.dist) / z, o[1] + (dy * PK.dist) / z]);
         // 再加一张覆盖整个取景框的粗网格：内容密的地方（16x9 左边一列输入、声波、权重），这两处四周笔身朝右下都会压到字，
@@ -522,12 +516,26 @@ function schedule(boost) {
           const sx = fr.l + 60 + ((fr.r - 260 - fr.l - 60) * gx) / 6, sy = fr.t + 60 + ((fr.b - 260 - fr.t - 60) * gy) / 4;
           grid.push([cam.x + (sx - VIEW.cx) / cam.z, cam.y + (sy - VIEW.cy) / cam.z]);
         }
-        const cands = [...around(penPos), ...around(st), ...grid].filter(inNext).map((q) => ({ q, c: cost(q) + dist(q, penPos) / 400 }));
-        const off = offRight([targetCam[pi - 1], targetCam[pi], focusCam[pi - 1]], penPos[1]);
+        const cands = [...around(from), ...around(st), ...grid].filter(inNext).map((q) => ({ q, c: cost(q) + dist(q, from) / 400 }));
+        const off = allowOff ? offRight([targetCam[pi - 1], targetCam[pi], focusCam[pi - 1]], from[1]) : null;
         if (off) cands.push({ q: off, c: 60, off: true });
         // 时间够不够：过去、至少停 0.2 秒、再回到下一笔起点
-        const fits = ({ q }) => penFree + moveDur(dist(penPos, q), 0.12, z) + 0.2 <= t - moveDur(dist(q, st), 0.12, z);
+        const fits = ({ q }) => freeAt + moveDur(dist(from, q), 0.12, z) + 0.2 <= t - moveDur(dist(q, st), 0.12, z);
         const best = cands.filter(fits).sort((x, y) => x.c - y.c)[0];
+        return best;
+      };
+      if (flight && slack > 1) {
+        // 飞到新纸面上先找空白处停着（审片 v11：落在要圈的「写不完」上等了 3 秒，笔身压着「不完」），快到提示词再挪到落笔处
+        const best = pickRest(st, takeoff + flyDur, [cam], false);
+        const land = best ? best.q : st, back = best ? moveDur(dist(land, st), 0.12, z) : 0;
+        penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: fromPos, to: land, chapter: true, phrase: pi });
+        penTrack.push({ kind: 'rest', t0: takeoff + flyDur, t1: t - back, at: land });
+        if (back > 0.01) penTrack.push({ kind: 'move', t0: t - back, t1: t, from: land, to: st });
+      } else if (penPos === OFF || wait - travel < PK.minRest || flight) {
+        if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
+        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true, phrase: pi } : {}) });
+      } else {
+        const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1], cam].filter(Boolean));
         if (!best) {
           if (t - travel > penFree) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
           penTrack.push({ kind: 'move', t0: t - travel, t1: t, from: penPos, to: st });

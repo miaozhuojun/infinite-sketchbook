@@ -18,7 +18,13 @@ import { cameraAt, subtitleBox, watermarkBox, boxesOverlap, strokeScreenBox } fr
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];
-const check = (name, ok, detail) => { console.log(`[${ok ? '通过' : '失败'}] ${name}：${detail}`); if (!ok) fails.push(name); };
+// gate：风格规范 gates 里是 advice 的关卡没过只打 [建议]、不判失败（创作取舍）；没写 gate 或是 hard 的照常判失败
+const advs = [];
+const check = (name, ok, detail, gate) => {
+  const adv = !ok && gate && tl.style?.gates?.[gate] === 'advice';
+  console.log(`[${ok ? '通过' : adv ? '建议' : '失败'}] ${name}：${detail}`);
+  if (!ok) (adv ? advs : fails).push(name);
+};
 const zones = Object.entries(tl.platformUI || {}).flatMap(([pf, zs]) => (zs || []).map((z) => ({ ...z, pf })));
 const inZone = (x, y) => zones.find((z) => x > z.l && x < z.r && y > z.t && y < z.b);
 
@@ -59,7 +65,7 @@ for (const s of tl.strokes) {
 const textIds = new Set(tl.strokes.filter((s) => s.kind === 'glyph' || s.kind === 'line').map((s) => s.action));
 const bleedIds = new Set(tl.strokes.filter((s) => s.bleed).map((s) => s.action)); // 分镜声明可以被画布边缘裁掉的图形（横贯画面的路线箭头）
 // 3. 元素不被切断：在每个镜头到位时刻看每个元素的屏幕范围，取景框 frame 内（没有 frame 的旧时间线按画布算）
-const cuts = [], FR = tl.frame ?? { l: 0, r: tl.canvas.w, t: 0, b: tl.canvas.h };
+const cuts = [], shapeCuts = [], FR = tl.frame ?? { l: 0, r: tl.canvas.w, t: 0, b: tl.canvas.h };
 tl.camera.forEach((m, i) => {
   const until = tl.camera[i + 1]?.t0 ?? tl.duration, c = m.to, W = tl.canvas.w, H = tl.canvas.h;
   for (const [id, b] of allBox) {
@@ -75,7 +81,7 @@ tl.camera.forEach((m, i) => {
     const bad = textIds.has(id) ? !inFrame || underUI
       : !bleedIds.has(id) ? !inFrame
       : y1 > B || (x0 < FR.l && x0 > 0) || (x1 > FR.r && x1 < W) || (y0 < FR.t && y0 > 0);
-    if (bad) cuts.push(`${id} 在 ${m.t1.toFixed(2)}s ${textIds.has(id) ? '是文字，没有整段在取景框里' : bleedIds.has(id) ? '停在取景框外的边距里或越过了取景框下沿' : '是图形，没有整段在取景框里'}（屏幕 ${x0.toFixed(0)}–${x1.toFixed(0)} × ${y0.toFixed(0)}–${y1.toFixed(0)}，取景框 ${FR.l}–${FR.r} × ${FR.t}–${FR.b}），也没有整段出画`);
+    if (bad) (textIds.has(id) ? cuts : shapeCuts).push(`${id} 在 ${m.t1.toFixed(2)}s ${textIds.has(id) ? '是文字，没有整段在取景框里' : bleedIds.has(id) ? '停在取景框外的边距里或越过了取景框下沿' : '是图形，没有整段在取景框里'}（屏幕 ${x0.toFixed(0)}–${x1.toFixed(0)} × ${y0.toFixed(0)}–${y1.toFixed(0)}，取景框 ${FR.l}–${FR.r} × ${FR.t}–${FR.b}），也没有整段出画`);
   }
 });
 // 4. 镜头停稳时内容不进字幕区：任何已画的元素都不能有一部分落在字幕衬底那一条（字幕上沿到画布底）里
@@ -119,10 +125,11 @@ for (const sp of wm?.spans ?? []) for (const t of [sp.t0, sp.t1].filter((x) => x
   const p = (tl.report?.phrases ?? []).find((q) => q.role === 'aha' && t > q.at - wm.fade && t < q.audioEnd + hold + wm.fade);
   if (p) swapHits.push(`${t.toFixed(1)}s 换位落在顿悟句「${p.text}」里`);
 }
-check('水印换位避开顿悟句', !swapHits.length, swapHits.length ? [...new Set(swapHits)].slice(0, 5).join('；') : wm ? `${Math.max(0, wm.spans.length - 1)} 次换位都不在顿悟句里` : '没有水印，未查');
-check('推近时焦点在画面中部', !offC.length, offC.length ? offC.join('；') : maxOff === undefined || !fr ? '风格规范没有 aha.maxOffCenter 或时间线没有取景框，未查' : `${tl.camera.filter((m) => m.focus && (m.to.push ?? 1) > 1.001).length} 次推近，焦点中心都在取景框中心 ${(maxOff * 100).toFixed(0)}% 以内`);
+check('水印换位避开顿悟句', !swapHits.length, swapHits.length ? [...new Set(swapHits)].slice(0, 5).join('；') : wm ? `${Math.max(0, wm.spans.length - 1)} 次换位都不在顿悟句里` : '没有水印，未查', 'watermark.ahaSwap');
+check('推近时焦点在画面中部', !offC.length, offC.length ? offC.join('；') : maxOff === undefined || !fr ? '风格规范没有 aha.maxOffCenter 或时间线没有取景框，未查' : `${tl.camera.filter((m) => m.focus && (m.to.push ?? 1) > 1.001).length} 次推近，焦点中心都在取景框中心 ${(maxOff * 100).toFixed(0)}% 以内`, 'camera.ahaCentered');
 check('镜头停稳时内容不进字幕区', !inSub.length, inSub.length ? `${inSub.length} 处：` + inSub.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，画出来的东西都在字幕上方`);
-check('镜头停稳时不切字、不留残边', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，文字和图形都整段在取景框里或整段在画外（声明 bleed 的图形没有停在边距里）`);
+check('镜头停稳时不切字', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，文字都整段在取景框里或整段在画外`);
+check('镜头停稳时图形不切半截', !shapeCuts.length, shapeCuts.length ? `${shapeCuts.length} 处：` + shapeCuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，图形都整段在取景框里或整段在画外（声明 bleed 的图形没有停在边距里）`, 'framing.shapeCut');
 check('内容避开平台界面', !contentHits.length, contentHits.length ? `${contentHits.length} 笔：` + contentHits.slice(0, 5).join('；') : `${tl.strokes.length} 笔在所有镜头位置上都不被平台界面遮挡`);
-console.log(`\n安全区检查失败 ${fails.length} 项`);
+console.log(`\n安全区检查失败 ${fails.length} 项${advs.length ? `（另有建议 ${advs.length} 项）` : ''}`);
 process.exit(fails.length ? 1 : 0);

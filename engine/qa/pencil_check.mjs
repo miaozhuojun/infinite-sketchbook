@@ -16,7 +16,13 @@ import { pencilPose, cameraAt, pencilBodyPts, pencilFootprint, subtitleBox, inBo
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];
-const check = (name, ok, detail) => { console.log(`[${ok ? '通过' : '失败'}] ${name}：${detail}`); if (!ok) fails.push(name); };
+// gate：风格规范 gates 里是 advice 的关卡没过只打 [建议]、不判失败（创作取舍）；没写 gate 或是 hard 的照常判失败
+const advs = [];
+const check = (name, ok, detail, gate) => {
+  const adv = !ok && gate && tl.style?.gates?.[gate] === 'advice';
+  console.log(`[${ok ? '通过' : adv ? '建议' : '失败'}] ${name}：${detail}`);
+  if (!ok) (adv ? advs : fails).push(name);
+};
 
 let prev = null, maxDA = [0, 0], maxDL = [0, 0], maxDAmove = [0, 0];
 const overlaps = [];
@@ -80,7 +86,7 @@ phr.forEach((p, i) => {
     prevZ = Math.max(prevZ, z);
   }
 });
-check('顿悟时镜头不拉远', !zoomOut.length, zoomOut.length ? zoomOut.join('；') : `${phr.filter((p) => p.role === 'aha').length} 个顿悟句（说完后再停 ${tl.style?.motion?.aha?.holdAfter ?? 0}s）期间镜头只推近或保持`);
+check('顿悟时镜头不拉远', !zoomOut.length, zoomOut.length ? zoomOut.join('；') : `${phr.filter((p) => p.role === 'aha').length} 个顿悟句（说完后再停 ${tl.style?.motion?.aha?.holdAfter ?? 0}s）期间镜头只推近或保持`, 'camera.ahaNoZoomOut');
 
 // 6. 停笔不压正在讲的东西：凡是停够 0.5 秒（写字、笔画之间的移动、等下一个词的短停都不算），
 //    笔身不能压在已经写出来的文字上、刚画完的那个元素上，推近镜头里还有焦点元素
@@ -125,7 +131,7 @@ for (const rest of (tl.penTrack ?? []).filter((sg) => sg.kind === 'rest' && sg.t
     if (body.some(([x, y]) => boxes.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3]))) covered.push(f);
   }
 }
-check('停笔不压正在讲的东西', !covered.length, covered.length ? `${covered.length} 帧笔停着、笔身压在文字、刚画完的元素或推近焦点上：` + runs(covered).slice(0, 5).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : '笔停够 0.5 秒时，从不压文字、刚画完的元素和推近焦点');
+check('停笔不压正在讲的东西', !covered.length, covered.length ? `${covered.length} 帧笔停着、笔身压在文字、刚画完的元素或推近焦点上：` + runs(covered).slice(0, 5).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : '笔停够 0.5 秒时，从不压文字、刚画完的元素和推近焦点', 'pencil.park');
 
 // 7. 写字时笔身不长时间压住别的字（停够 0.5 秒的停笔由第 6 项管）
 const longRest = (t) => (tl.penTrack ?? []).some((sg) => sg.kind === 'rest' && sg.t1 - sg.t0 >= 0.5 && t >= sg.t0 && t < sg.t1);
@@ -156,11 +162,11 @@ const heavy = phraseCover.filter((x) => x.sec > maxPhrase);
 check('写字时笔身不长时间压住别的字', !longCover.length && !heavy.length,
   [longCover.length ? `${longCover.length} 段连续压字超过 ${maxCover}s：` + longCover.slice(0, 5).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : '',
     heavy.length ? `${heavy.length} 句累计压字超过 ${maxPhrase}s：` + heavy.slice(0, 5).map((x) => `「${x.p.text}」${x.sec.toFixed(2)}s`).join('、') : ''].filter(Boolean).join('；') ||
-  `写字和移动时，笔身连续压住别的字最长 ${(Math.max(0, ...runs(coverFrames).map(([a, b]) => b - a + 1)) / tl.fps).toFixed(2)}s（上限 ${maxCover}s），一句里累计最多 ${Math.max(0, ...phraseCover.map((x) => x.sec)).toFixed(2)}s（上限 ${maxPhrase}s）`);
+  `写字和移动时，笔身连续压住别的字最长 ${(Math.max(0, ...runs(coverFrames).map(([a, b]) => b - a + 1)) / tl.fps).toFixed(2)}s（上限 ${maxCover}s），一句里累计最多 ${Math.max(0, ...phraseCover.map((x) => x.sec)).toFixed(2)}s（上限 ${maxPhrase}s）`, 'pencil.cover');
 
 // 8. 片尾不带笔
 const lastPose = pencilPose(tl, (tl.durationInFrames - 1) / tl.fps), onCanvas = pencilBodyPts(tl, lastPose).filter(([x, y]) => x > 0 && x < tl.canvas.w && y > 0 && y < tl.canvas.h);
-check('片尾不带笔', !onCanvas.length, onCanvas.length ? `最后一帧铅笔还在画面里（笔尖 ${lastPose.x.toFixed(0)},${lastPose.y.toFixed(0)}）` : '最后一帧整支笔都在画外');
+check('片尾不带笔', !onCanvas.length, onCanvas.length ? `最后一帧铅笔还在画面里（笔尖 ${lastPose.x.toFixed(0)},${lastPose.y.toFixed(0)}）` : '最后一帧整支笔都在画外', 'pencil.exit');
 
-console.log(`\n铅笔检查失败 ${fails.length} 项`);
+console.log(`\n铅笔检查失败 ${fails.length} 项${advs.length ? `（另有建议 ${advs.length} 项）` : ''}`);
 process.exit(fails.length ? 1 : 0);

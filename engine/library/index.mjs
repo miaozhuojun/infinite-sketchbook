@@ -27,11 +27,14 @@ export const BUILTINS = {
   },
 };
 
+// 组件来自两处：components/（公开、随引擎发布）和 components.local/（本机私有，不进仓库）。
+// 某一期需要的新画法可以先放进 components.local/ 直接用，不必先进公开仓库；觉得通用再提 PR 挪到 components/
 export async function loadLibrary() {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'components');
+  const here = path.dirname(fileURLToPath(import.meta.url));
   const reg = new Map();
-  for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.mjs')).sort()) {
-    const mod = await import(pathToFileURL(path.join(dir, f)).href);
+  const files = ['components', 'components.local'].flatMap((d) => (fs.existsSync(path.join(here, d)) ? fs.readdirSync(path.join(here, d)).filter((f) => f.endsWith('.mjs')).sort().map((f) => path.join(d, f)) : []));
+  for (const f of files) {
+    const mod = await import(pathToFileURL(path.join(here, f)).href);
     for (const c of [].concat(mod.default)) {
       if (!c?.meta?.name || typeof c.draw !== 'function') throw new Error(`组件文件 ${f} 缺少 meta.name 或 draw`);
       if (reg.has(c.meta.name) || BUILTINS[c.meta.name]) throw new Error(`组件名重复：${c.meta.name}（${f}）`);

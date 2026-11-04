@@ -5,7 +5,7 @@ import 'lxgw-wenkai-webfont/lxgwwenkai-bold.css';
 import { Cam, cameraAt, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke } from './timeline';
 
 // 所有颜色、纸面、墨迹、字幕参数都来自时间线里带的风格规范（style/style.json），这里不写裸值
-// 世界坐标里的纸面范围（比画布大得多，镜头怎么移都不露边）
+// 墨迹层的世界坐标框（overflow 可见，只是坐标系，不裁内容）
 const WORLD = { x: -1600, y: -1600, w: 4280, h: 5120 };
 const worldSvg = { width: WORLD.w, height: WORLD.h, viewBox: `${WORLD.x} ${WORLD.y} ${WORLD.w} ${WORLD.h}`, style: { position: 'absolute' as const, left: WORLD.x, top: WORLD.y, overflow: 'visible' as const } };
 
@@ -16,8 +16,14 @@ const World: React.FC<{ cam: Cam; view: { cx: number; cy: number }; children: Re
 );
 
 // ---------- 纸（世界层：底色、方格、纤维） ----------
-const PaperWorld: React.FC<{ st: Style }> = ({ st }) => (
-  <svg {...worldSvg}>
+// 纸只铺在这一帧镜头看得到的那块世界坐标上（再多留一圈）：分章节时各节画在纸面上相隔很远的地方，
+// 铺一张固定大小的纸会在后面几节露出没有方格的底（E01 理解度测试：第 3 节起方格不见了）。
+// 方格图案和纤维噪声都按世界坐标取值，纸跟着镜头换位置时纹理不会跟着滑
+const PaperWorld: React.FC<{ st: Style; cam: Cam; view: { cx: number; cy: number }; canvas: { w: number; h: number } }> = ({ st, cam, view, canvas }) => {
+  const pad = 200, x = Math.floor(cam.x - view.cx / cam.z - pad), y = Math.floor(cam.y - view.cy / cam.z - pad);
+  const w = Math.ceil(canvas.w / cam.z + 2 * pad), h = Math.ceil(canvas.h / cam.z + 2 * pad);
+  return (
+  <svg width={w} height={h} viewBox={`${x} ${y} ${w} ${h}`} style={{ position: 'absolute', left: x, top: y, overflow: 'visible' }}>
     <defs>
       <pattern id="grid" width={st.paper.gridSize} height={st.paper.gridSize} patternUnits="userSpaceOnUse" x={10} y={18}>
         <path d={`M${st.paper.gridSize} 0H0V${st.paper.gridSize}`} fill="none" stroke={st.palette.grid} strokeWidth={1.1} opacity={st.paper.gridOpacity} />
@@ -27,11 +33,12 @@ const PaperWorld: React.FC<{ st: Style }> = ({ st }) => (
         <feColorMatrix type="matrix" values="0 0 0 0 0.35  0 0 0 0 0.27  0 0 0 0 0.16  0.9 0 0 0 -0.32" />
       </filter>
     </defs>
-    <rect x={WORLD.x} y={WORLD.y} width={WORLD.w} height={WORLD.h} fill={st.palette.paper} />
-    <rect x={WORLD.x} y={WORLD.y} width={WORLD.w} height={WORLD.h} fill="url(#grid)" />
-    <rect x={WORLD.x} y={WORLD.y} width={WORLD.w} height={WORLD.h} filter="url(#fiber)" opacity={st.paper.fiberOpacity} />
+    <rect x={x} y={y} width={w} height={h} fill={st.palette.paper} />
+    <rect x={x} y={y} width={w} height={h} fill="url(#grid)" />
+    <rect x={x} y={y} width={w} height={h} filter="url(#fiber)" opacity={st.paper.fiberOpacity} />
   </svg>
-);
+  );
+};
 
 // ---------- 光（屏幕层）：暖光只照纸、压在墨迹下面，墨色不被洗淡；暗角在最上层 ----------
 const Lamp: React.FC<{ w: number; h: number; st: Style }> = ({ w, h, st }) => (
@@ -201,7 +208,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
   return (
     <AbsoluteFill style={{ backgroundColor: paper, overflow: 'hidden' }}>
       {(tl.audio || tl.narration) && <Html5Audio src={staticFile(tl.audio ?? tl.narration)} />}
-      <World cam={cam} view={tl.view}><PaperWorld st={st} /></World>
+      <World cam={cam} view={tl.view}><PaperWorld st={st} cam={cam} view={tl.view} canvas={tl.canvas} /></World>
       <Lamp w={w} h={h} st={st} />
       <World cam={cam} view={tl.view}>
         <svg {...worldSvg}>

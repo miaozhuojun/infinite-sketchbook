@@ -74,25 +74,25 @@ expectFail('顿悟句期间镜头拉远', (tl) => {
   const at = tl.report.phrases[i].at, c0 = cameraAt(tl.camera, at + 0.1);
   tl.camera.push({ t0: at + 0.15, t1: at + 0.65, from: c0, to: { ...c0, z: c0.z * 0.8 } });
   tl.camera.sort((a, b) => a.t0 - b.t0);
-}, pencil, '[失败] 顿悟时镜头不拉远');
+}, pencil, '[建议] 顿悟时镜头不拉远');
 expectFail('推近镜头里铅笔停在焦点元素上 1 秒', (tl) => {
   // 推近到位、焦点元素至少写出一笔之后，停笔 1 秒，笔身横在已写出的焦点内容上
   const m = tl.camera.find((x) => x.focus), fx = tl.strokes.filter((x) => m.focus.includes(x.action));
   const t0 = Math.max(m.t1, Math.min(...fx.map((x) => x.t1))) + 0.05;
   tl.penTrack.unshift(restAcross(tl, fx.filter((x) => x.t1 <= t0).flatMap((x) => x.pts), t0)); // 排在最前面，这一秒里取到的就是它
-}, pencil, '[失败] 停笔不压正在讲的东西');
+}, pencil, '[建议] 停笔不压正在讲的东西');
 expectFail('停笔 1 秒压在刚写完的字上（不在推近镜头里）', (tl) => {
   // 找一个整段都是文字、写完时不在推近镜头里的动作，写完后停笔 1 秒，笔身横在它正中
   const inFocus = (t) => tl.camera.some((m, i) => m.focus && t >= m.t0 && t < (tl.camera[i + 1]?.t0 ?? tl.duration));
   const ss = [...Map.groupBy(tl.strokes, (x) => x.action).values()].reverse().find((g) => g.every(isText) && !inFocus(g.at(-1).t1 + 0.1));
   tl.penTrack.unshift(restAcross(tl, ss.flatMap((x) => x.pts), ss.at(-1).t1 + 0.05));
-}, pencil, '[失败] 停笔不压正在讲的东西');
+}, pencil, '[建议] 停笔不压正在讲的东西');
 expectFail('写字时笔身横在别的字上 1.5 秒（不是停笔）', (tl) => {
   // 找一个整段都是文字的动作，写完后插一段 1.5 秒的原地「移动」，笔身横在它正中（停够 0.5 秒的停笔归第 6 项管，这里要的是写字和移动时）
   const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText));
   const r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
   tl.penTrack.unshift({ kind: 'move', t0: r.t0, t1: r.t0 + 1.5, from: r.at, to: r.at });
-}, pencil, '[失败] 写字时笔身不长时间压住别的字');
+}, pencil, '[建议] 写字时笔身不长时间压住别的字');
 expectFail('一句话里笔身断续压字，累计超过上限（每段都不到 1 秒）', (tl) => {
   // 在一句旁白里插四段 0.7 秒的原地「移动」，笔身横在一段已写的文字上，中间隔 0.1 秒：连续的检查拦不住，累计的要拦住
   const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText)), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
@@ -105,7 +105,7 @@ expectFail('片尾铅笔停在画面中间', (tl) => {
   const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);
   last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中
   tl.penTrack.at(-2).to = last.at;
-}, pencil, '[失败] 片尾不带笔');
+}, pencil, '[建议] 片尾不带笔');
 expectFail('字幕挪进 TikTok 底部信息栏', (tl) => { tl.sub.top = 1600; }, safezone, '[失败] 字幕避开平台界面');
 expectFail('内容整体右移 400px 进右侧按钮列', (tl) => { tl.view.cx += 400; }, safezone, '[失败] 内容避开平台界面');
 expectFail('推近镜头把一段文字切成半截', (tl) => {
@@ -113,17 +113,17 @@ expectFail('推近镜头把一段文字切成半截', (tl) => {
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1);
   const xs = tl.strokes.filter((s) => s.action === st.action).flatMap((s) => s.pts.map((p) => p[0]));
   m.to = { ...m.to, x: mid(xs) + tl.view.cx / m.to.z };
-}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+}, safezone, '[失败] 镜头停稳时不切字');
 expectFail('推近镜头把一段文字推到字幕衬底下面', (tl) => {
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1);
   const ys = tl.strokes.filter((s) => s.action === st.action).flatMap((s) => s.pts.map((p) => p[1]));
   m.to = { ...m.to, y: mid(ys) - (subTop(tl) - tl.view.cy) / m.to.z }; // 让这段文字的中线正好落在字幕衬底上沿
-}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+}, safezone, '[失败] 镜头停稳时不切字');
 expectFail('推近时一段文字落进 TikTok 顶部栏（文字整段在画布里）', (tl) => {
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1 && !m.focus.includes(s.action));
   const ys = tl.strokes.filter((s) => s.action === st.action).flatMap((s) => s.pts.map((p) => p[1]));
   m.to = { ...m.to, y: mid(ys) - (65 - tl.view.cy) / m.to.z }; // 文字中线落在屏幕 y=65，正在顶部标签栏（0–130）里
-}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+}, safezone, '[失败] 镜头停稳时不切字');
 // 一个镜头位置和这一镜里已经开始画的一个图形（优先推近镜头），返回 [镜头, 图形的纵坐标]
 function shotWithShape(tl) {
   const shots = tl.camera.map((m, i) => ({ m, until: tl.camera[i + 1]?.t0 ?? tl.duration })).sort((a, b) => !!b.m.focus - !!a.m.focus);
@@ -138,11 +138,11 @@ expectFail('镜头停稳时一个图形压在字幕衬底底下', (tl) => {
 expectFail('镜头停稳时一个图形越过取景框下沿（还在字幕上方）', (tl) => {
   const [m, ys] = shotWithShape(tl);
   m.to = { ...m.to, y: Math.max(...ys) - (tl.frame.b + 0.5 * (subTop(tl) - tl.frame.b) - tl.view.cy) / m.to.z }; // 图形底边落在取景框下沿和字幕之间
-}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+}, safezone, '[建议] 镜头停稳时图形不切半截');
 expectFail('图形停在取景框外的顶边距里（像推近后挂在顶边的下划线）', (tl) => {
   const [m, ys] = shotWithShape(tl), z = Math.min(m.to.z, (tl.frame.t - 20) / (Math.max(...ys) - Math.min(...ys)));
   m.to = { ...m.to, z, y: Math.max(...ys) - (tl.frame.t - 10 - tl.view.cy) / z }; // 整个图形落在画布顶边和取景框上沿之间
-}, safezone, '[失败] 镜头停稳时不切字、不留残边');
+}, safezone, '[建议] 镜头停稳时图形不切半截');
 expectFail('镜头停稳时一个图形被画布左边缘切掉一截、其余伸进取景框（像推近后切掉一半的灯泡）', (tl) => {
   // 镜头不动，在最后一个镜头里加一条横线：左端在画布外 60px，右端伸进取景框 200px，高度取取景框正中。
   // 旧规则（图形被画布边缘裁掉可以）会放过它，别的元素都不受影响
@@ -154,7 +154,7 @@ expectFail('镜头停稳时一个图形被画布左边缘切掉一截、其余�
 expectFail('推近把焦点挤到画面顶上（下面大半空着）', (tl) => {
   const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
   m.to = { ...m.to, y: m.to.y + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z }; // 焦点中心往上挪 35% 个取景框高
-}, safezone, '[失败] 推近时焦点在画面中部');
+}, safezone, '[建议] 推近时焦点在画面中部');
 expectFail('推近镜头把焦点内容推进 TikTok 顶部栏', (tl) => { const m = tl.camera.find((x) => x.focus); m.to = { ...m.to, y: m.to.y + 650 / m.to.z }; }, safezone, '[失败] 内容避开平台界面');
 // 水印：没配置品牌的时间线（CI 跑的演示分镜）没有水印，就注入一段，检查照样要查
 const wmOf = (tl) => (tl.watermark ??= { text: '测试水印', size: 30, opacity: 0.42, fade: 0.8, margin: 10, spans: [] });
@@ -164,7 +164,7 @@ expectFail('水印换位正好撞上顿悟句', (tl) => {
   // 两段水印在顿悟句说到一半时换位（两个位置都离字幕、平台界面远，只看换位时刻）
   const p = tl.report.phrases.find((q) => q.role === 'aha'), t = (p.at + p.audioEnd) / 2;
   wmOf(tl).spans = [{ t0: 0, t1: t, x: 980, y: 1000, anchor: 'l' }, { t0: t, t1: tl.duration, x: 980, y: 1000, anchor: 'l' }];
-}, safezone, '[失败] 水印换位避开顿悟句');
+}, safezone, '[建议] 水印换位避开顿悟句');
 expectFail('水印压在画好的内容上', (tl) => {
   // 最后一笔画完后，水印放在它结尾时的屏幕位置上，一直显示到片尾
   const s = tl.strokes.at(-1), [x, y] = toScreen(tl, s.pts[Math.floor(s.pts.length / 2)], tl.duration);
@@ -240,14 +240,18 @@ speechCase('旁白换成别的音色', (tl) => { tl.narration = OTHER_VOICE; del
 // ---------- 分镜上的注入（渲染前：校验器与编译器版面/节奏规则） ----------
 const acts = (b) => b.phrases.flatMap((p) => p.actions);
 const firstText = (b) => acts(b).find((a) => a.type === 'text');
-function expectBeats(name, mutate, cmd, mustMatch) {
+// advice：这条是创作取舍（风格规范 gates 里的 advice 级），要被报成「建议」而不是错误；只看建议那几行
+const adviceOf = (out) => [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])].join('\n');
+// advice：要报成建议；any：报成建议或错误都算（注入的间距在不同基线上可能刚好压在一起，那就是错误）
+function expectBeats(name, mutate, cmd, mustMatch, { advice = false, any = false } = {}) {
   const b = structuredClone(beatsSrc);
   b.id = '_selftest';
   mutate(b);
   const p = 'data/_selftest.beats.json';
   fs.writeFileSync(p, JSON.stringify(b));
   const r = spawnSync('node', cmd(p), { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
-  record(name, r.status !== 0 && (mustMatch instanceof RegExp ? mustMatch.test(out) : out.includes(mustMatch)), out);
+  const hit = (txt) => (mustMatch instanceof RegExp ? mustMatch.test(txt) : txt.includes(mustMatch));
+  record(name, any ? hit(out) : advice ? hit(adviceOf(out)) : r.status !== 0 && hit(out), out);
   fs.rmSync(p, { force: true });
   for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
 }
@@ -256,41 +260,55 @@ const compileNoFix = (t) => (p) => ['compiler/compile.mjs', p, '--target', t, '-
 
 expectBeats('用了不存在的组件', (b) => { acts(b).at(-1).type = 'bulbb'; }, validate, '未知组件「bulbb」');
 expectBeats('写了裸色值', (b) => { firstText(b).color = '#ff0000'; }, validate, '不是规范里的墨色');
-expectBeats('字号不在字号阶梯上', (b) => { firstText(b).size = 75; }, validate, '不在字号阶梯');
-expectBeats('手写汉字字号太小（会糊）', (b) => { acts(b).find((a) => a.type === 'text' && /\p{Script=Han}/u.test(a.text)).size = 48; }, validate, '小于手写汉字下限');
+expectBeats('字号不在字号阶梯上', (b) => { firstText(b).size = 75; }, validate, '不在字号阶梯', { advice: true });
+expectBeats('手写汉字字号太小（会糊）', (b) => { acts(b).find((a) => a.type === 'text' && /\p{Script=Han}/u.test(a.text)).size = 48; }, validate, '小于手写汉字下限', { advice: true });
 expectBeats('旁白里数字后面跟冒号（会读成「比」）', (b) => { b.narration.script = b.narration.script.replace(/(\d)。?/, '$1：'); }, validate, '读成「比」');
 expectBeats('旁白里的数字没有出处', (b) => { b.facts = []; }, validate, '没有出处');
 expectBeats('提示词不在这句旁白里', (b) => { acts(b).at(-1).at = '这句旁白里没有的词'; }, validate, '不在这句旁白里');
 expectBeats('节名太长、章节不从第一句开始', (b) => { b.phrases.at(-1).chapter = '这是一个特别特别长的小节名字超过了十五个字'; }, validate, /节名要写，最多|从第一句开始/);
-expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; }, validate, '必须有 role=hook');
+expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; }, validate, '必须有 role=hook', { advice: true });
 expectBeats('字幕太长会折成三行', (b) => { b.phrases[0].caption = '这是一句特别特别长的字幕，长到在竖屏上要折成好几行，观众根本来不及看完，所以必须拆成短句再配画面'; }, validate, '请拆句');
 expectBeats('回描引用了还没画的元素', (b) => { b.phrases[0].actions.push({ id: '_rt', type: 'retrace', at: b.phrases[0].actions[0].at, target: b.phrases.at(-1).actions.at(-1).id }); }, validate, '不存在或还没画');
 expectBeats('两个图形的墨迹相切（关闭自动修复）', (b) => {
   const p = b.phrases.find((q) => q.actions.some((a) => a.type === 'circle')), c = p.actions.find((a) => a.type === 'circle');
   p.actions.push({ id: '_tan', type: 'circle', at: c.at, cx: c.cx + c.r * 2 + 3, cy: c.cy, r: c.r });
-}, compileNoFix('9x16'), '墨迹只隔');
+}, compileNoFix('9x16'), '墨迹只隔', { advice: true });
 expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => {
   // 写一段字、圈出来，再让一根箭头的尖正好落在圈上：圈是装饰，箭头尖碰到它不算「接上」
   const p = b.phrases.at(-1), at = p.actions[0].at;
   p.actions.push({ id: '_t', type: 'text', at, text: 'AB', x: 640, y: 1150, size: 72 });
   p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
   p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
-}, compileNoFix('9x16'), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/);
+}, compileNoFix('9x16'), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/, { advice: true });
 expectBeats('顿悟句推不近又没声明', (b) => {
   // 顿悟句的焦点圈住画面最上面的字和下面远处新写的一行：焦点装不下，推不近；分镜没写 noPush，编译要报
   const p = b.phrases.find((q) => q.role === 'aha'), top = acts(b).find((a) => a.type === 'text');
   p.actions.push({ id: '_far', type: 'text', at: p.actions[0].at, text: '1=1', x: top.x, y: top.y + 1000, size: 72 });
   p.focus = [top.id, '_far'];
-}, (p) => ['compiler/compile.mjs', p, '--target', '9x16'], /推不近.*noPush/);
-expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/);
+}, (p) => ['compiler/compile.mjs', p, '--target', '9x16'], /推不近.*noPush/, { advice: true });
+expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/, { advice: true });
+expectBeats('两段文字压在一起（关闭自动修复，仍判错误）', (b) => {
+  const t = firstText(b);
+  b.phrases[0].actions.push({ id: '_on', type: 'text', at: t.at, text: t.text, x: t.x, y: t.y, size: t.size });
+}, compileNoFix('9x16'), /「_on」|离 _on/);
 expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) => {
   const t = firstText(b);
   b.phrases[0].actions.push({ id: '_row', type: 'text', at: t.at, text: '57', x: t.x + t.size * 1.6, y: t.y, size: 56 });
-}, compileNoFix('9x16'), /在同一行，横向只有/);
+}, compileNoFix('9x16'), /在同一行，横向只有/, { any: true });
+{
+  // 私有创作配置把一项建议升成 hard：同样的缺陷就要判失败（用户可以把自己在意的取舍收紧）
+  const prof = path.resolve('build/_selftest.profile.json');
+  fs.writeFileSync(prof, JSON.stringify({ gates: { 'type.scale': 'hard' } }));
+  const b = structuredClone(beatsSrc); b.id = '_selftest'; firstText(b).size = 75;
+  fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+  const r = spawnSync('node', ['compiler/validate.mjs', 'data/_selftest.beats.json'], { encoding: 'utf8', env: { ...process.env, SKETCH_PROFILE: prof } }), out = (r.stdout || '') + (r.stderr || '');
+  record('私有创作配置把「字号阶梯」升成 hard 后判错误', r.status !== 0 && /\[错误\].*不在字号阶梯/.test(out), out);
+  fs.rmSync('data/_selftest.beats.json', { force: true }); fs.rmSync(prof, { force: true });
+}
 expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   const p = b.phrases.at(-1), a0 = p.actions[0];
   p.actions.push({ id: '_late', type: 'text', at: a0.at, text: '这一行字太长了来不及跟上旁白', x: 490, y: 1300, size: 72 });
-}, compileNoFix('9x16'), /说完后才起笔|和本句旁白重叠/);
+}, compileNoFix('9x16'), /说完后才起笔|和本句旁白重叠/, { advice: true });
 
 // ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------
 {

@@ -8,15 +8,16 @@ import { execFileSync } from 'node:child_process';
 import { svgPathProperties } from 'svg-path-properties';
 import { loadLibrary } from '../library/index.mjs';
 import { makeKit, samplePts, offsetPath, r2, dist } from '../library/kit.mjs';
-import { validateBeats, loadStyle, strip, breakLines, styleSubset } from './validate.mjs';
+import { validateBeats, loadStyle, gateLevel, strip, breakLines, styleSubset } from './validate.mjs';
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
-const style = loadStyle();
+const style = loadStyle(beats);
 const library = await loadLibrary();
 if (!process.argv.includes('--no-validate')) {
-  const { errors, warnings } = validateBeats(beats, style, library);
+  const { errors, warnings, advice: va } = validateBeats(beats, style, library);
   for (const w of warnings) console.log(`  [提醒] ${w}`);
+  for (const a of va) console.log(`  [建议] ${a}`);
   if (errors.length) {
     console.log(`问题 ${errors.length} 项：\n  ` + errors.map((e) => `分镜校验：${e}`).join('\n  '));
     process.exit(1);
@@ -161,11 +162,19 @@ const buildOne = (a) => {
 // 挪动或放大一个元素后，引用它的回描、划掉也要跟着重画
 const rebuildWithDeps = (a) => { buildOne(a); for (const d of allActions) if ([d.target].flat().includes(a.id) || d.after === a.id) rebuildWithDeps(d); };
 const rebuildAll = () => { geo.clear(); for (const a of allActions) buildOne(a); };
+// 笔画采样按笔画对象缓存（同一个 d 反复采样占了编译时间的一大半；元素挪动、重画时会生成新的笔画对象，缓存自然失效）
+const strokeBox = new WeakMap();
 function bboxOf(list) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const s of list) {
-    const pr = new svgPathProperties(s.d), L = pr.getTotalLength();
-    for (let k = 0; k <= 12; k++) { const q = pr.getPointAtLength((L * k) / 12); x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
+    let b = strokeBox.get(s);
+    if (!b || b.d !== s.d) {
+      const pr = new svgPathProperties(s.d), L = pr.getTotalLength();
+      b = { d: s.d, x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+      for (let k = 0; k <= 12; k++) { const q = pr.getPointAtLength((L * k) / 12); b.x0 = Math.min(b.x0, q.x); b.y0 = Math.min(b.y0, q.y); b.x1 = Math.max(b.x1, q.x); b.y1 = Math.max(b.y1, q.y); }
+      strokeBox.set(s, b);
+    }
+    x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
   }
   return { x0, y0, x1, y1 };
 }
@@ -231,9 +240,14 @@ const related = (a, b) => {
   if (a.type === 'meter' && b.type === 'meter' && a.base === b.base) return true;
   return a.on === b.id || b.on === a.id || (a.on && a.on === b.on);
 };
+const strokeSamples = new WeakMap();
 const sampleList = (list) => list.flatMap((s) => {
+  const c = strokeSamples.get(s);
+  if (c && c.d === s.d && c.w === s.width) return c.pts;
   const pr = new svgPathProperties(s.d), L = pr.getTotalLength(), n = Math.max(2, Math.ceil(L / 4));
-  return Array.from({ length: n + 1 }, (_, k) => { const q = pr.getPointAtLength((L * k) / n); return [q.x, q.y, s.width]; });
+  const pts = Array.from({ length: n + 1 }, (_, k) => { const q = pr.getPointAtLength((L * k) / n); return [q.x, q.y, s.width]; });
+  strokeSamples.set(s, { d: s.d, w: s.width, pts });
+  return pts;
 });
 const inkBox = (pts) => pts.reduce((b, [x, y, w]) => [Math.min(b[0], x - w / 2), Math.min(b[1], y - w / 2), Math.max(b[2], x + w / 2), Math.max(b[3], y + w / 2)], [Infinity, Infinity, -Infinity, -Infinity]);
 const plain = (t) => t.replace(/_/g, '');
@@ -287,13 +301,16 @@ for (const a of allActions) {
 phraseCam = computePhraseCam();
 
 // 3) 修完再查：还剩的问题报给写分镜的一方（精确到元素）
-const layoutProblems = [];
+const layoutProblems = [], layoutAdvice = [];
+// 按 gates 级别分流：hard 进问题（判失败），advice 进建议（只写报告）
+const flagTo = (probs, adv) => (gate, msg) => (gate && gateLevel(style, gate) === 'advice' ? adv : probs).push(msg);
+const layoutFlag = flagTo(layoutProblems, layoutAdvice);
 for (const a of allActions) {
   if (a.type !== 'text') continue;
   const c = clearance(a, sampleList(geo.get(a.id)));
-  if (c.best < 0) layoutProblems.push(`标签「${a.text}」(${a.id}) 离 ${c.who} ${c.row ? '在同一行，横向' : ''}只有 ${r2(Math.max(0, c.raw))}px（要求 ≥${r2(c.need)}px）` + (AUTOFIX ? '，自动避让 72px 内找不到空位，需要改分镜布局' : ''));
+  if (c.best < 0) layoutFlag(c.raw > 0 ? 'layout.textGap' : null, `标签「${a.text}」(${a.id}) 离 ${c.who} ${c.row ? '在同一行，横向' : ''}只有 ${r2(Math.max(0, c.raw))}px（要求 ≥${r2(c.need)}px）` + (AUTOFIX ? '，自动避让 72px 内找不到空位，需要改分镜布局' : ''));
   const px = textPx(a, phraseCam);
-  if (px < MIN_TEXT - 0.5) layoutProblems.push(`标签「${a.text}」(${a.id}) 在屏幕上约 ${r2(px)}px 高，低于本画幅最小 ${MIN_TEXT}px` + (AUTOFIX ? '（已沿字号阶梯放大到上限仍不够），需要改分镜布局' : ''));
+  if (px < MIN_TEXT - 0.5) layoutFlag('type.minScreen', `标签「${a.text}」(${a.id}) 在屏幕上约 ${r2(px)}px 高，低于本画幅最小 ${MIN_TEXT}px` + (AUTOFIX ? '（已沿字号阶梯放大到上限仍不够），需要改分镜布局' : ''));
 }
 // 图形元素之间留空（见风格规范 type.shapeGapNote）：两个非文字元素的墨迹至少隔 shapeGapPen 个笔宽。
 // 有意贴着的不查：分镜里声明的关系（on、target、after），以及箭头、线的端点接在对方身上（离它不到 connectTol）
@@ -312,7 +329,7 @@ for (const a of allActions) {
     if ((node(B) && ends(A).some((p) => touches(p, pts.get(B.id)))) || (node(A) && ends(B).some((p) => touches(p, pts.get(A.id))))) continue;
     let d = Infinity;
     for (const [ax, ay, aw] of pts.get(A.id)) for (const [bx, by, bw] of pts.get(B.id)) d = Math.min(d, Math.hypot(ax - bx, ay - by) - (aw + bw) / 2);
-    if (d < GAP_S) layoutProblems.push(`图形「${A.id}」和「${B.id}」的墨迹只隔 ${r2(Math.max(0, d))}px（要求 ≥${r2(GAP_S)}px）：不是有意贴着就挪开；有意贴着（比如描在它上面）就在分镜里用 on 声明`);
+    if (d < GAP_S) layoutFlag('layout.shapeGap', `图形「${A.id}」和「${B.id}」的墨迹只隔 ${r2(Math.max(0, d))}px（要求 ≥${r2(GAP_S)}px）：不是有意贴着就挪开；有意贴着（比如描在它上面）就在分镜里用 on 声明`);
   }
 }
 if (fixes.length) console.log(`  版面自动修正 ${fixes.length} 处：\n    ` + fixes.join('\n    '));
@@ -388,7 +405,7 @@ const targetCam = phrases.map((p, pi) => focusCam[pi] ?? phraseCam[pi]);
 for (const [pi, f] of focusCam.entries()) if (f && f.push < AHA.minPush - 1e-3) {
   const why = blockers[pi] ? `居中推近时 ${blockers[pi].join('、')} 会被切断或停在取景框边距里，要改版式给焦点四周留空，或把它们挪开` : '焦点装不下（元素太分散，可用 focus 只圈关键元素）';
   if ((phrases[pi].noPush ?? []).includes(targetName)) console.log(`  [提醒] 顿悟句「${phrases[pi].text}」只能推近 ${r2(f.push)} 倍（分镜已声明 ${targetName} 不推近）：${why}`);
-  else layoutProblems.push(`顿悟句「${phrases[pi].text}」推不近（${r2(f.push)} 倍）：${why}；确实不推近就在这句写 noPush: ["${targetName}"]`);
+  else layoutFlag('camera.ahaPush', `顿悟句「${phrases[pi].text}」推不近（${r2(f.push)} 倍）：${why}；确实不推近就在这句写 noPush: ["${targetName}"]`);
 }
 
 // ---------- 单笔调度（函数化：画面拖尾时自动给该动作提速再排一次） ----------
@@ -547,8 +564,8 @@ for (let it = 0; it < 8 && AUTOFIX; it++) {
 for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`), console.log(`  提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`);
 const { strokes, penTrack, effects, audioClips, report } = sched;
 let { penFree, penPos } = sched;
-const problems = [...layoutProblems];
-for (const x of trailOf(sched)) problems.push(`「${actionsById.get(x.id).text ?? actionsById.get(x.id).label}」(${x.id}) ${x.late ? `在这句旁白说完后才起笔（${x.start}s，句末 ${x.audioEnd}s）` : `书写只有 ${Math.round(x.share * 100)}% 和本句旁白重叠（要求 ≥${M.textOverlapMin * 100}%）`}，需要把它提到更早的词上或拆句`);
+const problems = [...layoutProblems], advice = [...layoutAdvice], flag = flagTo(problems, advice);
+for (const x of trailOf(sched)) flag('sync.trail', `「${actionsById.get(x.id).text ?? actionsById.get(x.id).label}」(${x.id}) ${x.late ? `在这句旁白说完后才起笔（${x.start}s，句末 ${x.audioEnd}s）` : `书写只有 ${Math.round(x.share * 100)}% 和本句旁白重叠（要求 ≥${M.textOverlapMin * 100}%）`}，需要把它提到更早的词上或拆句`);
 
 // ---------- 压力采样：渲染端用 perfect-freehand 生成变宽笔迹，笔尖位置也取自同一组点（见 library/kit.mjs） ----------
 for (const s of strokes) s.pts = samplePts(s);
@@ -594,7 +611,8 @@ phrases.forEach((p, pi) => {
 for (let i = camera.length - 1; i > 0; i--) {
   const a = camera[i - 1], b = camera[i];
   // 换节那次不合并：合并后前一句还没写完镜头就往下一节走了（E01 实测 16:9 第一节最后画的灯框出了画）
-  if (!a.focus && !b.focus && !newChapter.has(b) && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
+  // 换节那次也不吞并后一次：吞并后镜头比铅笔晚一秒多到位，飞行途中笔先冲到字幕上（E01 9:16 第 4 节）
+  if (!a.focus && !b.focus && !newChapter.has(b) && !newChapter.has(a) && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
 }
 // 结尾回到全景，让观众看到整张图
 const lastAudio = audioClips[audioClips.length - 1];
@@ -647,18 +665,18 @@ penTrack.push({ kind: 'rest', t0: penFree + exitDur, t1: end + 1, at: exitTo });
 // ---------- 自检（可失败） ----------
 const downs = penTrack.filter((s) => s.kind === 'down').sort((a, b) => a.t0 - b.t0);
 for (let i = 1; i < downs.length; i++) if (downs[i].t0 < downs[i - 1].t1 - 1e-6) problems.push(`两处同时落笔：${strokes[downs[i - 1].stroke].id} / ${strokes[downs[i].stroke].id}`);
-for (const a of report.actions) if (a.lag > M.maxLag) problems.push(`画面落后旁白 ${a.lag}s：${a.id}（上限 ${M.maxLag}s）`);
+for (const a of report.actions) if (a.lag > M.maxLag) flag('sync.lag', `画面落后旁白 ${a.lag}s：${a.id}（上限 ${M.maxLag}s）`);
 for (const p of report.phrases) {
-  if (p.insertedPause > M.maxPause) problems.push(`「${p.text}」后要等画面 ${p.insertedPause}s（上限 ${M.maxPause}s），旁白和画面没对上，需要拆句或减画`);
-  else if (p.role !== 'aha' && p.insertedPause > M.maxPauseNonAha) problems.push(`「${p.text}」后停顿 ${p.insertedPause}s：长停顿应留给顿悟句（非顿悟句上限 ${M.maxPauseNonAha}s），需要把画面分到前后句或减画`);
+  if (p.insertedPause > M.maxPause) flag('pace.pause', `「${p.text}」后要等画面 ${p.insertedPause}s（上限 ${M.maxPause}s），旁白和画面没对上，需要拆句或减画`);
+  else if (p.role !== 'aha' && p.insertedPause > M.maxPauseNonAha) flag('pace.pause', `「${p.text}」后停顿 ${p.insertedPause}s：长停顿应留给顿悟句（非顿悟句上限 ${M.maxPauseNonAha}s），需要把画面分到前后句或减画`);
 }
 // 叙事节奏（完整一集）：钩子要在开头几秒内出现，两个顿悟之间不能隔太久
 const NR = style.narrative[beats.kind] || {};
 if (NR.hookWithin !== undefined) {
   const hi = phrases.findIndex((p) => p.role === 'hook');
-  if (hi >= 0 && report.phrases[hi].at > NR.hookWithin) problems.push(`钩子在 ${report.phrases[hi].at}s 才出现（要求 ${NR.hookWithin}s 内）`);
+  if (hi >= 0 && report.phrases[hi].at > NR.hookWithin) flag('narrative.hook', `钩子在 ${report.phrases[hi].at}s 才出现（要求 ${NR.hookWithin}s 内）`);
   const ahas = [0, ...phrases.map((p, i) => (p.role === 'aha' ? report.phrases[i].at : null)).filter((x) => x !== null)];
-  for (let i = 1; i < ahas.length; i++) if (ahas[i] - ahas[i - 1] > NR.maxAhaGap) problems.push(`${r2(ahas[i - 1])}s 到 ${r2(ahas[i])}s 之间 ${r2(ahas[i] - ahas[i - 1])}s 没有顿悟点（上限 ${NR.maxAhaGap}s）`);
+  for (let i = 1; i < ahas.length; i++) if (ahas[i] - ahas[i - 1] > NR.maxAhaGap) flag('narrative.ahaGap', `${r2(ahas[i - 1])}s 到 ${r2(ahas[i])}s 之间 ${r2(ahas[i] - ahas[i - 1])}s 没有顿悟点（上限 ${NR.maxAhaGap}s）`);
 }
 
 // 字幕：说完后若这句的画面还在画，字幕停留到画完（不晚于下一句字幕出现），避免画面和字幕脱节
@@ -681,7 +699,7 @@ const out = {
   narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
   subtitles, chapters, style: styleSubset(style),
   platforms: TGT.platforms, platformUI: Object.fromEntries(TGT.platforms.map((pf) => [pf, style.platformUI[pf]])),
-  report: { ...report, problems, fixes },
+  report: { ...report, problems, advice, fixes },
 };
 // ---------- 可见水印：品牌名小字，每 every 秒换到下一个候选位置（风格规范 watermark.slots），换位时淡出淡入 ----------
 // 这段时间里会压到字幕、平台界面或已开始画的内容的位置就跳过；整段都找不到，就对半拆开再找（最多两次），还找不到这一小段就不加，记进自动修正。
@@ -858,5 +876,7 @@ fs.writeFileSync(`build/${OUT_ID}.timeline.json`, JSON.stringify(out));
 
 console.log(`[${OUT_ID}] 时长 ${r2(end)}s，${strokes.length} 笔，${audioClips.length} 段旁白`);
 for (const p of report.phrases) console.log(`  「${p.text}」 @${p.at}s 插停顿 ${p.insertedPause}s`);
-console.log(problems.length ? `问题 ${problems.length} 项：\n  ` + problems.join('\n  ') : '自检：无同时落笔、无出镜头、无严重落后、文字跟住旁白、版面无压线且字号达标');
+// 建议（创作取舍，不判失败）先打，问题（机械上坏了）后打：流水线按「问题 N 项」判失败、按「建议 N 项」写进报告
+if (advice.length) console.log(`建议 ${advice.length} 项：\n  ` + advice.join('\n  '));
+console.log(problems.length ? `问题 ${problems.length} 项：\n  ` + problems.join('\n  ') : '自检：无同时落笔、无出镜头、文字没有压在一起、铅笔不出画不压字幕');
 if (problems.length) process.exitCode = 1;

@@ -345,7 +345,12 @@ const SUB_TOP = TGT.sub.top - style.subtitle.plate.padY;
 const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []);
 // 元素包围盒缓存（取景搜索要试上千个位置，每次重新采样路径太慢）；元素被重画后自动失效
 const boxCache = new Map();
-const geoBox = (id) => { const l = geo.get(id), c = boxCache.get(id); if (c && c.l === l) return c.b; const b = bboxOf(l); boxCache.set(id, { l, b }); return b; };
+// 和安全区检查同一份几何：路径范围再向外扩半个笔宽（检查按实际墨迹算，取景只看路径中心线时会差几像素，推近停在字的边上）
+const geoBox = (id) => {
+  const l = geo.get(id), c = boxCache.get(id); if (c && c.l === l) return c.b;
+  const r = bboxOf(l), hw = Math.max(0, ...l.map((s) => s.width ?? 0)) / 2, b = { x0: r.x0 - hw, y0: r.y0 - hw, x1: r.x1 + hw, y1: r.y1 + hw };
+  boxCache.set(id, { l, b }); return b;
+};
 // 镜头停稳时（比检查再收 4px）：
 //   文字要整段在取景框 frame 里（字幕衬底上方、不压平台界面），或者整段在画布外（审片：推近后左边缘只剩「4」、算式只剩「0 =7」）；
 //   图形也一样整段在取景框里或整段出画（审片 E01 v1：推近后箭头只剩半截、灯泡左半被切、框角挂在画面顶上）；

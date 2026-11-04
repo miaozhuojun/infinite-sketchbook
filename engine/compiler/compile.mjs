@@ -469,7 +469,8 @@ function schedule(boost) {
       const st = [first.x, first.y], wait = t - penFree;
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
-      const flight = penPos !== OFF && p.chapter && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
+      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
       const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
       if (flight) t = Math.max(t, takeoff + (M.chapterMoveMin ?? 0));
@@ -553,6 +554,9 @@ function schedule(boost) {
       const cues = report.actions.filter((x) => x.phrase === pi).map((x) => x.cue);
       const arrive = Math.max(cues.length ? Math.min(...cues) - AHA.lead : audioStart, phraseStartFree + AHA.moveDur);
       release = Math.max(arrive + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
+    } else if (p.revisit?.length) {
+      // 回看：镜头移到位、这句说完，下一句才起飞（release 减去一次普通移动就是起飞时刻，见 takeoff）
+      release = Math.max(T + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0) + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
     } else release = 0;
     T = nextT;
   });
@@ -616,7 +620,7 @@ phrases.forEach((p, pi) => {
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位
     // 换节：镜头和铅笔的飞行同起同落（见排程里的 flight）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
-    const fly = p.chapter && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02);
+    const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02);
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
     else if (tc.revisit) {
       // 回看：从句子开头起移，走得和换节一样从容（距离往往有好几屏，按普通取景的 1.6 秒走会晃）；不和前后合并

@@ -88,12 +88,20 @@ export function validateBeats(beats, style, reg) {
   for (const t of beats.targets ?? []) if (!style.targets[t]) E('targets', `未知画幅「${t}」，可用：${Object.keys(style.targets).join('、')}`);
   if (!Array.isArray(beats.phrases) || !beats.phrases.length) { E('phrases', '不能为空'); return { errors, warnings }; }
 
+  // 章节：要么不分，要么从第一句开始分，节数在各平台都能用的范围里
+  const chapterAt = beats.phrases.map((p, i) => (p.chapter ? i : -1)).filter((i) => i >= 0);
+  if (chapterAt.length) {
+    if (chapterAt[0] !== 0) E('phrases[0].chapter', '分了章节就要从第一句开始（YouTube 章节第一行必须是 0:00）');
+    const C = style.chapters;
+    if (chapterAt.length < C.minCount || chapterAt.length > C.maxCount) E('chapters', `共 ${chapterAt.length} 节，要在 ${C.minCount}–${C.maxCount} 节之间（YouTube 至少 3 节，B 站最多 10 节）`);
+  }
   const ids = new Set(), drawnBefore = new Set();
   beats.phrases.forEach((p, pi) => {
     const P = `phrases[${pi}]「${(p.text || '').slice(0, 8)}」`;
     if (!p.text) E(P, '缺少 text');
     if (p.role && !ROLES.has(p.role)) E(`${P}.role`, `只能是 ${[...ROLES].join(' / ')}`);
     if (p.camera && !['focus', 'overview'].includes(p.camera)) E(`${P}.camera`, '只能是 focus（推近这句的元素）或 overview');
+    if (p.chapter !== undefined && (typeof p.chapter !== 'string' || ![...p.chapter].length || [...p.chapter].length > style.chapters.titleMax)) E(`${P}.chapter`, `节名要写，最多 ${style.chapters.titleMax} 个字（B 站分段章节标题要少于 16 个汉字）`);
     if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
     if (p.focus) for (const fid of p.focus) if (!beats.phrases.some((q) => (q.actions || []).some((x) => x.id === fid))) E(`${P}.focus`, `「${fid}」不是分镜里的元素`);
     const st = strip(p.text || '');

@@ -100,6 +100,24 @@ for (const [pf, prefs] of Object.entries(styleJson.publish)) {
   lines.push(`| ${pf} | ${t ? `\`${outDir}/${t}.mp4\`` : '（本期没出合适画幅）'} | ${t ?? '—'} |`);
 }
 lines.push('');
+// 章节：同一份节名和起点，按各平台自己的章节功能给（进度条不画进视频，见风格规范 chapters）
+const tl0 = targets.map((t) => `build/${beats.id}-${t}.timeline.json`).find((f) => fs.existsSync(f));
+const chapters = tl0 ? JSON.parse(fs.readFileSync(tl0, 'utf8')).chapters ?? [] : [];
+if (chapters.length) {
+  const dur = (t) => { const f = `build/${beats.id}-${t}.timeline.json`; return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).duration : 0; };
+  const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  lines.push('## 章节（发布时填进各平台自己的章节功能）', '');
+  for (const [pf, info] of Object.entries(styleJson.chapters.platforms)) {
+    const t = styleJson.publish[pf]?.find((x) => produced.includes(x)), d = t ? dur(t) : 0;
+    lines.push(`**${pf}**（${t ?? '本期没出合适画幅'}，${info.where}）`);
+    if (!t) { lines.push(''); continue; }
+    if (d < info.minVideoSec) { lines.push(`- 这一期 ${mmss(d)}，${pf} 要求视频长于 ${mmss(info.minVideoSec)} 才能设章节，本期不设。`, ''); continue; }
+    // 不同画幅插的停顿不同，起点按这个平台用的那个画幅算
+    const own = JSON.parse(fs.readFileSync(`build/${beats.id}-${t}.timeline.json`, 'utf8')).chapters;
+    lines.push('```', ...own.map((c) => `${mmss(c.t)} ${c.title}`), '```', '');
+  }
+  lines.push('TikTok、X 没有原生章节功能。', '');
+}
 lines.push('## 接下来（程序判断不了的）',
   '- 独立审片：按 `qa/review_rubric.md`，材料是设备预览、联系表、组件库预览；每条问题标明该在哪一层修。',
   `- 理解度测试：把 \`${outDir}/comprehension/pack.md\` 交给没看过备课材料的新 agent 作答，再运行 \`qa/comprehension.py score\`。`,

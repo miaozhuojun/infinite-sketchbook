@@ -171,9 +171,12 @@ function bboxOf(list) {
 }
 const fitZ = (b, pad) => Math.min(VIEW.w / (b.x1 - b.x0 + 2 * pad), VIEW.h / (b.y1 - b.y0 + 2 * pad));
 // 全景取景：到这一句为止的全部内容
+// 每句的全景取景：框住这一节到这句为止画过的东西。分了章节时，换节就从新的一块纸开始框，镜头沿纸面移过去
+// （整集几分钟、好几节内容画在纸上不同的地方；一直框住全部，越往后字越小）
 const computePhraseCam = () => {
   const acc = [], out = [];
   for (const p of phrases) {
+    if (p.chapter) acc.length = 0;
     for (const a of p.actions) if (geo.has(a.id)) acc.push(...geo.get(a.id));
     if (!acc.length) { out.push(null); continue; }
     const b = bboxOf(acc);
@@ -656,10 +659,16 @@ const subtitles = phrases.map((p, i) => {
 });
 
 // narration：每个画幅插的停顿不同，拼好的旁白也各存一份
+// 章节：每节从它第一句旁白开口的时刻算起，第一节从 0 秒算（YouTube 章节第一行必须是 0:00）
+const chapters = phrases.map((p, i) => (p.chapter ? { title: p.chapter, t: i === 0 ? 0 : r2(report.phrases[i].at) } : null)).filter(Boolean);
+chapters.forEach((c, i) => {
+  const len = (chapters[i + 1]?.t ?? end) - c.t;
+  if (len < style.chapters.minSec) problems.push(`第 ${i + 1} 节「${c.title}」只有 ${r2(len)} 秒（每节至少 ${style.chapters.minSec} 秒，YouTube 章节的下限）`);
+});
 const out = {
   id: OUT_ID, target: targetName, canvas: { w: TGT.w, h: TGT.h, fps: FPS }, fps: FPS, durationInFrames: Math.ceil(end * FPS), duration: r2(end),
   narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
-  subtitles, style: styleSubset(style),
+  subtitles, chapters, style: styleSubset(style),
   platforms: TGT.platforms, platformUI: Object.fromEntries(TGT.platforms.map((pf) => [pf, style.platformUI[pf]])),
   report: { ...report, problems, fixes },
 };

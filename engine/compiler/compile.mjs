@@ -188,7 +188,8 @@ const computePhraseCam = () => {
     if (p.chapter) acc.length = 0;
     // 回看：这句不画新东西，镜头回到前面画过的那几样（片尾回顾时沿纸面一样样看回去）
     if (p.revisit?.length) {
-      const b = bboxOf(p.revisit.flatMap((id) => geo.get(id) ?? []));
+      // 这句圈出、回描的笔画也要框进来：圈比被圈的字大一圈，只框原元素时圈会出画（E01 v9 竖版「写不完」）
+      const b = bboxOf([...p.revisit, ...p.actions.map((a) => a.id)].flatMap((id) => geo.get(id) ?? []));
       out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(ZMIN, Math.min(ZMAX, fitZ(b, 70))), revisit: true });
       continue;
     }
@@ -479,7 +480,8 @@ function schedule(boost) {
       const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
       const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
-      if (flight) t = Math.max(t, takeoff + (M.chapterMoveMin ?? 0));
+      // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
+      if (flight) t = Math.max(t, takeoff + Math.max(M.chapterMoveMin ?? 0, (dist(fromPos, st) * z) / (M.flightSpeed ?? V_MOVE)));
       if (penPos === OFF || wait - travel < PK.minRest || flight) {
         if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
         penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });
@@ -562,7 +564,7 @@ function schedule(boost) {
       release = Math.max(arrive + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
     } else if (p.revisit?.length) {
       // 回看：镜头移到位、这句说完，下一句才起飞（release 减去一次普通移动就是起飞时刻，见 takeoff）
-      release = Math.max(T + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0) + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
+      release = Math.max(penFree + AHA.hold, T + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0) + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
     } else release = 0;
     T = nextT;
   });
@@ -631,7 +633,8 @@ phrases.forEach((p, pi) => {
     else if (tc.revisit) {
       // 回看：从句子开头起移，走得和换节一样从容（距离往往有好几屏，按普通取景的 1.6 秒走会晃）；不和前后合并
       const t0 = Math.max(report.phrases[pi].at, holdUntil);
-      pushMove(t0, t0 + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0), tc);
+      const from = camera[camera.length - 1].to, far = Math.hypot(tc.x - from.x, tc.y - from.y) * Math.max(tc.z, from.z);
+      pushMove(t0, t0 + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0, far / (M.flightSpeed ?? V_MOVE)), tc);
       newChapter.add(camera[camera.length - 1]);
     } else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
     if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);

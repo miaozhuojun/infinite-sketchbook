@@ -100,7 +100,7 @@ for (const [pf, prefs] of Object.entries(styleJson.publish)) {
   lines.push(`| ${pf} | ${t ? `\`${outDir}/${t}.mp4\`` : '（本期没出合适画幅）'} | ${t ?? '—'} |`);
 }
 lines.push('');
-// 章节：同一份节名和起点，按各平台自己的章节功能给（进度条不画进视频，见风格规范 chapters）
+// 章节：同一份节名和起点，按各平台自己的章节功能给（进度条不画进视频；目前只支持风格规范 chapters.platforms 里的 YouTube、抖音、B 站）
 const tl0 = targets.map((t) => `build/${beats.id}-${t}.timeline.json`).find((f) => fs.existsSync(f));
 const chapters = tl0 ? JSON.parse(fs.readFileSync(tl0, 'utf8')).chapters ?? [] : [];
 if (chapters.length) {
@@ -116,7 +116,6 @@ if (chapters.length) {
     const own = JSON.parse(fs.readFileSync(`build/${beats.id}-${t}.timeline.json`, 'utf8')).chapters;
     lines.push('```', ...own.map((c) => `${mmss(c.t)} ${c.title}`), '```', '');
   }
-  lines.push('TikTok、X 没有原生章节功能。', '');
 }
 lines.push('## 接下来（程序判断不了的）',
   '- 独立审片：按 `qa/review_rubric.md`，材料是设备预览、联系表、组件库预览；每条问题标明该在哪一层修。',

@@ -611,7 +611,8 @@ phrases.forEach((p, pi) => {
 for (let i = camera.length - 1; i > 0; i--) {
   const a = camera[i - 1], b = camera[i];
   // 换节那次不合并：合并后前一句还没写完镜头就往下一节走了（E01 实测 16:9 第一节最后画的灯框出了画）
-  if (!a.focus && !b.focus && !newChapter.has(b) && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
+  // 换节那次也不吞并后一次：吞并后镜头比铅笔晚一秒多到位，飞行途中笔先冲到字幕上（E01 9:16 第 4 节）
+  if (!a.focus && !b.focus && !newChapter.has(b) && !newChapter.has(a) && b.t0 - a.t1 < M.minCameraGap) { a.to = b.to; a.t1 = b.t1; camera.splice(i, 1); }
 }
 // 结尾回到全景，让观众看到整张图
 const lastAudio = audioClips[audioClips.length - 1];

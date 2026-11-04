@@ -87,3 +87,30 @@ def pitch_range_st(x, sr):
 def pitch_median_hz(x, sr):
     f = [v for _, v in f0_track(x, sr) if v]
     return float(np.median(f)) if f else None
+
+
+def weak_chars(x, sr, items):
+    """吞字：items 是 [{"text", "t0", "t1"}]（在 x 上的逐字时间，配音时逐句对齐、回转核对过的那份）。
+    返回 [(下标, 说明)]：时长 < 50ms 且不是被对齐器并进邻字的，或时长够但能量比所有字的中位数低 18dB 以上的。
+    配音生成（整段拼好后）和成片旁白检查用同一个函数，判断才一致。"""
+    def db(seg): return 20 * np.log10(np.sqrt((seg ** 2).mean()) + 1e-12) if len(seg) else -240.0
+    x = x.mean(1) if x.ndim > 1 else x
+    for it in items:
+        it["dur"], it["db"] = it["t1"] - it["t0"], db(x[int(it["t0"] * sr):int(it["t1"] * sr)])
+    med = float(np.median([it["db"] for it in items]))
+    med_dur = float(np.median([it["dur"] for it in items if len(it["text"]) == 1]))
+    w = int(0.01 * sr)
+
+    def merged(k):
+        """对齐器偶尔把读得轻快的字压成 0ms、把它的声音算给邻字（实测「亮不亮」：「不」0ms，后一个「亮」0.48s，是中位数的 2 倍）。
+        邻字时长 ≥ 1.6 倍中位数、且那一段 80% 以上都在正常响度，就算并进去了；真吞掉的字不会让邻字变长。"""
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(items) and items[j]["dur"] >= 1.6 * med_dur:
+                seg = x[int(items[j]["t0"] * sr):int(items[j]["t1"] * sr)]
+                frames = [db(seg[i:i + w]) for i in range(0, max(0, len(seg) - w), w)]
+                if frames and sum(f > med - 18 for f in frames) >= 0.8 * len(frames):
+                    return True
+        return False
+
+    return med, [(k, f"「{it['text']}」@{it['t0']:.2f}s 时长{it['dur'] * 1000:.0f}ms 能量{it['db']:.0f}dB") for k, it in enumerate(items)
+                 if (it["dur"] < 0.05 and not merged(k)) or (it["dur"] >= 0.05 and it["db"] < med - 18)]

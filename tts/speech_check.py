@@ -117,26 +117,10 @@ for c in tl["audioClips"]:
     for w in timing["words"]:
         if w["start"] >= c["srcIn"] - 1e-3 and w["end"] <= c["srcOut"] + 1e-3:
             t0, t1 = c["at"] + w["start"] - c["srcIn"], c["at"] + w["end"] - c["srcIn"]
-            items.append({"text": w["text"], "t0": t0, "t1": t1, "dur": w["end"] - w["start"], "db": db(x[int(t0 * sr):int(t1 * sr)])})
-med = float(np.median([it["db"] for it in items]))
-med_dur = float(np.median([it["dur"] for it in items if len(it["text"]) == 1]))
-
-
-def merged(k):
-    """对齐器偶尔把读得轻快的字压成 0ms、把它的声音算给邻字（实测「亮不亮」：「不」0ms，后一个「亮」0.48s，是中位数的 2 倍）。
-    邻字时长 ≥ 1.6 倍中位数、且那一段 80% 以上都在正常响度，就算并进去了；真吞掉的字不会让邻字变长。"""
-    w = int(0.01 * sr)
-    for j in (k - 1, k + 1):
-        if 0 <= j < len(items) and items[j]["dur"] >= 1.6 * med_dur:
-            seg = x[int(items[j]["t0"] * sr):int(items[j]["t1"] * sr)]
-            frames = [db(seg[i:i + w]) for i in range(0, max(0, len(seg) - w), w)]
-            if frames and sum(f > med - 18 for f in frames) >= 0.8 * len(frames):
-                return True
-    return False
-
-
-weak = [f"「{it['text']}」@{it['t0']:.2f}s 时长{it['dur'] * 1000:.0f}ms 能量{it['db']:.0f}dB" for k, it in enumerate(items)
-        if (it["dur"] < 0.05 and not merged(k)) or (it["dur"] >= 0.05 and it["db"] < med - 18)]
+            items.append({"text": w["text"], "t0": t0, "t1": t1})
+from voice import weak_chars
+med, weak = weak_chars(x, sr, items)
+weak = [msg for _, msg in weak]
 check("没有吞字", not weak, "；".join(weak[:8]) + (f" 等 {len(weak)} 处" if len(weak) > 8 else "") if weak else f"{len(items)} 个字（配音时逐句对齐的时间映射到成片），能量中位 {med:.0f}dB")
 # 2b. 拼接完整性：成片里每段旁白必须和源配音对应片段一致（只差整体增益）。
 #     逐 10ms 比较能量包络，源里在发声、成片里却明显变弱 = 有声音丢了（切错、拼错、被抹掉都会暴露）

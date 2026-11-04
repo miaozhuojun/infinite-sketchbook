@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import load_voice, similarity, pitch_drops
+from voice import load_voice, similarity, pitch_drops, weak_chars
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -44,6 +44,8 @@ if not args.ref:
 if args.max_tries is None:
     args.max_tries = voice.get("maxTries", 5)  # 起伏大的参考音句末更容易掉到下限以下，要多试几次
 FLOOR = voice.get("pitchFloorHz", 0)  # 最低自然音高，见 voice.py 的 pitch_drops
+# 生成时比成片检查严 3%：贴着下限的句子（如 193Hz 对 196Hz）在成片里分帧起点、前后停顿不同，会一边过一边不过；生成时就留出余量
+GEN_FLOOR = FLOOR * 1.03
 
 # 1. 参考音文本：克隆需要参考音的准确文本；没给就用 ASR 转写（结果打印出来供人工核对）
 def load_ref(path, text=None):
@@ -171,9 +173,9 @@ def synth_sentence(text, seed0, R):
         sf.write(tmp, audio, sr)
         hyp = asr_text(tmp)
         c, dz = cer(syl(ref), syl(hyp)), dropouts(audio, sr)
-        drops = pitch_drops(audio, sr, FLOOR) if FLOOR else []
+        drops = pitch_drops(audio, sr, GEN_FLOOR) if FLOOR else []
         if drops:
-            print(f"    种子 {seed}：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（下限 {FLOOR}Hz），换种子重来")
+            print(f"    种子 {seed}：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（生成时下限 {GEN_FLOOR:.0f}Hz），换种子重来")
             continue
         note = None
         if c == 0 and dz == 0:
@@ -183,7 +185,7 @@ def synth_sentence(text, seed0, R):
             prefix = hyp[: len(hs) - len(rs)]
             audio = trim_leaked_prefix(audio, sr, prefix, ref)
             sf.write(tmp, audio, sr)
-            if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, FLOOR)):
+            if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, GEN_FLOOR)):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
             print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
@@ -200,7 +202,7 @@ def synth_sentence(text, seed0, R):
 # 按句生成（句号、问号、叹号处断开）：每句单独自检、单独重试；句间统一留 gap 秒停顿，
 # 保证每个句号处都有干净的切点（整段一次生成时，克隆音色常常一口气读完、句间没有静音，切点只能合并）
 sents = [x for x in re.findall(r"[^。？！]+[。？！]?", args.text) if re.sub(PUNCT, "", x)]
-pieces, words, spans, t_cursor, sr = [], [], [], 0.0, 24000
+takes, sr = [], 24000
 # 句子缓存：键里有句子、参考音（内容）、参考文本、模型和生成参数，任何一样变了都重新生成；缓存的句子当时已通过逐句自检
 CACHE = os.path.join(os.path.dirname(os.path.abspath(args.out)), "cache")
 os.makedirs(CACHE, exist_ok=True)
@@ -216,7 +218,7 @@ for i, sent in enumerate(sents):
     t0 = time.time()
     key = os.path.join(CACHE, cache_key(sent))
     cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
-    if cached and FLOOR and pitch_drops(*sf.read(key + ".wav", dtype="float32"), FLOOR):
+    if cached and FLOOR and pitch_drops(*sf.read(key + ".wav", dtype="float32"), GEN_FLOOR):
         print(f"  缓存里的「{sent}」掉嗓子，重新生成")  # 缓存是在加这项检查之前生成的，不能直接信
         cached = False
     if cached:  # 同理：加「剪句首尾静音、对齐不到 50ms 就换种子」之前的缓存
@@ -233,17 +235,44 @@ for i, sent in enumerate(sents):
         audio, sr, seed, note, rel = synth_sentence(sent, seed_of(sent), ref_for(sent))
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sent, "seed": seed, "note": note, "words": rel}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
-    spans.append({"text": sent, "start": round(t_cursor, 3), "end": round(t_cursor + len(audio) / sr, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和这里逐句自检用同一段声音
-    words += [{"text": w["text"], "start": round(w["start"] + t_cursor, 3), "end": round(w["end"] + t_cursor, 3)} for w in rel]
-    gap = np.zeros(int(args.gap * sr), dtype=np.float32) if i < len(sents) - 1 else np.zeros(0, dtype=np.float32)
-    pieces += [audio, gap]
-    t_cursor += (len(audio) + len(gap)) / sr
+    takes.append([audio, sr, seed, note, rel])
     mood = mood_of.get(sent.strip())
     print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
+
+
+def assemble():
+    """各句之间留 gap 秒拼成整段；返回整段、逐字时间、每句起止"""
+    pieces, words, spans, t = [], [], [], 0.0
+    for i, (sent, (audio, sr_, _, _, rel)) in enumerate(zip(sents, takes)):
+        spans.append({"text": sent, "start": round(t, 3), "end": round(t + len(audio) / sr_, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和逐句自检用同一段声音
+        words.extend({"text": w["text"], "start": round(w["start"] + t, 3), "end": round(w["end"] + t, 3), "sent": i} for w in rel)
+        gap = np.zeros(int(args.gap * sr_) if i < len(sents) - 1 else 0, dtype=np.float32)
+        pieces += [audio, gap]
+        t += (len(audio) + len(gap)) / sr_
+    return np.concatenate(pieces), words, spans
+
+
+# 吞字要和成片旁白检查一个口径：拿整段所有字的响度中位数做参照（单句里看不出来），所以拼好后再查一遍，有字偏弱的句子换下一个种子重配
+for rnd in range(4):
+    full, words, spans = assemble()
+    _, weak = weak_chars(full, sr, [{"text": w["text"], "t0": w["start"], "t1": w["end"]} for w in words])
+    bad = sorted({words[k]["sent"] for k, _ in weak})
+    if not bad:
+        break
+    if rnd == 3:
+        raise SystemExit("重配 3 轮后仍有字偏弱：" + "；".join(m for _, m in weak))
+    for i in bad:
+        print(f"  拼好后第 {i + 1} 句有字偏弱（{'；'.join(m for k, m in weak if words[k]['sent'] == i)}），换下一个种子重配")
+        audio, sr, seed, note, rel = synth_sentence(sents[i], takes[i][2] + 1, ref_for(sents[i]))
+        takes[i] = [audio, sr, seed, note, rel]
+        key = os.path.join(CACHE, cache_key(sents[i]))
+        sf.write(key + ".wav", audio, sr)
+        json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+for w in words:
+    w.pop("sent")
 if os.path.exists(args.out + ".sent.wav"):
     os.remove(args.out + ".sent.wav")
 print(f"  {len(sents)} 句里 {n_cached} 句用了缓存，{len(sents) - n_cached} 句新生成")
-full = np.concatenate(pieces)
 sf.write(args.out + ".wav", full, sr)
 
 # 整段再回转核对一遍

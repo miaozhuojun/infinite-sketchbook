@@ -481,7 +481,9 @@ function schedule(boost) {
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
       const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
       // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
-      if (flight) t = Math.max(t, takeoff + Math.max(M.chapterMoveMin ?? 0, (dist(fromPos, st) * z) / (M.flightSpeed ?? V_MOVE)));
+      // 距离取笔和镜头里飞得远的那个：镜头是在两个取景中心之间飞，常比笔飞得远（审片 v9：进尾卡那次镜头平均 1350–1455px/s，超过上限）
+      const camFar = targetCam[pi - 1] && targetCam[pi] ? Math.hypot(targetCam[pi].x - targetCam[pi - 1].x, targetCam[pi].y - targetCam[pi - 1].y) : 0;
+      if (flight) t = Math.max(t, takeoff + Math.max(M.chapterMoveMin ?? 0, (Math.max(dist(fromPos, st), camFar) * z) / (M.flightSpeed ?? V_MOVE)));
       if (penPos === OFF || wait - travel < PK.minRest || flight) {
         if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
         penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });

@@ -36,12 +36,21 @@ def similarity(tts, x, sr, voice):
 # 用户在 E01 两次听出「学会」畸变：那两个字的基频掉到 124–171Hz，孩子平时在 240–350Hz。
 # 帧间突跳查不出来（是平滑地掉下去的），音色相似度、回转识别也都正常，要直接看音高够不够这个孩子的下限。
 def f0_track(x, sr, hop=0.005, win=0.03):
-    """每 hop 秒一帧：(时刻, 基频)，不是浊音的帧基频记 0。自相关法，范围 90–600Hz。"""
+    """每 hop 秒一帧：(时刻, 基频)，不是浊音的帧基频记 0。自相关法，范围 90–600Hz。
+    先统一重采样到 16kHz：同一句在 24kHz 的配音原件和 48kHz 的成片旁白上量出来要一样（不统一时同一个「走」一边过一边不过）"""
     x = x.mean(1) if x.ndim > 1 else x
+    if sr != 16000:
+        x, sr = resample_poly(x, 16000, sr), 16000
+    x = np.pad(x, (0, int(win * sr)))  # 末尾补一个窗长的静音：句末最后几十毫秒也要量（单句原件到头就截止，成片旁白后面有停顿，不补两边结果不一样）
     out, W, H = [], int(win * sr), int(hop * sr)
-    for i in range(0, len(x) - W, H):
-        s = x[i:i + W] - x[i:i + W].mean()
-        if 20 * np.log10(np.sqrt((s ** 2).mean()) + 1e-9) < -35:
+    frames = [x[i:i + W] - x[i:i + W].mean() for i in range(0, len(x) - W, H)]
+    level = [20 * np.log10(np.sqrt((s ** 2).mean()) + 1e-9) for s in frames]
+    # 只量听得见的部分：比这段话的正常响度低 20dB 以上的帧不算（原来用绝对 -35dB，同一句音量差 12dB 就一边过一边不过；
+    # 句末渐弱的尾巴本来就会掉进气泡音，听不出来，也不该算掉嗓子）
+    gate = (np.percentile(level, 90) if level else 0) - 20
+    for k, (s, e) in enumerate(zip(frames, level)):
+        i = k * H
+        if e < gate:
             out.append((i / sr, 0.0)); continue
         ac = np.correlate(s, s, "full")[W - 1:]; ac /= ac[0]
         lo, hi = int(sr / 600), int(sr / 90); k = lo + int(np.argmax(ac[lo:hi]))

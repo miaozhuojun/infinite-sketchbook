@@ -331,8 +331,8 @@ const boxCache = new Map();
 const geoBox = (id) => { const l = geo.get(id), c = boxCache.get(id); if (c && c.l === l) return c.b; const b = bboxOf(l); boxCache.set(id, { l, b }); return b; };
 // 镜头停稳时（比检查再收 4px）：
 //   文字要整段在取景框 frame 里（字幕衬底上方、不压平台界面），或者整段在画布外（审片：推近后左边缘只剩「4」、算式只剩「0 =7」）；
-//   图形可以被画布边缘裁掉（推近时画面边上的旧内容本来就会被推出去），但不能停在取景框外的边距里，也不能越过取景框下沿压向字幕
-//   （审片 v9：推近把标题推出画、下划线还挂在顶边；灯泡越过取景框下沿，坐在字幕板上）
+//   图形也一样整段在取景框里或整段出画（审片 E01 v1：推近后箭头只剩半截、灯泡左半被切、框角挂在画面顶上）；
+//   只有分镜写了 bleed 的图形（横贯画面的路线箭头这类）可以被画布边缘裁掉，但不能停在取景框外的边距里，也不能越过取景框下沿压向字幕
 const FR = TGT.frame, isTextId = (id) => textInk.has(id);
 const cutTexts = (cam, pi) => {
   const S = (b) => ({ x0: (b.x0 - cam.x) * cam.z + VIEW.cx, x1: (b.x1 - cam.x) * cam.z + VIEW.cx, y0: (b.y0 - cam.y) * cam.z + VIEW.cy, y1: (b.y1 - cam.y) * cam.z + VIEW.cy });
@@ -343,6 +343,7 @@ const cutTexts = (cam, pi) => {
     const t = S(geoBox(id));
     if (t.x1 <= -6 || t.x0 >= W + 6 || t.y1 <= -6 || t.y0 >= H + 6) return false; // 整段在画外
     if (isTextId(id)) return !(t.x0 >= L && t.x1 <= R && t.y0 >= T && t.y1 <= B) || underUI(t);
+    if (!actionsById.get(id)?.bleed) return !(t.x0 >= L && t.x1 <= R && t.y0 >= T && t.y1 <= B);
     return t.y1 > B || (t.x0 < L && t.x0 > -6) || (t.x1 > R && t.x1 < W + 6) || (t.y0 < T && t.y0 > -6);
   });
 };
@@ -437,11 +438,12 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       const flight = penPos !== OFF && p.chapter && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
+      const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
+      if (flight) t = Math.max(t, takeoff + (M.chapterMoveMin ?? 0));
       if (penPos === OFF || wait - travel < PK.minRest || flight) {
         if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
-        // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞
-        const holdEnd = release ? release - M.cameraMove[0] - M.cameraMove[1] : 0;
-        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, Math.max(penFree, holdEnd)) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });
+        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });
       } else {
         const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
@@ -498,7 +500,7 @@ function schedule(boost) {
         }
         const dur = strokeDur(s, len, speed, z);
         const idx = strokes.length;
-        strokes.push({ ...s, id: `${a.id}#${si}`, action: a.id, group: s.group ?? a.id, len: r2(len), t0: r2(t), t1: r2(t + dur) });
+        strokes.push({ ...s, id: `${a.id}#${si}`, action: a.id, group: s.group ?? a.id, len: r2(len), t0: r2(t), t1: r2(t + dur), ...(a.bleed ? { bleed: true } : {}) });
         penTrack.push({ kind: 'down', t0: t, t1: t + dur, stroke: idx });
         t += dur;
         penPos = [en.x, en.y];

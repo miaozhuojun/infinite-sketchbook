@@ -11,7 +11,7 @@ const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROJECT = path.resolve(ENGINE, '../..');
 export const loadStyle = () => JSON.parse(fs.readFileSync(path.join(ENGINE, 'style/style.json'), 'utf8'));
 export const strip = (s) => s.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '');
-const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note']);
+const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed']);
 const ROLES = new Set(['hook', 'setup', 'aha', 'recap', 'next']);
 
 // 估算一行字的宽度：中文全角，其余半角

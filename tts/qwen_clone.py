@@ -30,7 +30,7 @@ ap.add_argument("--voice", default=None, help="音色配置，默认 voice.json"
 ap.add_argument("--ref", default=None, help="临时换参考音做试验（正式出片用 voice.json 里的）")
 ap.add_argument("--ref-text", default=None)
 ap.add_argument("--temperature", type=float, default=0.7)
-ap.add_argument("--max-tries", type=int, default=5, help="拼音错误率不为 0 或有字中间掉音时，自动换种子重生成的最多次数（每句单独计）")
+ap.add_argument("--max-tries", type=int, default=None, help="自检不过时自动换种子重生成的最多次数（每句单独计）；默认取 voice.json 的 maxTries，没写是 5")
 ap.add_argument("--gap", type=float, default=0.4, help="句与句之间的停顿秒数")
 ap.add_argument("--no-cache", action="store_true", help="不用已缓存的句子，全部重新生成")
 ap.add_argument("--reseed", action="append", default=[], help="「句子=偏移」：这一句换个种子重新生成（听出畸变、怪腔调时用；可重复）")
@@ -41,6 +41,8 @@ asr = load_stt("models/Qwen3-ASR-0.6B")
 voice = load_voice(args.voice) if args.voice else load_voice()
 if not args.ref:
     args.ref = voice["ref"]
+if args.max_tries is None:
+    args.max_tries = voice.get("maxTries", 5)  # 起伏大的参考音句末更容易掉到下限以下，要多试几次
 FLOOR = voice.get("pitchFloorHz", 0)  # 最低自然音高，见 voice.py 的 pitch_drops
 
 # 1. 参考音文本：克隆需要参考音的准确文本；没给就用 ASR 转写（结果打印出来供人工核对）

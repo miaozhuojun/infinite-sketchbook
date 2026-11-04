@@ -17,5 +17,7 @@
  "moods": {
   "好奇": "ref/my-voice/curious.wav"
  },
- "moodsNote": "情绪参考（可选）：每种情绪一段真人录音（同名 .txt 写逐字文本），分镜 narration.mood 按句指定用哪段。最好以陈述句结尾，理由同 refNote"
+ "moodsNote": "情绪参考（可选）：每种情绪一段真人录音（同名 .txt 写逐字文本），分镜 narration.mood 按句指定用哪段。最好以陈述句结尾，理由同 refNote",
+ "maxTries": 5,
+ "maxTriesNote": "每句自检不过时最多换几次种子。参考音起伏大时句末容易掉到 pitchFloorHz 以下，可以调大"
 }

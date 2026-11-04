@@ -3,7 +3,7 @@
 输出与 edge_baseline.py 相同的 timing JSON，引擎编译器可直接换用。
 用法：.venv-mlx/bin/python qwen_clone.py <文本> <输出前缀> [--seed N] [--gap 0.4] [--voice voice.json]
 音色配置（参考音、真人录音、相似度下限）只在 voice.json；参考文本取参考音同名 .txt，默认种子 2。
-按句生成，每句自检（回转拼音、掉音、时长）不过就换种子；最后检查整段回转和音色一致性，任何一项不过都非零退出。
+按句生成，每句自检（回转拼音、掉音、掉嗓子、时长、剪掉句首尾静音后逐字对齐不到 50ms）不过就换种子；最后检查整段回转和音色一致性，任何一项不过都非零退出。
 通过自检的句子按「句子 + 参考音 + 模型 + 参数」缓存在输出目录的 cache/ 里：改稿后只重配改动的句子（--no-cache 全部重来）。
 分镜可以按句指定情绪（--mood「句子=情绪」），那一句改用 voice.json 的 moods 里对应的参考音克隆，语气跟着内容变。
 参考音和真人录音只在本机使用，不进仓库；只克隆本人或已取得书面同意的声音（见 voice.example.json）。
@@ -125,6 +125,28 @@ def dropouts(x, sr):
 
 
 PUNCT = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
+
+
+def trim_edges(audio, sr, pad=0.08):
+    """剪掉句首句尾的长静音，两头各留 pad 秒。有的参考音（如活泼参考）生成的句子开头有 0.8 秒静音，
+    对齐器会把头一两个字压成 0ms 挤在静音边上（E01 v7「第」「二」都对在 0.80s），先剪掉再对齐。"""
+    h = int(0.01 * sr)
+    lv = np.array([20 * np.log10(np.sqrt((audio[i:i + h] ** 2).mean()) + 1e-12) for i in range(0, len(audio) - h, h)])
+    on = np.where(lv > lv.max() - 45)[0]
+    if not len(on):
+        return audio
+    a, b = max(0, on[0] * h - int(pad * sr)), min(len(audio), (on[-1] + 1) * h + int(pad * sr))
+    return audio[a:b]
+
+
+def align(audio, sr, text):
+    sf.write(args.out + ".sent.wav", audio, sr)
+    items = aligner.generate(audio=args.out + ".sent.wav", text=re.sub(PUNCT, "", text), language="Chinese")
+    return [{"text": it.text, "start": float(it.start_time), "end": float(it.end_time)} for it in items]
+
+
+# 对齐出来不到 50ms 的单字：要么真吞了，要么对齐器没对上；两种都换种子（成片旁白检查的「没有吞字」靠这份逐字时间）
+squashed = lambda rel: [w["text"] for w in rel if len(w["text"]) == 1 and w["end"] - w["start"] < 0.05]
 asr_text = lambda path: re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower().translate(DIG)
 
 
@@ -153,23 +175,32 @@ def synth_sentence(text, seed0, R):
         if drops:
             print(f"    种子 {seed}：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（下限 {FLOOR}Hz），换种子重来")
             continue
+        note = None
         if c == 0 and dz == 0:
-            return audio, sr, seed, ""
+            note = ""
         hs, rs = syl(hyp), syl(ref)
-        if dz == 0 and 0 < len(hs) - len(rs) <= 3 and hs[len(hs) - len(rs):] == rs:
+        if note is None and dz == 0 and 0 < len(hs) - len(rs) <= 3 and hs[len(hs) - len(rs):] == rs:
             prefix = hyp[: len(hs) - len(rs)]
             audio = trim_leaked_prefix(audio, sr, prefix, ref)
             sf.write(tmp, audio, sr)
             if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, FLOOR)):
-                return audio, sr, seed, f"开头串进「{prefix}」已剪掉"
-        print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
+                note = f"开头串进「{prefix}」已剪掉"
+        if note is None:
+            print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
+            continue
+        audio = trim_edges(audio, sr)
+        rel = align(audio, sr, text)
+        if squashed(rel):
+            print(f"    种子 {seed}：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
+            continue
+        return audio, sr, seed, note, rel
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
 
 
 # 按句生成（句号、问号、叹号处断开）：每句单独自检、单独重试；句间统一留 gap 秒停顿，
 # 保证每个句号处都有干净的切点（整段一次生成时，克隆音色常常一口气读完、句间没有静音，切点只能合并）
 sents = [x for x in re.findall(r"[^。？！]+[。？！]?", args.text) if re.sub(PUNCT, "", x)]
-pieces, words, t_cursor, sr = [], [], 0.0, 24000
+pieces, words, spans, t_cursor, sr = [], [], [], 0.0, 24000
 # 句子缓存：键里有句子、参考音（内容）、参考文本、模型和生成参数，任何一样变了都重新生成；缓存的句子当时已通过逐句自检
 CACHE = os.path.join(os.path.dirname(os.path.abspath(args.out)), "cache")
 os.makedirs(CACHE, exist_ok=True)
@@ -184,23 +215,25 @@ n_cached = 0
 for i, sent in enumerate(sents):
     t0 = time.time()
     key = os.path.join(CACHE, cache_key(sent))
-    sent_clean = re.sub(PUNCT, "", sent)
     cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
     if cached and FLOOR and pitch_drops(*sf.read(key + ".wav", dtype="float32"), FLOOR):
         print(f"  缓存里的「{sent}」掉嗓子，重新生成")  # 缓存是在加这项检查之前生成的，不能直接信
         cached = False
+    if cached:  # 同理：加「剪句首尾静音、对齐不到 50ms 就换种子」之前的缓存
+        x_c, sr_c = sf.read(key + ".wav", dtype="float32")
+        if len(x_c) - len(trim_edges(x_c, sr_c)) > 0.3 * sr_c or squashed(json.load(open(key + ".json", encoding="utf-8"))["words"]):
+            print(f"  缓存里的「{sent}」句首尾静音过长或对齐有字不到 50ms，重新生成")
+            cached = False
     if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")
         meta = json.load(open(key + ".json", encoding="utf-8"))
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
     else:
-        audio, sr, seed, note = synth_sentence(sent, seed_of(sent), ref_for(sent))
-        sf.write(args.out + ".sent.wav", audio, sr)
-        items = aligner.generate(audio=args.out + ".sent.wav", text=sent_clean, language="Chinese")
-        rel = [{"text": it.text, "start": float(it.start_time), "end": float(it.end_time)} for it in items]
+        audio, sr, seed, note, rel = synth_sentence(sent, seed_of(sent), ref_for(sent))
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sent, "seed": seed, "note": note, "words": rel}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+    spans.append({"text": sent, "start": round(t_cursor, 3), "end": round(t_cursor + len(audio) / sr, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和这里逐句自检用同一段声音
     words += [{"text": w["text"], "start": round(w["start"] + t_cursor, 3), "end": round(w["end"] + t_cursor, 3)} for w in rel]
     gap = np.zeros(int(args.gap * sr), dtype=np.float32) if i < len(sents) - 1 else np.zeros(0, dtype=np.float32)
     pieces += [audio, gap]
@@ -215,7 +248,7 @@ sf.write(args.out + ".wav", full, sr)
 
 # 整段再回转核对一遍
 c_all = cer(syl(clean.lower().translate(DIG)), syl(asr_text(args.out + ".wav")))
-json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words},
+json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 if c_all > 0:
     raise SystemExit(f"整段回转拼音错误率 {c_all:.3f}（逐句都通过，但拼起来后识别有出入），需要人工检查")

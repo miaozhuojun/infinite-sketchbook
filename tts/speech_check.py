@@ -50,8 +50,18 @@ check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似�
 
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
 floor = voice.get("pitchFloorHz", 0)
+timing0 = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
 if floor:
-    drops = pitch_drops(x0, sr0, floor)
+    # 按句量：判断「听得见的部分」要拿这一句自己的响度做参照，和配音时逐句自检一致；拿整段旁白做参照时，
+    # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
+    # 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾
+    def sentence_ranges():
+        for s in timing0.get("sentences", []):
+            cs = [c for c in tl["audioClips"] if c["srcIn"] >= s["start"] - 0.02 and c["srcOut"] <= s["end"] + 0.02]
+            if cs:
+                yield cs[0]["at"], max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
+    ranges = list(sentence_ranges()) or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
+    drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
     def phrase_at(t):
         c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
         return f"「{c['phrase'][:10]}」" if c else ""

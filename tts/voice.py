@@ -58,15 +58,19 @@ def f0_track(x, sr, hop=0.005, win=0.03):
     return out
 
 
-def pitch_drops(x, sr, floor_hz, min_sec=0.06):
-    """连续至少 min_sec 秒的浊音都低于 floor_hz 的段：[(起, 止, 最低基频)]。"""
-    runs, cur = [], []
-    for t, f in f0_track(x, sr) + [(None, 0.0)]:
+def pitch_drops(x, sr, floor_hz, min_sec=0.06, bridge=0.02):
+    """连续至少 min_sec 秒的浊音都低于 floor_hz 的段：[(起, 止, 最低基频)]。
+    中间夹着不超过 bridge 秒的清音帧（基频 0）仍算同一段：低沉的嘎裂声里清浊判断时断时续，不连起来的话，
+    同一处在单句配音和成片旁白上因为 5ms 分帧的起点不同，一边判成两段 50ms（过）、一边判成一段 65ms（不过）（E01 v7「主」）。"""
+    runs, cur, gap = [], [], 0.0
+    for t, f in f0_track(x, sr) + [(None, 1e9)]:
         if f and f < floor_hz:
-            cur.append((t, f)); continue
+            cur.append((t, f)); gap = 0.0; continue
+        if not f and cur and gap + 0.005 <= bridge:
+            gap += 0.005; continue
         if cur and cur[-1][0] - cur[0][0] + 0.005 >= min_sec:
             runs.append((cur[0][0], cur[-1][0] + 0.03, min(f for _, f in cur)))
-        cur = []
+        cur, gap = [], 0.0
     return runs
 
 

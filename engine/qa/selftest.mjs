@@ -242,7 +242,8 @@ const acts = (b) => b.phrases.flatMap((p) => p.actions);
 const firstText = (b) => acts(b).find((a) => a.type === 'text');
 // advice：这条是创作取舍（风格规范 gates 里的 advice 级），要被报成「建议」而不是错误；只看建议那几行
 const adviceOf = (out) => [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])].join('\n');
-function expectBeats(name, mutate, cmd, mustMatch, { advice = false } = {}) {
+// advice：要报成建议；any：报成建议或错误都算（注入的间距在不同基线上可能刚好压在一起，那就是错误）
+function expectBeats(name, mutate, cmd, mustMatch, { advice = false, any = false } = {}) {
   const b = structuredClone(beatsSrc);
   b.id = '_selftest';
   mutate(b);
@@ -250,7 +251,7 @@ function expectBeats(name, mutate, cmd, mustMatch, { advice = false } = {}) {
   fs.writeFileSync(p, JSON.stringify(b));
   const r = spawnSync('node', cmd(p), { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
   const hit = (txt) => (mustMatch instanceof RegExp ? mustMatch.test(txt) : txt.includes(mustMatch));
-  record(name, advice ? hit(adviceOf(out)) : r.status !== 0 && hit(out), out);
+  record(name, any ? hit(out) : advice ? hit(adviceOf(out)) : r.status !== 0 && hit(out), out);
   fs.rmSync(p, { force: true });
   for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
 }
@@ -293,7 +294,7 @@ expectBeats('两段文字压在一起（关闭自动修复，仍判错误）', (
 expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) => {
   const t = firstText(b);
   b.phrases[0].actions.push({ id: '_row', type: 'text', at: t.at, text: '57', x: t.x + t.size * 1.6, y: t.y, size: 56 });
-}, compileNoFix('9x16'), /在同一行，横向只有/, { advice: true });
+}, compileNoFix('9x16'), /在同一行，横向只有/, { any: true });
 {
   // 私有创作配置把一项建议升成 hard：同样的缺陷就要判失败（用户可以把自己在意的取舍收紧）
   const prof = path.resolve('build/_selftest.profile.json');

@@ -119,7 +119,9 @@ check("拼接后声音完整", not lost, "；".join(lost) if lost else f"{len(tl
 
 # 3. 断音 / 爆音：≥5ms 的全零段，只有"两侧 20ms 都在发声（> -40dB）"才算字中间掉音
 #   （TTS 在停顿处本来就输出全零，对齐的字范围常会多划进停顿，不能一律算断音）
+#   句与句的接缝处（两段配音首尾相接、中间没插停顿）留下的是配音自带的句间静音，不是字中间掉音，跳过（E01 第 27/28 句）
 z = np.abs(x) < 1e-7
+joints = [c["at"] for c in tl["audioClips"][1:]]
 dropouts, i = [], 0
 while i < len(z):
     if z[i]:
@@ -128,7 +130,8 @@ while i < len(z):
             j += 1
         if j - i >= int(0.005 * sr):
             w2 = int(0.02 * sr)
-            if db(x[max(0, i - w2):i]) > -40 and db(x[j:j + w2]) > -40:
+            at_joint = any(i / sr - 0.01 <= jt <= j / sr + 0.01 for jt in joints)
+            if not at_joint and db(x[max(0, i - w2):i]) > -40 and db(x[j:j + w2]) > -40:
                 dropouts.append(f"{i / sr:.2f}s({(j - i) / sr * 1000:.0f}ms)")
         i = j
     else:

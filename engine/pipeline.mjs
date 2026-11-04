@@ -54,7 +54,7 @@ const audioPath = path.join('public', beats.narration.audio || '');
 // 合成提示音（演示分镜，narration.synthetic）不走克隆配音，音频由夹具脚本生成
 if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
-  if (PY_MLX) { if (run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries(beats.narration.reseed ?? {}).flatMap(([t, k]) => ['--reseed', `${t}=${k}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
+  if (PY_MLX) { if (run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries(beats.narration.reseed ?? {}).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
   else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
   else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
     problems: [`没有音频 ${audioPath}，也没有本地配音环境（PY_MLX）：在 tts/ 装好配音环境，或把音频放到这个位置`] });

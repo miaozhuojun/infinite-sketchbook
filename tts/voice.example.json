@@ -10,5 +10,12 @@
  "minSimilarity": 0.965,
  "calibration": "下限要按你自己的录音标定：先算几段真人录音之间、以及满意的生成样本与真人录音质心的相似度，再定一个能拦住别的音色的值。",
  "pitchFloorHz": 0,
- "pitchFloorNote": "最低自然音高（Hz）：用 voice.py 的 f0_track 量你自己真人录音的浊音帧，取中位的 0.62 倍左右，再确认 1% 分位在它之上。配音里连续 60ms 以上的浊音低于它会被判为掉嗓子、换种子重配。填 0 表示不查"
+ "pitchFloorNote": "最低自然音高（Hz）：用 voice.py 的 f0_track 量你自己真人录音的浊音帧，取中位的 0.62 倍左右，再确认 1% 分位在它之上。配音里连续 60ms 以上的浊音低于它会被判为掉嗓子、换种子重配。填 0 表示不查",
+ "pitchRangeSt": 0,
+ "registerSpreadSt": 0,
+ "pitchRangeNote": "语气起伏（只给建议，0 表示不查）：用 voice.py 的 pitch_range_st 量你真人录音里每段话的句内起伏，取中位的 0.9 倍左右；各段音区（pitch_median_hz）换成半音后的标准差取 2/3 左右",
+ "moods": {
+  "好奇": "ref/my-voice/curious.wav"
+ },
+ "moodsNote": "情绪参考（可选）：每种情绪一段真人录音（同名 .txt 写逐字文本），分镜 narration.mood 按句指定用哪段。最好以陈述句结尾，理由同 refNote"
 }

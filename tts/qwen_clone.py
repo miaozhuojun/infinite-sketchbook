@@ -19,7 +19,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import load_voice, similarity
+from voice import load_voice, similarity, pitch_drops
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -39,6 +39,7 @@ asr = load_stt("models/Qwen3-ASR-0.6B")
 voice = load_voice(args.voice) if args.voice else load_voice()
 if not args.ref:
     args.ref = voice["ref"]
+FLOOR = voice.get("pitchFloorHz", 0)  # 最低自然音高，见 voice.py 的 pitch_drops
 
 # 1. 参考音文本：克隆需要参考音的准确文本；没给就用 ASR 转写（结果打印出来供人工核对）
 ref_text = args.ref_text
@@ -108,7 +109,7 @@ asr_text = lambda path: re.sub(PUNCT, "", asr.generate(path, language="Chinese")
 
 
 def synth_sentence(text, seed0):
-    """生成一句并自检：拼音错误率必须为 0、不能有字中间掉音；开头串进多余字就剪掉；不过就换种子重来。"""
+    """生成一句并自检：拼音错误率必须为 0、不能有字中间掉音、不能掉嗓子（浊音掉到这个孩子最低自然音高以下）；开头串进多余字就剪掉；不过就换种子重来。"""
     ref = re.sub(PUNCT, "", text).lower().translate(DIG)
     tmp = args.out + ".sent.wav"
     for attempt in range(args.max_tries):
@@ -128,6 +129,10 @@ def synth_sentence(text, seed0):
         sf.write(tmp, audio, sr)
         hyp = asr_text(tmp)
         c, dz = cer(syl(ref), syl(hyp)), dropouts(audio, sr)
+        drops = pitch_drops(audio, sr, FLOOR) if FLOOR else []
+        if drops:
+            print(f"    种子 {seed}：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（下限 {FLOOR}Hz），换种子重来")
+            continue
         if c == 0 and dz == 0:
             return audio, sr, seed, ""
         hs, rs = syl(hyp), syl(ref)
@@ -135,7 +140,7 @@ def synth_sentence(text, seed0):
             prefix = hyp[: len(hs) - len(rs)]
             audio = trim_leaked_prefix(audio, sr, prefix, ref)
             sf.write(tmp, audio, sr)
-            if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0:
+            if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, FLOOR)):
                 return audio, sr, seed, f"开头串进「{prefix}」已剪掉"
         print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
@@ -158,7 +163,11 @@ for i, sent in enumerate(sents):
     t0 = time.time()
     key = os.path.join(CACHE, cache_key(sent))
     sent_clean = re.sub(PUNCT, "", sent)
-    if not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json"):
+    cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
+    if cached and FLOOR and pitch_drops(*sf.read(key + ".wav", dtype="float32"), FLOOR):
+        print(f"  缓存里的「{sent}」掉嗓子，重新生成")  # 缓存是在加这项检查之前生成的，不能直接信
+        cached = False
+    if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")
         meta = json.load(open(key + ".json", encoding="utf-8"))
         seed, note, rel = meta["seed"], "缓存", meta["words"]

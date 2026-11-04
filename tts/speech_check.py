@@ -41,11 +41,20 @@ def db(seg):
 # 0. 音色一致性（放在最前：别的检查依赖对齐，换错音频时可能先出错）
 sys.path.insert(0, str(Path(__file__).parent))
 from mlx_audio.tts.utils import load_model
-from voice import load_voice, similarity
+from voice import load_voice, similarity, pitch_drops
 voice = load_voice()
 x0, sr0 = mono(root / "public" / tl["narration"])
 sim = similarity(load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base")), x0, sr0, voice)
 check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似度 {sim:.3f}（下限 {voice['minSimilarity']}）")
+
+# 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
+floor = voice.get("pitchFloorHz", 0)
+if floor:
+    drops = pitch_drops(x0, sr0, floor)
+    def phrase_at(t):
+        c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
+        return f"「{c['phrase'][:10]}」" if c else ""
+    check("没有掉嗓子", not drops, f"{len(drops)} 处：" + "；".join(f"{a:.2f}–{b:.2f}s{phrase_at(a)} 低到 {f:.0f}Hz" for a, b, f in drops[:5]) + f"（下限 {floor}Hz）" if drops else f"浊音都在这个声音的最低自然音高 {floor}Hz 以上")
 
 # 1. 拼接切点
 src, ssr = mono(root / "public" / beats["narration"]["audio"])

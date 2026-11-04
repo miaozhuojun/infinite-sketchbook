@@ -183,6 +183,22 @@ speechCase('旁白切点切进一个字的正中间', (tl) => {
   const inClip = timing.words.filter((w) => w.start >= c.srcIn && w.end <= c.srcOut);
   c.srcIn = (inClip[2].start + inClip[2].end) / 2;
 }, '[失败] 拼接切点落在静音处');
+speechCase('旁白里两个字掉到成人男声的音高（降一个八度，用户两次听出的「学会」畸变）', (tl) => {
+  // 最后一段旁白里找一段 0.3 秒的浊音，降一个八度（拉长一倍再取前半，长度不变、音高减半），别的都不动
+  const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, json, numpy as np
+from scipy.signal import resample
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(base.audioClips.at(-1)))})
+a = int((c['at'] + 0.4) * sr); n = int(0.3 * sr)
+seg = x[a:a + n]; low = resample(seg, 2 * n)[:n]
+x[a:a + n] = low * (np.abs(seg).max() / (np.abs(low).max() + 1e-9))
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.narration = 'audio/_selftest.narration.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 没有掉嗓子');
 speechCase('旁白里一个字的开头被抹掉 80ms', (tl) => {
   const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `

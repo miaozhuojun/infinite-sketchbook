@@ -17,7 +17,10 @@ from PIL import Image
 FF = imageio_ffmpeg.get_ffmpeg_exe()
 tl_path, video, comp = sys.argv[1], sys.argv[2], sys.argv[3]
 tl = json.loads(Path(tl_path).read_text())
-work = Path("out/qa"); work.mkdir(parents=True, exist_ok=True)
+# 截图放临时目录，检查完就删（原来写在 out/qa/，每次跑都留几十张 3MB 的图，一期攒到 1.4GB 没人清）
+import atexit, shutil, tempfile
+work = Path(tempfile.mkdtemp(prefix="sketch-qa-"))
+atexit.register(shutil.rmtree, work, ignore_errors=True)
 results = []
 
 

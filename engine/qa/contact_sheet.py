@@ -23,6 +23,9 @@ w, h = Image.open(files[0]).size
 cols = 6 if w < h else 4
 per = cols * 2
 stem = Path(video).stem
+# 先清掉这个画幅上一轮的联系表：片子变短时，多出来的旧表会混在审片目录里（审片 v9：sheet_46–47 还是上一轮的整句口号）
+for old in out.glob(f"{stem}_sheet_*.png"):
+    old.unlink()
 for k in range(0, len(files), per):
     sheet = Image.new("RGB", (cols * w, 2 * h), "white")
     d = ImageDraw.Draw(sheet)

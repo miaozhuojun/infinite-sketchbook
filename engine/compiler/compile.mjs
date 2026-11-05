@@ -476,8 +476,10 @@ function schedule(boost) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
       }
-      const fromPos = penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
-      const travel = moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
+      // 全片第一笔：片子一开头笔就在纸上落笔处，不先从画外飞进来（审片 E01 v9：飞进来要 0.76 秒，开场钩子的灯晚亮）
+      const opening = penPos === OFF && !strokes.length && cue - (a.lead ?? PEN.cueLead) < 1;
+      const fromPos = opening ? [first.x, first.y] : penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
+      const travel = opening ? 0 : moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
       let t = Math.max(cue - (a.lead ?? PEN.cueLead), penFree + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）
       // 要停一会儿时先退开：笔尖往右下（笔身朝向）退一点，别压着刚写的东西；退开的点不出取景框
       // ---- 落笔前等多久、在哪儿等：停笔不压正在讲的东西（审片：笔停在刚写的「0」、刚画的灯、x₁ 的下标上） ----

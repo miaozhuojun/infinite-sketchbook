@@ -214,6 +214,22 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 背景干净');
+speechCase('一开口就沙沙响、说完就没（噪声只叠在说话声上；用户听 E01 v7–v14）', (tl) => {
+  // 按源配音的响度包络给白噪声开关：只在发声时叠上（比说话低 22dB），停顿处还是干净的。DNSMOS 对这种噪声不敏感，要靠浊音谱平坦度
+  const src = path.resolve('public', base.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np
+from scipy.ndimage import uniform_filter1d
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+m = x if x.ndim == 1 else x[:, 0]
+env = np.sqrt(uniform_filter1d(m ** 2, int(0.02 * sr)))
+n = np.random.default_rng(2).standard_normal(len(m)) * env * 10 ** (-22 / 20) * 1.4
+x = x + (n if x.ndim == 1 else n[:, None])
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 说话时没有沙沙声');
 speechCase('旁白里一个字的开头被抹掉 80ms', (tl) => {
   const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `

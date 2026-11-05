@@ -112,6 +112,17 @@ if min_bak:
     med_b = float(np.median(bw0))
     check("背景干净", med_b >= min_bak, f"整条配音 DNSMOS BAK 9 秒窗中位 {med_b:.2f}（下限 {min_bak}），10% 分位 {np.percentile(bw0, 10):.2f}")
 
+# 0e. 说话时没有沙沙声：在源配音上逐句量浊音谱平坦度（voice.py 的 voiced_flatness），全片中位数不高于 maxFlatMedian。
+#     用户听 E01 v7–v14「一开口就有背景噪声、说完就没」：那几版中位 0.128，听着干净的 0.083，真人录音 0.03–0.045
+max_flat = voice.get("maxFlatMedian", 0)
+if max_flat:
+    from voice import voiced_flatness
+    xs1, ssr1 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans1 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    fl = sorted(((voiced_flatness(xs1[int(s["start"] * ssr1):int(s["end"] * ssr1)], ssr1), s["text"]) for s in spans1), reverse=True)
+    med_fl = float(np.median([v for v, _ in fl]))
+    check("说话时没有沙沙声", med_fl <= max_flat, f"{len(fl)} 句浊音谱平坦度中位 {med_fl:.3f}（上限 {max_flat}；真人录音约 0.03–0.045），最高的：" + "、".join(f"「{t[:8]}」{v:.3f}" for v, t in fl[:3]))
+
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)

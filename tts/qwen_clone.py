@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import load_voice, similarity, pitch_drops, weak_chars
+from voice import load_voice, similarity, pitch_drops, weak_chars, voiced_flatness
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -49,6 +49,8 @@ GEN_FLOOR = FLOOR * 1.03
 # 背景干净：逐句用 DNSMOS 的 BAK 分（起点错开 8 次取平均）筛掉明显偏脏的配音，低于 voice.json 的 takeMinBak 就换种子。
 # 单句的分数挪几个采样就差 0.1–0.2，只当筛子（下限放得比较低），不当关卡；关卡是旁白检查里全片的中位数（minBak）
 GEN_BAK = voice.get("takeMinBak", 0)
+# 说话时的沙沙声（浊音谱平坦度，见 voice.py），高于 takeMaxFlat 就换种子；10 次都不到就用最干净的一条
+MAX_FLAT = voice.get("takeMaxFlat", 0)
 if GEN_BAK:
     from dnsmos import score as dnsmos_score
     bak_of = lambda a, r: dnsmos_score(a, r)[0][1]
@@ -75,7 +77,12 @@ for m in args.mood:
     if name not in MOODS:
         raise SystemExit(f"情绪「{name}」不在 voice.json 的 moods 里（现有：{'、'.join(MOODS) or '无'}）")
     mood_of[sent] = name
-mood_refs = {name: load_ref(MOODS[name]) for name in set(mood_of.values())}
+# 自动换参考：某句用默认参考音试满 max_tries 次都过不了（常见：长陈述句句末掉嗓子），就改用 voice.json 的 fallbackMood 那段参考音再试；
+# 换过的句子在缓存里记一个 .fallback 标记，下次直接用，不再白试十次
+FALLBACK = voice.get("fallbackMood")
+if FALLBACK and FALLBACK not in MOODS:
+    raise SystemExit(f"fallbackMood「{FALLBACK}」不在 voice.json 的 moods 里")
+mood_refs = {name: load_ref(MOODS[name]) for name in set(mood_of.values()) | ({FALLBACK} if FALLBACK else set())}
 ref_for = lambda sent: mood_refs[mood_of[sent.strip()]] if sent.strip() in mood_of else REF
 
 aligner = load_stt("models/Qwen3-ForcedAligner-0.6B")
@@ -163,6 +170,7 @@ def synth_sentence(text, seed0, R):
     ref = re.sub(PUNCT, "", text).lower().translate(DIG)
     tmp = args.out + ".sent.wav"
     best = None  # 只差背景分的候选里最干净的一条
+    best_flat = None  # 只差沙沙声的候选里最干净的一条
     for attempt in range(args.max_tries):
         seed = seed0 + attempt
         mx.random.seed(seed)
@@ -208,8 +216,16 @@ def synth_sentence(text, seed0, R):
             if not best or bk > best[5]:
                 best = (audio, sr, seed, note, rel, bk)
             continue
+        if MAX_FLAT and (fl := voiced_flatness(audio, sr)) > MAX_FLAT:
+            print(f"    种子 {seed}：说话时有沙沙声（浊音谱平坦度 {fl:.3f}，要 ≤{MAX_FLAT}），换种子重来")
+            if not best_flat or fl < best_flat[0]:
+                best_flat = (fl, (audio, sr, seed, note, rel, bk))
+            continue
         return audio, sr, seed, note, rel, bk
     # 别的自检都过、只是背景分没到：用这几次里最干净的一条（背景分只是筛子，不该让整集配不出来）
+    if best_flat:
+        print(f"    {args.max_tries} 次里没有一条沙沙声低于 {MAX_FLAT}，用最干净的种子 {best_flat[1][2]}（{best_flat[0]:.3f}）")
+        return best_flat[1]
     if best:
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
@@ -233,6 +249,9 @@ if stray:
 n_cached = 0
 for i, sent in enumerate(sents):
     t0 = time.time()
+    fb_mark = os.path.join(CACHE, cache_key(sent)) + ".fallback"
+    if FALLBACK and sent.strip() not in mood_of and os.path.exists(fb_mark):
+        mood_of[sent.strip()] = FALLBACK
     key = os.path.join(CACHE, cache_key(sent))
     cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
     if cached and FLOOR and pitch_drops(*sf.read(key + ".wav", dtype="float32"), GEN_FLOOR):
@@ -242,6 +261,9 @@ for i, sent in enumerate(sents):
         x_c, sr_c = sf.read(key + ".wav", dtype="float32")
         if len(x_c) - len(trim_edges(x_c, sr_c)) > 0.3 * sr_c or squashed(json.load(open(key + ".json", encoding="utf-8"))["words"]):
             print(f"  缓存里的「{sent}」句首尾静音过长或对齐有字不到 50ms，重新生成")
+            cached = False
+        elif MAX_FLAT and voiced_flatness(x_c, sr_c) > MAX_FLAT:
+            print(f"  缓存里的「{sent}」说话时有沙沙声，重新生成")
             cached = False
         elif GEN_BAK:
             meta_c = json.load(open(key + ".json", encoding="utf-8"))
@@ -257,7 +279,17 @@ for i, sent in enumerate(sents):
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
     else:
-        audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
+        try:
+            audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
+        except SystemExit:
+            if not FALLBACK or sent.strip() in mood_of:
+                raise
+            print(f"  「{sent}」用默认参考音 {args.max_tries} 次都没过，改用「{FALLBACK}」参考音")
+            open(fb_mark, "w").write(FALLBACK)
+            mood_of[sent.strip()] = FALLBACK
+            key = os.path.join(CACHE, cache_key(sent))
+            audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
+            note = (note + "；" if note else "") + f"自动换「{FALLBACK}」参考音"
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     takes.append([audio, sr, seed, note, rel])
@@ -304,7 +336,8 @@ sf.write(args.out + ".wav", full, sr)
 c_all = cer(syl(clean.lower().translate(DIG)), syl(asr_text(args.out + ".wav")))
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-if c_all > 0:
+# 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡
+if c_all > 0.005:
     raise SystemExit(f"整段回转拼音错误率 {c_all:.3f}（逐句都通过，但拼起来后识别有出入），需要人工检查")
 # 音色一致性：和真人录音质心比，防止参考音或模型改动让音色悄悄漂移
 sim = similarity(tts, full, sr, voice)

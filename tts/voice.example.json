@@ -22,5 +22,9 @@
  "maxTriesNote": "每句自检不过时最多换几次种子。参考音起伏大时句末容易掉到 pitchFloorHz 以下，可以调大",
  "minBak": 0,
  "minBakNote": "背景干净（可选，0 表示不查）：DNSMOS 的 BAK 分。要先把模型 sig_bak_ovr.onnx 放到 engine/assets.local/dnsmos/（来源见 dnsmos.py）。minBak 是全片 9 秒窗中位数的下限（旁白检查的关卡）；takeMinBak 是生成时逐句的筛子，单句分数不稳，下限要放低一些",
- "takeMinBak": 0
+ "takeMinBak": 0,
+ "takeMaxFlat": 0,
+ "maxFlatMedian": 0,
+ "flatNote": "说话时的沙沙声（可选，0 表示不查）：用 voice.py 的 voiced_flatness 量你满意的配音和真人录音，逐句上限 takeMaxFlat 取满意配音里最高的那句，全片中位上限 maxFlatMedian 略高一点。参考音带底噪时克隆出来的声音会一开口就沙沙响，先用 denoise_ref.py 把参考音去噪",
+ "fallbackNote": "可选：fallbackMood 写 moods 里的一个名字。某句用默认参考音试满 maxTries 次都过不了，就自动改用它再试"
 }

@@ -123,3 +123,22 @@ def weak_chars(x, sr, items):
 
     return med, [(k, f"「{it['text']}」@{it['t0']:.2f}s 时长{it['dur'] * 1000:.0f}ms 能量{it['db']:.0f}dB") for k, it in enumerate(items)
                  if (it["dur"] < 0.05 and not merged(k)) or (it["dur"] >= 0.05 and it["db"] < med - 18)]
+
+
+def voiced_flatness(x, sr):
+    """说话时的「沙沙声」：浊音帧 1–4kHz 的谱平坦度中位数（谐波之间被噪声填平时变大）。
+    干净的童声真人录音约 0.03–0.045；用户听出「一开口就有背景噪声、说完就没」的配音 0.11–0.18，听着干净的 0.04–0.09。
+    DNSMOS 的 BAK 对这种叠在说话声上的噪声不敏感（E01 v7–v14），所以另用这个量。"""
+    x = np.asarray(x, dtype=np.float64)
+    x = x.mean(1) if x.ndim > 1 else x
+    W = int(0.032 * sr); H = W // 2
+    if len(x) < 2 * W:
+        return 0.0
+    win = np.hanning(W)
+    fr = np.array([x[i:i + W] * win for i in range(0, len(x) - W, H)])
+    S = np.abs(np.fft.rfft(fr, axis=1)) ** 2
+    f = np.fft.rfftfreq(W, 1 / sr)
+    lv = 10 * np.log10(S.sum(1) + 1e-20)
+    Sv = S[lv > lv.max() - 25]
+    band = (f > 1000) & (f < 4000)
+    return float(np.median([np.exp(np.mean(np.log(s[band] + 1e-20))) / np.mean(s[band]) for s in Sv]))

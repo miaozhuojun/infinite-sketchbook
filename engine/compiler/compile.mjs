@@ -762,11 +762,28 @@ if (NR.hookWithin !== undefined) {
 }
 
 // 字幕：说完后若这句的画面还在画，字幕停留到画完（不晚于下一句字幕出现），避免画面和字幕脱节
-const subtitles = phrases.map((p, i) => {
+// 一屏最多几行（画幅的 sub.maxLines，没写就不限）：超了就在标点处拆成几张，各在这一段开口时出现。
+// 手机竖着刷到横版时字幕要大（64 号），两行会压进播放器底部的进度条，所以横版一屏只放一行（用户 2026-11-05 定各平台统一发横版）
+const splitCaption = (text) => {
+  if (!TGT.sub.maxLines || breakLines(text, TGT.sub.size, TGT.sub.width).length <= TGT.sub.maxLines) return [text];
+  const cuts = [...text.matchAll(/[，、；：,;:]/g)].map((m) => m.index + 1).filter((k) => k < text.length);
+  if (!cuts.length) return [text];
+  const mid = [...text].length / 2, k = cuts.reduce((a, c) => (Math.abs(c - mid) < Math.abs(a - mid) ? c : a));
+  return [...splitCaption(text.slice(0, k)), ...splitCaption(text.slice(k))];
+};
+const subtitles = phrases.flatMap((p, i) => {
   const t0 = audioClips[i].at, spoken = t0 + (p.srcEnd - p.cutIn) + 0.35;
   const hold = style.subtitle.holdWhileDrawing ? report.phrases[i].drawEnd + 0.3 : spoken;
   const nextT0 = i + 1 < phrases.length ? audioClips[i + 1].at - 0.05 : Infinity;
-  return { text: p.caption || p.text, lines: breakLines(p.caption || p.text, TGT.sub.size, TGT.sub.width), t0, t1: r2(Math.min(nextT0, Math.max(spoken, hold))) };
+  const cap = p.caption || p.text, t1 = r2(Math.min(nextT0, Math.max(spoken, hold)));
+  const parts = splitCaption(cap);
+  // 每张从它第一个字开口时出现：字幕和念法可以不同（「ai」念「爱」），按去标点后的字数比例对到旁白的字上
+  const n = strip(cap).length, m = p.i1 - p.i0 + 1;
+  let done = 0;
+  const starts = parts.map((x) => { const at = t0 + (charTimes[p.i0 + Math.min(m - 1, Math.round((done / n) * m))].s - p.cutIn); done += strip(x).length; return Math.max(t0, at); });
+  // 同一句拆出的几张首尾相接、换卡时不淡出淡入（join：接着上一张；joinNext：下一张接着它）。审片 E01 v20：淡出淡入让一句话中间字幕闪一下
+  return parts.map((x, k) => ({ text: x.replace(/[，、；：,;:]$/, ''), lines: breakLines(x.replace(/[，、；：,;:]$/, ''), TGT.sub.size, TGT.sub.width), t0: r2(k ? starts[k] : t0), t1: k + 1 < parts.length ? r2(starts[k + 1]) : t1,
+    ...(k ? { join: true } : {}), ...(k + 1 < parts.length ? { joinNext: true } : {}) }));
 });
 
 // narration：每个画幅插的停顿不同，拼好的旁白也各存一份

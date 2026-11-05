@@ -18,7 +18,7 @@ export type CamMove = { t0: number; t1: number; from: Cam; to: Cam; focus?: stri
 export type Timeline = {
   id: string; canvas: { w: number; h: number; fps: number }; fps: number; durationInFrames: number; duration: number;
   narration: string; audio?: string; strokes: Stroke[]; penTrack: PenSeg[]; effects: Effect[];
-  subtitles: { text: string; lines: string[]; t0: number; t1: number }[];
+  subtitles: { text: string; lines: string[]; t0: number; t1: number; join?: boolean; joinNext?: boolean }[]; // join/joinNext：同一句拆出的几张，换卡时不淡出淡入
   style: Style; platforms: string[];
   camera: CamMove[]; view: { cx: number; cy: number };
   pencil?: { sway: number[]; lift: number[]; edge?: number[] }; // 编译器预算并平滑好的铅笔姿态曲线（逐帧）；edge = 避开边缘/字幕的转角

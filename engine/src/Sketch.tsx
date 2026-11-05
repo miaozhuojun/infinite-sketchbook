@@ -256,7 +256,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
       {sub && (
         <div style={{
           position: 'absolute', left: tl.sub.cx - tl.sub.width / 2, width: tl.sub.width, top: tl.sub.top - st.subtitle.plate.padY, display: 'flex', justifyContent: 'center',
-          opacity: Math.min(progress(t, sub.t0, sub.t0 + 0.12), 1 - progress(t, sub.t1 - 0.12, sub.t1)),
+          opacity: Math.min(sub.join ? 1 : progress(t, sub.t0, sub.t0 + 0.12), sub.joinNext ? 1 : 1 - progress(t, sub.t1 - 0.12, sub.t1)), // 同一句拆出的几张之间不淡出淡入
         }}>
           <div style={{
             background: st.palette.plate, opacity: st.subtitle.plate.opacity, borderRadius: st.subtitle.plate.radius,

@@ -224,6 +224,15 @@ export function validateBeats(beats, style, reg) {
     if (anchor && !fs.readFileSync(fp, 'utf8').includes(anchor)) E(`facts[${i}].source`, `资料文件里找不到「${anchor}」`);
   });
 
+  // 念法：本机品牌配置（brand.local.json 的 spoken）里写了某个词怎么念（「锟仔ai科学」念「锟仔爱科学」，不是一个个字母读），
+  // 旁白稿和分镜 text 就要写念法，字幕 caption 和画面上的字照旧（用户听 E01 v17：ai 被读成两个字母）
+  const BRAND = path.join(ENGINE, 'brand.local.json');
+  const say = fs.existsSync(BRAND) ? JSON.parse(fs.readFileSync(BRAND, 'utf8')).spoken ?? {} : {};
+  for (const [w, s] of Object.entries(say)) {
+    if ((beats.narration?.script ?? '').includes(w)) E('narration.script', `旁白稿里的「${w}」要写成念法「${s}」（字幕 caption 和画面上的字照旧写「${w}」）`);
+    beats.phrases.forEach((p, i) => { if (p.text.includes(w)) E(`phrases[${i}].text`, `「${w}」要写成念法「${s}」，字幕写在 caption 里`); });
+  }
+
   // 字幕：每个画幅下不超过规定行数
   for (const [t, tg] of Object.entries(style.targets)) {
     for (const p of beats.phrases) {

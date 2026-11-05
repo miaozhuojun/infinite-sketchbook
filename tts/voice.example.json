@@ -30,5 +30,13 @@
  "extraRounds": 0,
  "takeMinConsistency": 0,
  "minConsistency": 0,
- "consistencyNote": "可选：每句都是同一个人。按句生成时音色会一句句地飘；takeMinConsistency 是生成时每句和整集平均音色的相似度下限（不够就换种子），minConsistency 是旁白检查里最低一句的下限，先量你满意的配音再定"
+ "consistencyNote": "可选：每句都是同一个人。按句生成时音色会一句句地飘；takeMinConsistency 是生成时每句和整集平均音色的相似度下限（不够就换种子），minConsistency 是旁白检查里最低一句的下限，先量你满意的配音再定",
+ "candidates": 1,
+ "tones": {},
+ "sentenceLevelDb": 0,
+ "spectralMatchDb": 0,
+ "maxLevelSpreadDb": 0,
+ "takeMaxEcho": 0,
+ "maxEcho": 0,
+ "packNote": "声音包（VOICE_PIPELINE.md）：build_voice.py <目录> 从 real 里挑片段做主参考，calibrate_voice.py <目录> --apply 校准并写进 pack（baseF0、baseRate、ltas）。candidates>1 时每句按 tones 里的语气目标挑候选；sentenceLevelDb 统一每句基础响度，spectralMatchDb 让每句频谱向声音包轻轻对齐"
 }

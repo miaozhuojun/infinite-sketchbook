@@ -51,10 +51,12 @@ const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、�
 // 1. 配音：分镜里写了旁白稿就每次都按稿生成（内置回转检查、开头多字修剪、换种子重试）。
 // 配音按句缓存，没改的句子直接复用，所以每次跑也只多十几秒；这样音频一定和当前的稿子对得上，不会拿旧音频配新稿
 const audioPath = path.join('public', beats.narration.audio || '');
+// 配音没配出来就停在这里：后面的编译、渲染、旁白检查都会拿上一版的配音去做，白跑几分钟，报告还会误导（E01 v17 实测）
+let voiceOk = true;
 // 合成提示音（演示分镜，narration.synthetic）不走克隆配音，音频由夹具脚本生成
 if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
-  if (PY_MLX) { if (run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries(beats.narration.reseed ?? {}).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
+  if (PY_MLX) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries(beats.narration.reseed ?? {}).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`]), ...Object.entries(beats.narration.tone ?? {}).flatMap(([t, m]) => ['--tone', `${t}=${m}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
   else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
   else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
     problems: [`没有音频 ${audioPath}，也没有本地配音环境（PY_MLX）：在 tts/ 装好配音环境，或把音频放到这个位置`] });
@@ -63,8 +65,9 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
 // 2. 各画幅：编译 → 混音 → 渲染 → 写版权信息与存证 → 检查 → 设备预览
 // 本机配置了品牌（brand.local.json，不进仓库）才加水印、写版权信息、记存证；没配置就在报告里写明
 const branded = fs.existsSync('brand.local.json');
-if (libOk && beatsOk && !branded) skip('水印、版权信息与存证', '本机没有配置品牌（brand.local.json）');
-if (libOk && beatsOk) {
+if (!voiceOk) skip('编译、渲染与成片检查', '配音生成没通过，没有和当前稿子对得上的配音（见上面「配音生成」）');
+if (libOk && beatsOk && voiceOk && !branded) skip('水印、版权信息与存证', '本机没有配置品牌（brand.local.json）');
+if (libOk && beatsOk && voiceOk) {
   const compiled = targets.filter((t) => run(`[${t}] 编译（时间线、版面、镜头）`, 'node', ['compiler/compile.mjs', beatsPath, '--target', t]));
   spawnSync('node', ['compiler/gen-compositions.mjs']);
   if (DRAFT) {

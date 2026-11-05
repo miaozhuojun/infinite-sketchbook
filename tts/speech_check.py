@@ -139,6 +139,25 @@ if min_cons:
     cs = sorted(((float(e @ cen), s2["text"]) for e, s2 in zip(E, spans2)))
     check("每句都是同一个人", cs[0][0] >= min_cons, f"{len(cs)} 句和整集平均音色的相似度最低 {cs[0][0]:.3f}（下限 {min_cons}），中位 {np.median([c for c, _ in cs]):.3f}；最不像的：" + "、".join(f"「{t[:8]}」{c:.3f}" for c, t in cs[:3]))
 
+# 0g/0h. 回声一致、基础响度一致（VOICE_PIPELINE.md）：在源配音上逐句量。用户听 E01 v16：一句有回音一句没有、句与句音量不一样
+max_echo, max_spread = voice.get("maxEcho", 0), voice.get("maxLevelSpreadDb", 0)
+if max_echo or max_spread:
+    from voice import echo_ms, pause_points, active_level_db
+    xs3, ssr3 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans3 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    ec, lv = [], []
+    for s3 in spans3:
+        seg = xs3[int(s3["start"] * ssr3):int(s3["end"] * ssr3)]
+        ec.append((echo_ms(seg, ssr3, pause_points(timing0["words"], s3["start"], s3["end"])), s3["text"]))
+        lv.append((active_level_db(seg, ssr3), s3["text"]))
+    if max_echo:
+        ec.sort(reverse=True)
+        check("每句没有回声", ec[0][0] <= max_echo, f"{len(ec)} 句停顿处衰减 20dB 的时间最长 {ec[0][0]:.0f}ms（上限 {max_echo}；干声约 60–90ms），中位 {np.median([e for e, _ in ec]):.0f}ms；最长的：" + "、".join(f"「{t[:8]}」{e:.0f}ms" for e, t in ec[:3]))
+    if max_spread:
+        lv.sort()
+        sp = lv[-1][0] - lv[0][0]
+        check("每句基础音量一致", sp <= max_spread, f"{len(lv)} 句基础响度最响和最轻差 {sp:.1f}dB（上限 {max_spread}dB）：最轻「{lv[0][1][:8]}」{lv[0][0]:.1f}dB，最响「{lv[-1][1][:8]}」{lv[-1][0]:.1f}dB")
+
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)

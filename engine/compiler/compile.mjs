@@ -659,11 +659,14 @@ phrases.forEach((p, pi) => {
     const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
     else if (tc.overview) {
-      // 全景：连着几句都是 overview 时只走一次——从第一句开头起，到最后一句说完时正好拉到整张纸（慢慢地、一直在动，不在中途停）
+      // 全景：连着几句都是 overview 时只走一次——从第一句开头起，一直在动、不在中途停，到最后一句说完时拉到整张纸。
+      // 风格里写了 overviewMaxSec 时最多走这么久，落在这段时间里最后一句说完的地方，之后停在整张纸上（用户看 E01 v17：39 秒拉完稍慢）
       if (phrases[pi - 1]?.camera !== 'overview') {
         let last = pi;
         while (phrases[last + 1]?.camera === 'overview') last++;
-        const t0 = Math.max(report.phrases[pi].at, holdUntil), t1 = Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], report.phrases[last].audioEnd);
+        const t0 = Math.max(report.phrases[pi].at, holdUntil), cap = t0 + (M.overviewMaxSec ?? Infinity);
+        const ends = report.phrases.slice(pi, last + 1).map((q) => q.audioEnd), end = ends.at(-1) <= cap ? ends.at(-1) : ends.filter((e) => e <= cap).at(-1) ?? cap;
+        const t1 = Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], end);
         pushMove(t0, t1, tc);
         camera[camera.length - 1].curve = 'glide';
         newChapter.add(camera[camera.length - 1]);

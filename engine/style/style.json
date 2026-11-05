@@ -74,6 +74,7 @@
   "maxSpeedBoost": 1.8,
   "aha": { "lead": 0.3, "moveDur": 0.9, "hold": 0.8, "minPush": 1.1, "maxPush": 1.35, "pad": 110, "zoomMax": 1.5, "holdAfter": 0.5, "pauseAfter": 0.6, "maxOffCenter": 0.2, "offCenterNote": "推近后焦点中心离取景框中心不超过取景框宽、高的这个比例（最偏落在三分线附近）；只求不切字时，推近会把焦点挤到画面顶上、下面大半空着" },
   "finalOverviewHold": 1.4,
+  "overviewMaxSec": null, "overviewNote": "片尾全景（camera=overview）从近景拉到整张纸最多走多少秒，落在这段时间里最后一句说完的地方，之后停在整张纸上；null＝一直拉到最后一句说完",
   "minCameraGap": 1.2,
   "chapterMoveMin": 1.8, "chapterMoveNote": "换节时镜头沿纸面移过去至少这么久（秒），前一句太短时让第一笔晚一点落；审片 E01 v1：一次换节只用 1.05 秒，像甩镜头"
  },

@@ -8,11 +8,13 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
 import { GL } from './qa/gl.mjs';
+import { loadStyle } from './compiler/validate.mjs';
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
 const arg = (k) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : null);
-const styleJson = JSON.parse(fs.readFileSync('style/style.json', 'utf8'));
+// 生效的风格（默认 < 本机私有创作配置 < 这一期分镜）：画幅、发布清单也按它来，私有配置里定的「只出横版、各平台都传横版」才会生效
+const styleJson = loadStyle(beats);
 const DRAFT = process.argv.includes('--draft');
 // 画幅：命令行 --targets 优先，其次分镜里的 targets，否则用风格规范的默认母版（9:16 + 16:9）。每个平台只传一个文件，见报告里的发布清单
 const targets = arg('--targets')?.split(',') ?? beats.targets ?? styleJson.defaultTargets;

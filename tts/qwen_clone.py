@@ -162,6 +162,7 @@ def synth_sentence(text, seed0, R):
     """生成一句并自检：拼音错误率必须为 0、不能有字中间掉音、不能掉嗓子（浊音掉到这个孩子最低自然音高以下）；开头串进多余字就剪掉；不过就换种子重来。"""
     ref = re.sub(PUNCT, "", text).lower().translate(DIG)
     tmp = args.out + ".sent.wav"
+    best = None  # 只差背景分的候选里最干净的一条
     for attempt in range(args.max_tries):
         seed = seed0 + attempt
         mx.random.seed(seed)
@@ -204,8 +205,14 @@ def synth_sentence(text, seed0, R):
         bk = None
         if GEN_BAK and (bk := bak_of(audio, sr)) < GEN_BAK:
             print(f"    种子 {seed}：背景不干净（DNSMOS BAK {bk:.2f}，要 ≥{GEN_BAK}），换种子重来")
+            if not best or bk > best[5]:
+                best = (audio, sr, seed, note, rel, bk)
             continue
         return audio, sr, seed, note, rel, bk
+    # 别的自检都过、只是背景分没到：用这几次里最干净的一条（背景分只是筛子，不该让整集配不出来）
+    if best:
+        print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
+        return best
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
 
 

@@ -781,7 +781,9 @@ const subtitles = phrases.flatMap((p, i) => {
   const n = strip(cap).length, m = p.i1 - p.i0 + 1;
   let done = 0;
   const starts = parts.map((x) => { const at = t0 + (charTimes[p.i0 + Math.min(m - 1, Math.round((done / n) * m))].s - p.cutIn); done += strip(x).length; return Math.max(t0, at); });
-  return parts.map((x, k) => ({ text: x.replace(/[，、；：,;:]$/, ''), lines: breakLines(x.replace(/[，、；：,;:]$/, ''), TGT.sub.size, TGT.sub.width), t0: r2(k ? starts[k] : t0), t1: k + 1 < parts.length ? r2(starts[k + 1] - 0.02) : t1 }));
+  // 同一句拆出的几张首尾相接、换卡时不淡出淡入（join：接着上一张；joinNext：下一张接着它）。审片 E01 v20：淡出淡入让一句话中间字幕闪一下
+  return parts.map((x, k) => ({ text: x.replace(/[，、；：,;:]$/, ''), lines: breakLines(x.replace(/[，、；：,;:]$/, ''), TGT.sub.size, TGT.sub.width), t0: r2(k ? starts[k] : t0), t1: k + 1 < parts.length ? r2(starts[k + 1]) : t1,
+    ...(k ? { join: true } : {}), ...(k + 1 < parts.length ? { joinNext: true } : {}) }));
 });
 
 // narration：每个画幅插的停顿不同，拼好的旁白也各存一份

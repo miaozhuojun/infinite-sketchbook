@@ -186,6 +186,23 @@ const computePhraseCam = () => {
   const acc = [], out = [];
   for (const p of phrases) {
     if (p.chapter) acc.length = 0;
+    // 全景（camera=overview）：这句不画新东西，镜头把整集画过的所有东西都框进来（片尾：从近景慢慢拉到整张纸）。
+    // 可以比 zoomMin 更远（整张纸本来就大），下限 overviewZoomMin
+    if (p.camera === 'overview') {
+      const all = [...geo.values()].flat();
+      if (all.length) {
+        const b = bboxOf(all);
+        out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(M.overviewZoomMin ?? 0.1, Math.min(ZMAX, fitZ(b, 70))), overview: true });
+      } else out.push(null);
+      continue;
+    }
+    // 回看：这句不画新东西，镜头回到前面画过的那几样（片尾回顾时沿纸面一样样看回去）
+    if (p.revisit?.length) {
+      // 这句圈出、回描的笔画也要框进来：圈比被圈的字大一圈，只框原元素时圈会出画（E01 v9 竖版「写不完」）
+      const b = bboxOf([...p.revisit, ...p.actions.map((a) => a.id)].flatMap((id) => geo.get(id) ?? []));
+      out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(ZMIN, Math.min(ZMAX, fitZ(b, 70))), revisit: true });
+      continue;
+    }
     for (const a of p.actions) if (geo.has(a.id)) acc.push(...geo.get(a.id));
     if (!acc.length) { out.push(null); continue; }
     const b = bboxOf(acc);
@@ -199,7 +216,9 @@ const GAP = style.type.labelGap;                     // 标签与其他元素笔
 const GROW = style.type.maxAutoGrow;
 const nextStep = (sz) => style.type.scale.find((v) => v > sz + 0.01);
 const fixes = [];
-const textPx = (a, cams) => a.size * Math.min(cams[phraseOf.get(a.id)]?.z ?? 1, cams[cams.length - 1]?.z ?? 1) * 0.74;
+// 片尾的整张纸全景（camera=overview）是看全貌的，不要求每个字都看得清；按最后一个普通取景算（不然所有字都会被放大到挤在一起）
+const lastCam = (cams) => [...cams].reverse().find((c) => c && !c.overview);
+const textPx = (a, cams) => a.size * Math.min(cams[phraseOf.get(a.id)]?.z ?? 1, lastCam(cams)?.z ?? 1) * 0.74;
 
 // 1) 字号自动补足：按本画幅最小字高，沿字号阶梯一级一级放大（不超过原字号的 maxAutoGrow 倍；放大会改变取景，迭代几轮）
 let phraseCam;
@@ -451,6 +470,12 @@ function schedule(boost) {
       // 只看这句和上一句时，隔一句的推近（1.5 倍）被漏掉，铅笔挪位按 1.25 倍算快了，屏幕上一帧跳 63px（E01 v4 9:16）
       const z = Math.max(...targetCam.slice(Math.min(penPhrase, pi), pi + 1).map((c) => c?.z ?? 1), targetCam[pi - 1]?.z ?? 0);
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
+      // 回看之后：镜头停在前面某一节，铅笔还留在最后写字的地方（多半在这一镜画外）。按原处起飞，镜头和笔从不同的地方出发，
+      // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
+      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === p.actions[0]) {
+        const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
+        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
+      }
       const fromPos = penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
       const travel = moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
       let t = Math.max(cue - (a.lead ?? PEN.cueLead), penFree + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）
@@ -463,14 +488,19 @@ function schedule(boost) {
       const st = [first.x, first.y], wait = t - penFree;
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
-      const flight = penPos !== OFF && p.chapter && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
+      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
       const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
-      if (flight) t = Math.max(t, takeoff + (M.chapterMoveMin ?? 0));
-      if (penPos === OFF || wait - travel < PK.minRest || flight) {
-        if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
-        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true } : {}) });
-      } else {
+      // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
+      // 距离取笔和镜头里飞得远的那个：镜头是在两个取景中心之间飞，常比笔飞得远（审片 v9：进尾卡那次镜头平均 1350–1455px/s，超过上限）
+      const camFar = targetCam[pi - 1] && targetCam[pi] ? Math.hypot(targetCam[pi].x - targetCam[pi - 1].x, targetCam[pi].y - targetCam[pi - 1].y) : 0;
+      const flyDur = Math.max(M.chapterMoveMin ?? 0, (Math.max(dist(fromPos, st), camFar) * z) / (M.flightSpeed ?? V_MOVE));
+      if (flight) t = Math.max(t, takeoff + flyDur);
+      // 起飞后离落笔还早（提示词在句尾）：按正常时长飞到，到了先停着等，不把整句都拉成一次慢吞吞的飞行（审片 v10：回顾第一站飞了 6.3 秒）
+      const slack = flight ? t - takeoff - Math.max(flyDur, travel) : 0;
+      // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
+      const pickRest = (from, freeAt, views, allowOff = true) => {
         const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
         const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
@@ -489,7 +519,6 @@ function schedule(boost) {
         }));
         // 等的这段时间里镜头可能推近再拉回（上一句是顿悟）：停的位置在这几个取景里都要看得到，
         // 只看下一镜的话，推近时笔会被镜头拖着滑出画面边（实测 9x16「灯就亮！」推近时笔停在 ×4 旁被推出上边）
-        const views = [targetCam[pi - 1], focusCam[pi - 1], cam].filter(Boolean);
         const inNext = (q) => views.every((c) => { const sx = (q[0] - c.x) * c.z + VIEW.cx, sy = (q[1] - c.y) * c.z + VIEW.cy; return sx > fr.l + 40 && sx < fr.r - 200 && sy > fr.t + 40 && sy < fr.b - 200; });
         const around = (o) => [[0, 0], [1, 1], [1.4, 0], [1, -0.7], [0, 1.3], [-0.8, 1.1], [2, 2], [2.4, 0], [0, 2.4], [-1.6, 2], [2, -1.2]].map(([dx, dy]) => [o[0] + (dx * PK.dist) / z, o[1] + (dy * PK.dist) / z]);
         // 再加一张覆盖整个取景框的粗网格：内容密的地方（16x9 左边一列输入、声波、权重），这两处四周笔身朝右下都会压到字，
@@ -499,12 +528,26 @@ function schedule(boost) {
           const sx = fr.l + 60 + ((fr.r - 260 - fr.l - 60) * gx) / 6, sy = fr.t + 60 + ((fr.b - 260 - fr.t - 60) * gy) / 4;
           grid.push([cam.x + (sx - VIEW.cx) / cam.z, cam.y + (sy - VIEW.cy) / cam.z]);
         }
-        const cands = [...around(penPos), ...around(st), ...grid].filter(inNext).map((q) => ({ q, c: cost(q) + dist(q, penPos) / 400 }));
-        const off = offRight([targetCam[pi - 1], targetCam[pi], focusCam[pi - 1]], penPos[1]);
+        const cands = [...around(from), ...around(st), ...grid].filter(inNext).map((q) => ({ q, c: cost(q) + dist(q, from) / 400 }));
+        const off = allowOff ? offRight([targetCam[pi - 1], targetCam[pi], focusCam[pi - 1]], from[1]) : null;
         if (off) cands.push({ q: off, c: 60, off: true });
         // 时间够不够：过去、至少停 0.2 秒、再回到下一笔起点
-        const fits = ({ q }) => penFree + moveDur(dist(penPos, q), 0.12, z) + 0.2 <= t - moveDur(dist(q, st), 0.12, z);
+        const fits = ({ q }) => freeAt + moveDur(dist(from, q), 0.12, z) + 0.2 <= t - moveDur(dist(q, st), 0.12, z);
         const best = cands.filter(fits).sort((x, y) => x.c - y.c)[0];
+        return best;
+      };
+      if (flight && slack > 1) {
+        // 飞到新纸面上先找空白处停着（审片 v11：落在要圈的「写不完」上等了 3 秒，笔身压着「不完」），快到提示词再挪到落笔处
+        const best = pickRest(st, takeoff + flyDur, [cam], false);
+        const land = best ? best.q : st, back = best ? moveDur(dist(land, st), 0.12, z) : 0;
+        penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: fromPos, to: land, chapter: true, phrase: pi });
+        penTrack.push({ kind: 'rest', t0: takeoff + flyDur, t1: t - back, at: land });
+        if (back > 0.01) penTrack.push({ kind: 'move', t0: t - back, t1: t, from: land, to: st });
+      } else if (penPos === OFF || wait - travel < PK.minRest || flight) {
+        if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
+        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true, phrase: pi } : {}) });
+      } else {
+        const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1], cam].filter(Boolean));
         if (!best) {
           if (t - travel > penFree) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
           penTrack.push({ kind: 'move', t0: t - travel, t1: t, from: penPos, to: st });
@@ -547,6 +590,9 @@ function schedule(boost) {
       const cues = report.actions.filter((x) => x.phrase === pi).map((x) => x.cue);
       const arrive = Math.max(cues.length ? Math.min(...cues) - AHA.lead : audioStart, phraseStartFree + AHA.moveDur);
       release = Math.max(arrive + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
+    } else if (p.revisit?.length) {
+      // 回看：镜头移到位、这句说完，下一句才起飞（release 减去一次普通移动就是起飞时刻，见 takeoff）
+      release = Math.max(penFree + AHA.hold, T + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0) + AHA.hold, audioEnd + AHA.holdAfter) + M.cameraMove[0] + M.cameraMove[1];
     } else release = 0;
     T = nextT;
   });
@@ -610,9 +656,28 @@ phrases.forEach((p, pi) => {
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位
     // 换节：镜头和铅笔的飞行同起同落（见排程里的 flight）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
-    const fly = p.chapter && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02);
+    const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
-    else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
+    else if (tc.overview) {
+      // 全景：连着几句都是 overview 时只走一次——从第一句开头起，一直在动、不在中途停，到最后一句说完时拉到整张纸。
+      // 风格里写了 overviewMaxSec 时最多走这么久，落在这段时间里最后一句说完的地方，之后停在整张纸上（用户看 E01 v17：39 秒拉完稍慢）
+      if (phrases[pi - 1]?.camera !== 'overview') {
+        let last = pi;
+        while (phrases[last + 1]?.camera === 'overview') last++;
+        const t0 = Math.max(report.phrases[pi].at, holdUntil), cap = t0 + (M.overviewMaxSec ?? Infinity);
+        const ends = report.phrases.slice(pi, last + 1).map((q) => q.audioEnd), end = ends.at(-1) <= cap ? ends.at(-1) : ends.filter((e) => e <= cap).at(-1) ?? cap;
+        const t1 = Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], end);
+        pushMove(t0, t1, tc);
+        camera[camera.length - 1].curve = 'glide';
+        newChapter.add(camera[camera.length - 1]);
+      }
+    } else if (tc.revisit) {
+      // 回看：从句子开头起移，走得和换节一样从容（距离往往有好几屏，按普通取景的 1.6 秒走会晃）；不和前后合并
+      const t0 = Math.max(report.phrases[pi].at, holdUntil);
+      const from = camera[camera.length - 1].to, far = Math.hypot(tc.x - from.x, tc.y - from.y) * Math.max(tc.z, from.z);
+      pushMove(t0, t0 + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0, far / (M.flightSpeed ?? V_MOVE)), tc);
+      newChapter.add(camera[camera.length - 1]);
+    } else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
     if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);
   }
 });
@@ -634,7 +699,12 @@ if (focusCam[phrases.length - 1]) {
 }
 const lastCamEnd = camera[camera.length - 1].t1;
 // 自检：每一笔画完的时刻都在取景框内
-const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0), e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } return c; };
+// 和渲染端 src/timeline.ts 的 camLerp 同一套插值（glide：中间匀速、两头各 1.5 秒缓起缓停、缩放按对数）
+// 和渲染端 src/timeline.ts 的 glideAt 同一个公式：绕两头取景里屏幕位置相同的纸面点缩放，起始画面里的东西只往它靠、不出画
+const glideAt = (f, t, e) => { const z = f.z * Math.pow(t.z / f.z, e); if (Math.abs(t.z - f.z) < 1e-6) return { x: f.x + (t.x - f.x) * e, y: f.y + (t.y - f.y) * e, z };
+  const px = (t.x * t.z - f.x * f.z) / (t.z - f.z), py = (t.y * t.z - f.y * f.z) / (t.z - f.z); return { x: px + (f.x - px) * f.z / z, y: py + (f.y - py) * f.z / z, z }; };
+const glideE = (u, dur) => { const r = Math.min(0.45, 1.5 / Math.max(dur, 1e-6)), k = 1 / (2 * r * (1 - r)); return u < r ? u * u * k : u > 1 - r ? 1 - (1 - u) * (1 - u) * k : (u - r / 2) / (1 - r); };
+const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0); if (m.curve === 'glide') c = glideAt(m.from, m.to, glideE(u, m.t1 - m.t0)); else { const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } } return c; };
 for (const s of strokes) {
   const c = camAt(s.t1), pr = new svgPathProperties(s.d);
   for (let k = 0; k <= 12; k++) {
@@ -744,7 +814,9 @@ const out = {
     // 换位时刻：每 every 秒一次，在前后 swapWindow 秒里挑——优先落在两句旁白之间的停顿里，并避开顿悟句（见 watermark.swapNote）
     const ahaWin = report.phrases.filter((p) => p.role === 'aha').map((p) => [p.at - WM.fade, p.audioEnd + AHA.holdAfter + WM.fade]);
     const pauses = report.phrases.slice(0, -1).map((p, i) => [p.audioEnd, report.phrases[i + 1].at]).filter(([a, b]) => b > a);
-    const okAt = (t) => !ahaWin.some(([a, b]) => t > a && t < b);
+    // 片尾镜头停在整张纸上、也不再落笔以后，画面上只剩水印会动，这时不换位（审片 E01 v18：228s 静止整板上水印淡出淡入）
+    const stillFrom = Math.max(...camera.map((m) => m.t1), ...out.strokes.map((s) => s.t1), 0) - WM.fade;
+    const okAt = (t) => !ahaWin.some(([a, b]) => t > a && t < b) && t < stillFrom;
     const swaps = [];
     for (let t = WM.every; t < end - WM.fade * 2; t += WM.every) {
       const near = (lst) => lst.filter((x) => Math.abs(x - t) <= WM.swapWindow && okAt(x) && x > (swaps.at(-1) ?? 0) + WM.fade * 2 && x < end - WM.fade * 2).sort((a, b) => Math.abs(a - t) - Math.abs(b - t))[0];

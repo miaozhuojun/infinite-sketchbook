@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BUILTINS, loadLibrary } from '../library/index.mjs';
-import { CJK, glyphData } from '../library/kit.mjs';
+import { CJK, glyphData, makeKit } from '../library/kit.mjs';
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROJECT = path.resolve(ENGINE, '../..');
@@ -166,6 +166,8 @@ export function validateBeats(beats, style, reg) {
         for (const k of Object.keys(obj)) if (!def.params[k] && !SCHED_KEYS.has(k)) warnings.push(`${where}.${k}：组件 ${a.type} 没有这个参数，会被忽略`);
       };
       checkParams(a, A, false);
+      // 试画一次：字体里没有的字（如全角逗号）、组件画不出来的参数，在校验时就报出位置，不等编译时崩（E01 v8 的「把世界拆开，」）
+      if (reg.get(a.type)) try { reg.get(a.type).draw({ ...a, x: a.x ?? 0, y: a.y ?? 0 }, makeKit(a, style, reg)); } catch (e) { E(A, `画不出来：${e.message}`); }
       // 手写汉字太小会糊（统一笔宽下笔画多的字糊成一团）：含汉字的文字/标签不得小于 type.minCjkSize，各画幅覆盖也查
       const cjkSize = (obj, where) => {
         const m = { ...a, ...obj };

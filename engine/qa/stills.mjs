@@ -6,16 +6,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { openBrowser, renderStill, selectComposition } from '@remotion/renderer';
+import { GL } from './gl.mjs';
 
 const [comp, jobsPath] = process.argv.slice(2);
 const jobs = JSON.parse(fs.readFileSync(jobsPath, 'utf8'));
 const serveUrl = await bundle({ entryPoint: path.resolve('src/index.ts'), publicDir: path.resolve('public') });
-const browser = await openBrowser('chrome');
+// 本机是 Mac 时用 GPU 画（angle）：比默认快约三分之一，同一帧两次渲染逐像素一致（qa/gl.mjs）
+const browser = await openBrowser('chrome', { chromiumOptions: { gl: GL } });
 try {
   for (const j of jobs) {
     const inputProps = j.props ?? {};
-    const composition = await selectComposition({ serveUrl, id: comp, inputProps, puppeteerInstance: browser, logLevel: 'error' });
-    await renderStill({ serveUrl, composition, frame: j.frame, output: j.out, inputProps, puppeteerInstance: browser, logLevel: 'error' });
+    const composition = await selectComposition({ serveUrl, id: comp, inputProps, puppeteerInstance: browser, logLevel: 'error', chromiumOptions: { gl: GL } });
+    await renderStill({ serveUrl, composition, frame: j.frame, output: j.out, inputProps, puppeteerInstance: browser, logLevel: 'error', chromiumOptions: { gl: GL } });
   }
 } finally {
   await browser.close({ silent: true });

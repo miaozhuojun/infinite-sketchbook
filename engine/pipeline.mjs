@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
+import { GL } from './qa/gl.mjs';
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
@@ -97,7 +98,7 @@ if (libOk && beatsOk) {
     const id = `${beats.id}-${t}`, tl = `build/${id}.timeline.json`, video = path.join(outDir, `${t}.mp4`);
     const R = (name, cmd, args, opts) => runAsync(`[${t}] ${name}`, cmd, args, opts, L);
     if (!await R('混音', PY_QA, ['audio/mix.py', tl])) return;
-    if (!await renderLock(() => R('渲染', 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error']))) return;
+    if (!await renderLock(() => R('渲染', 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', ...(GL ? [`--gl=${GL}`] : [])]))) return;
     if (branded) await bookLock(() => R('版权信息与存证', PY_QA, ['qa/provenance.py', beatsPath, tl, video]));
     // 旁白检查每个画幅都跑：各画幅的旁白是分别拼、分别混的（用户在横版里听出的畸变，原来只查竖版）
     const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';

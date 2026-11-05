@@ -700,8 +700,11 @@ if (focusCam[phrases.length - 1]) {
 const lastCamEnd = camera[camera.length - 1].t1;
 // 自检：每一笔画完的时刻都在取景框内
 // 和渲染端 src/timeline.ts 的 camLerp 同一套插值（glide：中间匀速、两头各 1.5 秒缓起缓停、缩放按对数）
+// 和渲染端 src/timeline.ts 的 glideAt 同一个公式：绕两头取景里屏幕位置相同的纸面点缩放，起始画面里的东西只往它靠、不出画
+const glideAt = (f, t, e) => { const z = f.z * Math.pow(t.z / f.z, e); if (Math.abs(t.z - f.z) < 1e-6) return { x: f.x + (t.x - f.x) * e, y: f.y + (t.y - f.y) * e, z };
+  const px = (t.x * t.z - f.x * f.z) / (t.z - f.z), py = (t.y * t.z - f.y * f.z) / (t.z - f.z); return { x: px + (f.x - px) * f.z / z, y: py + (f.y - py) * f.z / z, z }; };
 const glideE = (u, dur) => { const r = Math.min(0.45, 1.5 / Math.max(dur, 1e-6)), k = 1 / (2 * r * (1 - r)); return u < r ? u * u * k : u > 1 - r ? 1 - (1 - u) * (1 - u) * k : (u - r / 2) / (1 - r); };
-const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0); if (m.curve === 'glide') { const e = glideE(u, m.t1 - m.t0); c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z * Math.pow(m.to.z / m.from.z, e) }; } else { const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } } return c; };
+const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0); if (m.curve === 'glide') c = glideAt(m.from, m.to, glideE(u, m.t1 - m.t0)); else { const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } } return c; };
 for (const s of strokes) {
   const c = camAt(s.t1), pr = new svgPathProperties(s.d);
   for (let k = 0; k <= 12; k++) {
@@ -811,7 +814,9 @@ const out = {
     // 换位时刻：每 every 秒一次，在前后 swapWindow 秒里挑——优先落在两句旁白之间的停顿里，并避开顿悟句（见 watermark.swapNote）
     const ahaWin = report.phrases.filter((p) => p.role === 'aha').map((p) => [p.at - WM.fade, p.audioEnd + AHA.holdAfter + WM.fade]);
     const pauses = report.phrases.slice(0, -1).map((p, i) => [p.audioEnd, report.phrases[i + 1].at]).filter(([a, b]) => b > a);
-    const okAt = (t) => !ahaWin.some(([a, b]) => t > a && t < b);
+    // 片尾镜头停在整张纸上、也不再落笔以后，画面上只剩水印会动，这时不换位（审片 E01 v18：228s 静止整板上水印淡出淡入）
+    const stillFrom = Math.max(...camera.map((m) => m.t1), ...out.strokes.map((s) => s.t1), 0) - WM.fade;
+    const okAt = (t) => !ahaWin.some(([a, b]) => t > a && t < b) && t < stillFrom;
     const swaps = [];
     for (let t = WM.every; t < end - WM.fade * 2; t += WM.every) {
       const near = (lst) => lst.filter((x) => Math.abs(x - t) <= WM.swapWindow && okAt(x) && x > (swaps.at(-1) ?? 0) + WM.fade * 2 && x < end - WM.fade * 2).sort((a, b) => Math.abs(a - t) - Math.abs(b - t))[0];

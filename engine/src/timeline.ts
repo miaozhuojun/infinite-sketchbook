@@ -93,12 +93,18 @@ export function glideEase(u: number, dur: number, ramp = 1.5): number {
   if (u > 1 - r) return 1 - (1 - u) * (1 - u) * k;
   return (u - r / 2) / (1 - r);
 }
+// 绕一个不动点缩放：两头取景里屏幕位置相同的那个纸面点 P = (c1·z1 − c0·z0)/(z1 − z0) 一直钉在屏幕上同一处，
+// 别的东西都沿直线朝它收（拉远）或离开它（推近）。起始画面里的字只会往 P 靠，不会先漂出画面再回来
+// （审片 E01 v18：x/y 线性、z 按对数插值时轨迹是弯的，拉远途中第 6 节标题从左边出画 13 秒）
+export function glideAt(from: Cam, to: Cam, e: number): Cam {
+  const z = from.z * Math.pow(to.z / from.z, e);
+  if (Math.abs(to.z - from.z) < 1e-6) return { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e, z };
+  const px = (to.x * to.z - from.x * from.z) / (to.z - from.z), py = (to.y * to.z - from.y * from.z) / (to.z - from.z);
+  return { x: px + (from.x - px) * from.z / z, y: py + (from.y - py) * from.z / z, z };
+}
 export function camLerp(m: CamMove, t: number): Cam {
   const u = progress(t, m.t0, m.t1);
-  if (m.curve === 'glide') {
-    const e = glideEase(u, m.t1 - m.t0);
-    return { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z * Math.pow(m.to.z / m.from.z, e) };
-  }
+  if (m.curve === 'glide') return glideAt(m.from, m.to, glideEase(u, m.t1 - m.t0));
   const e = ease(u);
   return { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e };
 }

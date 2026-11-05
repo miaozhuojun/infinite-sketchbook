@@ -130,6 +130,8 @@ export function validateBeats(beats, style, reg) {
     if (p.camera && !['focus', 'overview'].includes(p.camera)) E(`${P}.camera`, '只能是 focus（推近这句的元素）或 overview');
     if (p.chapter !== undefined && (typeof p.chapter !== 'string' || ![...p.chapter].length || [...p.chapter].length > style.chapters.titleMax)) E(`${P}.chapter`, `节名要写，最多 ${style.chapters.titleMax} 个字（B 站分段章节标题要少于 16 个汉字）`);
     if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
+    if (p.camera === 'overview' && (p.actions || []).length) E(`${P}.camera`, 'overview（整张纸全景）的句子不画新东西（actions 要空着）');
+    if (p.camera === 'overview' && p.revisit) E(`${P}.camera`, 'overview 和 revisit 不能同时用');
     if (p.revisit !== undefined) {
       // 回看：镜头回到前面画过的元素，这句本身不画（片尾回顾）
       if (!Array.isArray(p.revisit) || !p.revisit.length) E(`${P}.revisit`, '要列出前面画过的元素 id');

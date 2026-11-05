@@ -186,6 +186,16 @@ const computePhraseCam = () => {
   const acc = [], out = [];
   for (const p of phrases) {
     if (p.chapter) acc.length = 0;
+    // 全景（camera=overview）：这句不画新东西，镜头把整集画过的所有东西都框进来（片尾：从近景慢慢拉到整张纸）。
+    // 可以比 zoomMin 更远（整张纸本来就大），下限 overviewZoomMin
+    if (p.camera === 'overview') {
+      const all = [...geo.values()].flat();
+      if (all.length) {
+        const b = bboxOf(all);
+        out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(M.overviewZoomMin ?? 0.1, Math.min(ZMAX, fitZ(b, 70))), overview: true });
+      } else out.push(null);
+      continue;
+    }
     // 回看：这句不画新东西，镜头回到前面画过的那几样（片尾回顾时沿纸面一样样看回去）
     if (p.revisit?.length) {
       // 这句圈出、回描的笔画也要框进来：圈比被圈的字大一圈，只框原元素时圈会出画（E01 v9 竖版「写不完」）
@@ -206,7 +216,9 @@ const GAP = style.type.labelGap;                     // 标签与其他元素笔
 const GROW = style.type.maxAutoGrow;
 const nextStep = (sz) => style.type.scale.find((v) => v > sz + 0.01);
 const fixes = [];
-const textPx = (a, cams) => a.size * Math.min(cams[phraseOf.get(a.id)]?.z ?? 1, cams[cams.length - 1]?.z ?? 1) * 0.74;
+// 片尾的整张纸全景（camera=overview）是看全貌的，不要求每个字都看得清；按最后一个普通取景算（不然所有字都会被放大到挤在一起）
+const lastCam = (cams) => [...cams].reverse().find((c) => c && !c.overview);
+const textPx = (a, cams) => a.size * Math.min(cams[phraseOf.get(a.id)]?.z ?? 1, lastCam(cams)?.z ?? 1) * 0.74;
 
 // 1) 字号自动补足：按本画幅最小字高，沿字号阶梯一级一级放大（不超过原字号的 maxAutoGrow 倍；放大会改变取景，迭代几轮）
 let phraseCam;
@@ -646,7 +658,16 @@ phrases.forEach((p, pi) => {
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
     const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
-    else if (tc.revisit) {
+    else if (tc.overview) {
+      // 全景：连着几句都是 overview 时只走一次——从第一句开头起，到最后一句说完时正好拉到整张纸（慢慢地、一直在动，不在中途停）
+      if (phrases[pi - 1]?.camera !== 'overview') {
+        let last = pi;
+        while (phrases[last + 1]?.camera === 'overview') last++;
+        const t0 = Math.max(report.phrases[pi].at, holdUntil), t1 = Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], report.phrases[last].audioEnd);
+        pushMove(t0, t1, tc);
+        newChapter.add(camera[camera.length - 1]);
+      }
+    } else if (tc.revisit) {
       // 回看：从句子开头起移，走得和换节一样从容（距离往往有好几屏，按普通取景的 1.6 秒走会晃）；不和前后合并
       const t0 = Math.max(report.phrases[pi].at, holdUntil);
       const from = camera[camera.length - 1].to, far = Math.hypot(tc.x - from.x, tc.y - from.y) * Math.max(tc.z, from.z);

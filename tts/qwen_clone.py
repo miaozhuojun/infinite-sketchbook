@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import load_voice, similarity, pitch_drops, weak_chars, voiced_flatness
+from voice import load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -279,11 +279,22 @@ for i, sent in enumerate(sents):
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
     else:
-        try:
-            audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
-        except SystemExit:
+        # 默认参考音先多试几轮（每轮 max_tries 个新种子）：换参考音会让这一句听着像换了个人（用户听 E01 v15），实在不行才换
+        res = None
+        for r in range(1 + voice.get("extraRounds", 0)):
+            try:
+                res = synth_sentence(sent, seed_of(sent) + r * args.max_tries, ref_for(sent))
+                if r:
+                    res = res[:3] + ((res[3] + "；" if res[3] else "") + f"多试了 {r} 轮",) + res[4:]
+                break
+            except SystemExit:
+                if r < voice.get("extraRounds", 0):
+                    print(f"  「{sent}」{args.max_tries} 次没过，换下一轮种子再试")
+        if res:
+            audio, sr, seed, note, rel, bk = res
+        else:
             if not FALLBACK or sent.strip() in mood_of:
-                raise
+                raise SystemExit(f"「{sent}」试满 {(1 + voice.get('extraRounds', 0)) * args.max_tries} 次都没过，需要人工处理")
             print(f"  「{sent}」用默认参考音 {args.max_tries} 次都没过，改用「{FALLBACK}」参考音")
             open(fb_mark, "w").write(FALLBACK)
             mood_of[sent.strip()] = FALLBACK
@@ -325,6 +336,41 @@ for rnd in range(4):
         key = os.path.join(CACHE, cache_key(sents[i]))
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+# 每句都是同一个人：按句生成时每句是单独采样的，音色会一句一句地飘，听着像几个人你一句我一句（用户听 E01 v15）。
+# 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，最多 3 轮；还不够就留最像的那条
+MIN_CONS = voice.get("takeMinConsistency", 0)
+if MIN_CONS:
+    embs = [None] * len(sents)
+    best_c = {}
+    for rnd in range(4):
+        for i, tk in enumerate(takes):
+            if embs[i] is None:
+                e = embedding(tts, tk[0], tk[1]); embs[i] = e / np.linalg.norm(e)
+        cen = np.mean(embs, 0); cen /= np.linalg.norm(cen)
+        cos = [float(e @ cen) for e in embs]
+        for i, c in enumerate(cos):
+            if i not in best_c or c > best_c[i][0]:
+                best_c[i] = (c, list(takes[i]))
+        bad = [i for i, c in enumerate(cos) if c < MIN_CONS]
+        if not bad or rnd == 3:
+            break
+        for i in bad:
+            print(f"  第 {i + 1} 句音色和整集不太像（{cos[i]:.3f}，要 ≥{MIN_CONS}），换下一个种子重配：{sents[i]}")
+            audio, sr, seed, note, rel, bk = synth_sentence(sents[i], takes[i][2] + 1, ref_for(sents[i]))
+            takes[i] = [audio, sr, seed, note, rel]; embs[i] = None
+    final = list(cos)
+    for i, c in enumerate(cos):
+        if c < MIN_CONS and best_c[i][0] > c:
+            takes[i] = best_c[i][1]; final[i] = best_c[i][0]
+            print(f"  第 {i + 1} 句重配 3 轮仍不到 {MIN_CONS}，用最像的一条（{best_c[i][0]:.3f}）")
+    for i, tk in enumerate(takes):
+        key = os.path.join(CACHE, cache_key(sents[i]))
+        meta = json.load(open(key + ".json", encoding="utf-8")) if os.path.exists(key + ".json") else {}
+        if meta.get("seed") != tk[2]:
+            sf.write(key + ".wav", tk[0], tk[1])
+            json.dump({"text": sents[i], "seed": tk[2], "note": tk[3], "words": tk[4]}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+    full, words, spans = assemble()
+    print(f"  每句音色和整集平均的相似度（换回最像的之后，按换之前的整集平均估）：最低 {min(final):.3f}，中位 {np.median(final):.3f}")
 for w in words:
     w.pop("sent")
 if os.path.exists(args.out + ".sent.wav"):

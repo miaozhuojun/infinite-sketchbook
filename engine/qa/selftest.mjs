@@ -230,6 +230,25 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 说话时没有沙沙声');
+speechCase('有一句换成了别人的声音（像几个人你一句我一句；用户听 E01 v15）', (tl) => {
+  // 源配音里最后一段旁白换成另一个人的声音（同样长、同样响），别的句子不动
+  const src = path.resolve('public', base.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np, subprocess, imageio_ffmpeg, tempfile, os
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+tmp = tempfile.mktemp(suffix='.wav'); subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-loglevel', 'error', '-i', ${JSON.stringify(OTHER_VOICE)}, '-ac', '1', '-ar', str(sr), tmp], check=True)
+o, _ = sf.read(tmp, dtype='float64'); os.remove(tmp)
+c = __import__('json').loads(${JSON.stringify(JSON.stringify(base.audioClips.at(-1)))})
+a, b = int(c['srcIn'] * sr), int(c['srcOut'] * sr)
+seg = x[a:b] if x.ndim == 1 else x[a:b, 0]
+rep = np.resize(o, b - a) * (np.sqrt((seg ** 2).mean()) / (np.sqrt((o ** 2).mean()) + 1e-9))
+if x.ndim == 1: x[a:b] = rep
+else: x[a:b, :] = rep[:, None]
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 每句都是同一个人');
 speechCase('旁白里一个字的开头被抹掉 80ms', (tl) => {
   const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `

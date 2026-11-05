@@ -26,5 +26,9 @@
  "takeMaxFlat": 0,
  "maxFlatMedian": 0,
  "flatNote": "说话时的沙沙声（可选，0 表示不查）：用 voice.py 的 voiced_flatness 量你满意的配音和真人录音，逐句上限 takeMaxFlat 取满意配音里最高的那句，全片中位上限 maxFlatMedian 略高一点。参考音带底噪时克隆出来的声音会一开口就沙沙响，先用 denoise_ref.py 把参考音去噪",
- "fallbackNote": "可选：fallbackMood 写 moods 里的一个名字。某句用默认参考音试满 maxTries 次都过不了，就自动改用它再试"
+ "fallbackNote": "可选：fallbackMood 写 moods 里的一个名字。某句用默认参考音试满 maxTries 次都过不了，就自动改用它再试",
+ "extraRounds": 0,
+ "takeMinConsistency": 0,
+ "minConsistency": 0,
+ "consistencyNote": "可选：每句都是同一个人。按句生成时音色会一句句地飘；takeMinConsistency 是生成时每句和整集平均音色的相似度下限（不够就换种子），minConsistency 是旁白检查里最低一句的下限，先量你满意的配音再定"
 }

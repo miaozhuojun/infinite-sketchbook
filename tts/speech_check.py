@@ -123,6 +123,22 @@ if max_flat:
     med_fl = float(np.median([v for v, _ in fl]))
     check("说话时没有沙沙声", med_fl <= max_flat, f"{len(fl)} 句浊音谱平坦度中位 {med_fl:.3f}（上限 {max_flat}；真人录音约 0.03–0.045），最高的：" + "、".join(f"「{t[:8]}」{v:.3f}" for v, t in fl[:3]))
 
+# 0f. 每句都是同一个人：源配音逐句的说话人嵌入和整集平均的余弦相似度，最低的一句不低于 minConsistency。
+#     按句生成时音色会一句一句地飘（用户听 E01 v15：像几个人你一句我一句）；整段的「音色一致性」只看平均，看不出来
+min_cons = voice.get("minConsistency", 0)
+if min_cons:
+    from voice import embedding as spk_emb
+    if "_tts" not in dir():
+        _tts = load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base"))
+    xs2, ssr2 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans2 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    E = []
+    for s2 in spans2:
+        e = spk_emb(_tts, xs2[int(s2["start"] * ssr2):int(s2["end"] * ssr2)].astype(np.float32), ssr2); E.append(e / np.linalg.norm(e))
+    cen = np.mean(E, 0); cen /= np.linalg.norm(cen)
+    cs = sorted(((float(e @ cen), s2["text"]) for e, s2 in zip(E, spans2)))
+    check("每句都是同一个人", cs[0][0] >= min_cons, f"{len(cs)} 句和整集平均音色的相似度最低 {cs[0][0]:.3f}（下限 {min_cons}），中位 {np.median([c for c, _ in cs]):.3f}；最不像的：" + "、".join(f"「{t[:8]}」{c:.3f}" for c, t in cs[:3]))
+
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)

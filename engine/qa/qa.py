@@ -42,38 +42,26 @@ check("音视频流", has_a and has_v, f"视频流 {has_v}，音频流 {has_a}")
 check("时长", abs(secs - tl["duration"]) < 0.15, f"成片 {secs:.2f}s，时间线 {tl['duration']}s")
 
 # 2. 响度（本小样目标 -16 LUFS ±1，真峰值 ≤ -1.0 dBTP）
-lo = ff(["-i", video, "-af", "ebur128=peak=true", "-f", "null", "-"])
+lo = ff(["-i", video, "-vn", "-af", "ebur128=peak=true", "-f", "null", "-"])  # 只解音频（不加 -vn 会把整段 60 帧视频也解一遍）
 I = float(re.findall(r"I:\s+(-?[\d.]+) LUFS", lo)[-1])
 tp = float(re.findall(r"Peak:\s+(-?[\d.]+) dBFS", lo)[-1])
 check("响度", abs(I + 16) <= 1.0 and tp <= -1.0, f"{I} LUFS，真峰值 {tp} dBTP")
 
 # 3. 黑帧 / 冻结（冻结区间列出来，交给人判断是否为设计性停留）
-bd = ff(["-i", video, "-vf", "blackdetect=d=0.1:pix_th=0.1", "-an", "-f", "null", "-"])
+# 黑帧和冻结在同一遍解码里查（原来各解一遍整片）
+fz = bd = ff(["-i", video, "-vf", "blackdetect=d=0.1:pix_th=0.1,freezedetect=n=0.0005:d=1.5", "-an", "-f", "null", "-"])
 blacks = re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", bd)
 check("黑帧", not blacks, f"{len(blacks)} 段")
-fz = ff(["-i", video, "-vf", "freezedetect=n=0.0005:d=1.5", "-an", "-f", "null", "-"])
 starts = re.findall(r"freeze_start: ([\d.]+)", fz)
 ends = re.findall(r"freeze_end: ([\d.]+)", fz)
 spans = [f"{float(a):.1f}-" + (f"{float(b):.1f}s" if b != "end" else "片尾") for a, b in zip(starts, ends + ["end"] * len(starts))] if starts else []
 print(f"[提示] 画面静止 ≥1.5s 的区间：{spans or '无'}（需人工判断是否为有意停留）")
 
 
-def still(frame, name, props=None):
-    out = work / name
-    cmd = ["npx", "remotion", "still", "src/index.ts", comp, str(out), f"--frame={frame}", "--log=error"]
-    if props:
-        cmd.append(f"--props={json.dumps(props)}")
-    subprocess.run(cmd, check=True)
-    return np.asarray(Image.open(out).convert("RGB")).astype(np.int16)
+def still(name):
+    return np.asarray(Image.open(work / name).convert("RGB")).astype(np.int16)
 
 
-# 4. 确定性：同一帧分两次独立进程渲染，像素必须完全一致
-f = int(tl["durationInFrames"] * 0.53)
-a, b = still(f, "det_a.png"), still(f, "det_b.png")
-check("同帧确定性", np.array_equal(a, b), f"第 {f} 帧两次渲染最大像素差 {int(np.abs(a - b).max())}")
-
-
-# 5. 笔尖跟随：随机抽 12 个落笔时刻，隐藏铅笔渲染，检查预测笔尖处是否刚好有墨迹
 def ease(x):
     return 2 * x * x if x < 0.5 else 1 - (-2 * x + 2) ** 2 / 2
 
@@ -90,15 +78,27 @@ def cam_at(t):
 
 
 random.seed(7)
+# 要用的静帧一次渲完（qa/stills.mjs：一次打包、一个浏览器；原来每帧单跑 remotion still，十四帧约 50 秒）
+f = int(tl["durationInFrames"] * 0.53)
 downs = [s for s in tl["penTrack"] if s["kind"] == "down" and (s["t1"] - s["t0"]) * tl["fps"] >= 3]
 samples = random.sample(downs, min(12, len(downs)))
+pen_frames = [int(math.floor((s["t0"] + (s["t1"] - s["t0"]) * 0.6) * tl["fps"])) for s in samples]
+jobs = [{"frame": f, "out": str(work / "det_a.png")}, {"frame": f, "out": str(work / "det_b.png")}]
+jobs += [{"frame": fr, "out": str(work / f"pen_{fr}.png"), "props": {"showPen": False}} for fr in pen_frames]
+(work / "jobs.json").write_text(json.dumps(jobs))
+subprocess.run(["node", "qa/stills.mjs", comp, str(work / "jobs.json")], check=True)
+
+# 4. 确定性：同一帧在两个新开的页面里各渲一次，像素必须完全一致
+a, b = still("det_a.png"), still("det_b.png")
+check("同帧确定性", np.array_equal(a, b), f"第 {f} 帧两次渲染最大像素差 {int(np.abs(a - b).max())}")
+
+# 5. 笔尖跟随：随机抽 12 个落笔时刻，隐藏铅笔渲染，检查预测笔尖处是否刚好有墨迹
 misses = []
-for s in samples:
-    fr = int(math.floor((s["t0"] + (s["t1"] - s["t0"]) * 0.6) * tl["fps"]))
+for s, fr in zip(samples, pen_frames):
     t = fr / tl["fps"]
     # 复现渲染端的笔尖位置：用渲染时同一套路径长度插值（在浏览器里求），这里直接读页面会更慢；
     # 改为检查"预测位置附近有墨、而路径末端前方无墨"的弱条件，误差容忍 6px
-    img = still(fr, f"pen_{fr}.png", {"showPen": False})
+    img = still(f"pen_{fr}.png")
     stroke = tl["strokes"][s["stroke"]]
     p = (t - s["t0"]) / (s["t1"] - s["t0"])
     pts = subprocess.run(["node", "qa/point_at.mjs", stroke["d"], str(p)], capture_output=True, text=True, check=True).stdout.split()

@@ -5,8 +5,9 @@
 // --draft：改稿时用，只配音、编译、查时间线（铅笔、安全区），不混音不渲染，几十秒出结果；定稿再去掉 --draft 跑全量
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
+import { GL } from './qa/gl.mjs';
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
@@ -22,7 +23,23 @@ const stages = [];
 function run(name, cmd, args, opts = {}) {
   const t0 = Date.now();
   const r = spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 28, cwd: opts.cwd });
-  const out = (r.stdout || '') + (r.stderr || '');
+  return record(name, r.status, (r.stdout || '') + (r.stderr || ''), t0, stages);
+}
+// 同一步骤的异步版：各画幅的混音、渲染、检查同时跑（原来一个画幅做完才做下一个，两个画幅约 20 分钟）。结果记进这个画幅自己的列表，报告里仍按画幅顺序排
+function runAsync(name, cmd, args, opts = {}, list = stages) {
+  const t0 = Date.now();
+  return new Promise((resolve) => {
+    const ch = spawn(cmd, args, { cwd: opts.cwd });
+    let out = '';
+    ch.stdout.on('data', (d) => { out += d; });
+    ch.stderr.on('data', (d) => { out += d; });
+    ch.on('error', (e) => { out += String(e); });
+    ch.on('close', (code) => resolve(record(name, code, out, t0, list)));
+  });
+}
+// 一次只让一个任务进去（渲染吃满 CPU，两个画幅同时渲反而更慢；存证要读改写同一个 provenance.json）
+function makeLock() { let tail = Promise.resolve(); return (fn) => { const p = tail.then(fn); tail = p.catch(() => {}); return p; }; }
+function record(name, status, out, t0, list) {
   const fixes = [...out.matchAll(/^\s+(字号：.*|避让：.*|.*已自动剪掉.*|切点：.*合并.*|水印：.*不加)$/gm)].map((m) => m[1]);
   const checks = [...out.matchAll(/\[(通过|失败)\] ([^：]+)：(.*)/g)].map((m) => ({ ok: m[1] === '通过', name: m[2], detail: m[3] }));
   const problems = [...(out.match(/问题 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\[错误\] (.*)$/gm)].map((m) => m[1])]
@@ -32,14 +49,14 @@ function run(name, cmd, args, opts = {}) {
   // 建议：创作取舍（风格规范 gates 里的 advice 级），写进报告，不判失败
   const advice = [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])]
     .map((l) => l.trim()).filter(Boolean);
-  const ok = r.status === 0 && checks.every((c) => c.ok) && !problems.length;
-  stages.push({ name, ok, secs: ((Date.now() - t0) / 1000).toFixed(1), checks, fixes, problems, advice, artifacts, notes, tail: ok ? '' : out.slice(-1500) });
-  console.log(`${ok ? '✓' : '✗'} ${name}（${stages.at(-1).secs}s）${fixes.length ? `  自动修正 ${fixes.length} 处` : ''}${advice.length ? `  建议 ${advice.length} 条` : ''}`);
+  const ok = status === 0 && checks.every((c) => c.ok) && !problems.length;
+  list.push({ name, ok, secs: ((Date.now() - t0) / 1000).toFixed(1), checks, fixes, problems, advice, artifacts, notes, tail: ok ? '' : out.slice(-1500) });
+  console.log(`${ok ? '✓' : '✗'} ${name}（${list.at(-1).secs}s）${fixes.length ? `  自动修正 ${fixes.length} 处` : ''}${advice.length ? `  建议 ${advice.length} 条` : ''}`);
   return ok;
 }
 // 没条件执行的关卡也进报告，写明原因；有未执行的关卡时，结论不写「全部通过」
-function skip(name, why) {
-  stages.push({ name, ok: true, skipped: why, secs: '0.0', checks: [], fixes: [], problems: [], artifacts: [], tail: '' });
+function skip(name, why, list = stages) {
+  list.push({ name, ok: true, skipped: why, secs: '0.0', checks: [], fixes: [], problems: [], artifacts: [], tail: '' });
   console.log(`– ${name}（未执行：${why}）`);
 }
 
@@ -51,10 +68,12 @@ const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、�
 // 1. 配音：分镜里写了旁白稿就每次都按稿生成（内置回转检查、开头多字修剪、换种子重试）。
 // 配音按句缓存，没改的句子直接复用，所以每次跑也只多十几秒；这样音频一定和当前的稿子对得上，不会拿旧音频配新稿
 const audioPath = path.join('public', beats.narration.audio || '');
+// 配音没配出来就停在这里：后面的编译、渲染、旁白检查都会拿上一版的配音去做，白跑几分钟，报告还会误导（E01 v17 实测）
+let voiceOk = true;
 // 合成提示音（演示分镜，narration.synthetic）不走克隆配音，音频由夹具脚本生成
 if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
-  if (PY_MLX) { if (run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries(beats.narration.reseed ?? {}).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
+  if (PY_MLX) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries(beats.narration.reseed ?? {}).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`]), ...Object.entries(beats.narration.tone ?? {}).flatMap(([t, m]) => ['--tone', `${t}=${m}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
   else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
   else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
     problems: [`没有音频 ${audioPath}，也没有本地配音环境（PY_MLX）：在 tts/ 装好配音环境，或把音频放到这个位置`] });
@@ -63,8 +82,9 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
 // 2. 各画幅：编译 → 混音 → 渲染 → 写版权信息与存证 → 检查 → 设备预览
 // 本机配置了品牌（brand.local.json，不进仓库）才加水印、写版权信息、记存证；没配置就在报告里写明
 const branded = fs.existsSync('brand.local.json');
-if (libOk && beatsOk && !branded) skip('水印、版权信息与存证', '本机没有配置品牌（brand.local.json）');
-if (libOk && beatsOk) {
+if (!voiceOk) skip('编译、渲染与成片检查', '配音生成没通过，没有和当前稿子对得上的配音（见上面「配音生成」）');
+if (libOk && beatsOk && voiceOk && !branded) skip('水印、版权信息与存证', '本机没有配置品牌（brand.local.json）');
+if (libOk && beatsOk && voiceOk) {
   const compiled = targets.filter((t) => run(`[${t}] 编译（时间线、版面、镜头）`, 'node', ['compiler/compile.mjs', beatsPath, '--target', t]));
   spawnSync('node', ['compiler/gen-compositions.mjs']);
   if (DRAFT) {
@@ -75,24 +95,33 @@ if (libOk && beatsOk) {
     }
     skip('混音、渲染、画面检查、旁白检查、预览与审片材料', '草稿模式（--draft）');
   }
-  for (const t of DRAFT ? [] : compiled) {
+  // 各画幅一条链同时跑：渲染一次只渲一个（renderLock），一个画幅渲完做检查时，下一个画幅已经在渲了
+  const renderLock = makeLock(), bookLock = makeLock();
+  const chain = async (t, L) => {
     const id = `${beats.id}-${t}`, tl = `build/${id}.timeline.json`, video = path.join(outDir, `${t}.mp4`);
-    if (!run(`[${t}] 混音`, PY_QA, ['audio/mix.py', tl])) continue;
-    if (!run(`[${t}] 渲染`, 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error'])) continue;
-    if (branded) run(`[${t}] 版权信息与存证`, PY_QA, ['qa/provenance.py', beatsPath, tl, video]);
-    run(`[${t}] 画面检查`, PY_QA, ['qa/qa.py', tl, video, id]);
-    run(`[${t}] 铅笔与运笔检查`, 'node', ['qa/pencil_check.mjs', tl]);
-    run(`[${t}] 平台安全区检查`, 'node', ['qa/safezone_check.mjs', tl]);
-    run(`[${t}] 设备预览`, PY_QA, ['qa/device_preview.py', tl, video, path.join(outDir, `preview_${t}.png`)]);
-    run(`[${t}] 审片联系表`, PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review')]);
+    const R = (name, cmd, args, opts) => runAsync(`[${t}] ${name}`, cmd, args, opts, L);
+    if (!await R('混音', PY_QA, ['audio/mix.py', tl])) return;
+    if (!await renderLock(() => R('渲染', 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', ...(GL ? [`--gl=${GL}`] : [])]))) return;
+    if (branded) await bookLock(() => R('版权信息与存证', PY_QA, ['qa/provenance.py', beatsPath, tl, video]));
     // 旁白检查每个画幅都跑：各画幅的旁白是分别拼、分别混的（用户在横版里听出的畸变，原来只查竖版）
     const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
-    if (noSpeech) skip(`[${t}] 旁白检查`, noSpeech);
-    else run(`[${t}] 旁白检查`, PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' });
-    if (t === compiled[0]) {
-      if ((beats.quiz || []).length) run(`[${t}] 理解度测试材料`, PY_QA, ['qa/comprehension.py', 'pack', beatsPath, tl, video, path.join(outDir, 'comprehension')]);
-    }
-  }
+    // 成片出来以后的检查互不依赖，一起跑
+    await Promise.all([
+      R('画面检查', PY_QA, ['qa/qa.py', tl, video, id]),
+      R('铅笔与运笔检查', 'node', ['qa/pencil_check.mjs', tl]),
+      R('平台安全区检查', 'node', ['qa/safezone_check.mjs', tl]),
+      R('设备预览', PY_QA, ['qa/device_preview.py', tl, video, path.join(outDir, `preview_${t}.png`)]),
+      R('审片联系表', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review')]),
+      noSpeech ? skip(`[${t}] 旁白检查`, noSpeech, L) : R('旁白检查', PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' }),
+      t === compiled[0] && (beats.quiz || []).length ? R('理解度测试材料', PY_QA, ['qa/comprehension.py', 'pack', beatsPath, tl, video, path.join(outDir, 'comprehension')]) : null,
+    ]);
+  };
+  const lists = Object.fromEntries(compiled.map((t) => [t, []]));
+  await Promise.all((DRAFT ? [] : compiled).map((t) => chain(t, lists[t])));
+  // 报告里按画幅、按步骤的固定顺序排（同时跑时完成先后不定）
+  const ORDER = ['混音', '渲染', '版权信息与存证', '画面检查', '铅笔与运笔检查', '平台安全区检查', '设备预览', '审片联系表', '旁白检查', '理解度测试材料'];
+  const rank = (s) => ORDER.findIndex((k) => s.name.endsWith(`] ${k}`));
+  for (const t of compiled) stages.push(...lists[t].sort((a, b) => rank(a) - rank(b)));
 }
 
 // 3. 报告

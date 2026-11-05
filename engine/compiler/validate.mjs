@@ -106,6 +106,11 @@ export function validateBeats(beats, style, reg) {
     if (!sentences.includes(t)) E('narration.reseed', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
     if (!Number.isInteger(k) || k < 1) E('narration.reseed', `「${t}」的偏移要写正整数`);
   }
+  // tone：按句标语气，配音时按它挑候选（语气名在不在 voice.json 的 tones 里，配音时查）
+  for (const [t, m] of Object.entries(beats.narration?.tone ?? {})) {
+    if (!sentences.includes(t)) E('narration.tone', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
+    if (typeof m !== 'string' || !m.trim() || m.includes('=')) E('narration.tone', `「${t}」的语气要写 voice.json 的 tones 里的名字`);
+  }
   // mood：按句选情绪参考音（语气跟着内容变）。哪句用什么情绪是创作取舍，这里只查格式；情绪名在不在本机 voice.json 里，配音时查
   for (const [t, m] of Object.entries(beats.narration?.mood ?? {})) {
     if (!sentences.includes(t)) E('narration.mood', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
@@ -130,6 +135,17 @@ export function validateBeats(beats, style, reg) {
     if (p.camera && !['focus', 'overview'].includes(p.camera)) E(`${P}.camera`, '只能是 focus（推近这句的元素）或 overview');
     if (p.chapter !== undefined && (typeof p.chapter !== 'string' || ![...p.chapter].length || [...p.chapter].length > style.chapters.titleMax)) E(`${P}.chapter`, `节名要写，最多 ${style.chapters.titleMax} 个字（B 站分段章节标题要少于 16 个汉字）`);
     if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
+    if (p.camera === 'overview' && (p.actions || []).length) E(`${P}.camera`, 'overview（整张纸全景）的句子不画新东西（actions 要空着）');
+    if (p.camera === 'overview' && p.revisit) E(`${P}.camera`, 'overview 和 revisit 不能同时用');
+    if (p.revisit !== undefined) {
+      // 回看：镜头回到前面画过的元素，这句本身不画（片尾回顾）
+      if (!Array.isArray(p.revisit) || !p.revisit.length) E(`${P}.revisit`, '要列出前面画过的元素 id');
+      else for (const rid of p.revisit) if (!beats.phrases.slice(0, pi).some((q) => (q.actions || []).some((x) => x.id === rid))) E(`${P}.revisit`, `「${rid}」不是前面句子里画过的元素`);
+      // 回看时可以圈出、回描、划掉已有的元素（点出这一站的重点），不画新东西
+      const extra = (p.actions || []).filter((x) => !['ring', 'retrace', 'strike'].includes(x.type));
+      if (extra.length) E(`${P}.revisit`, `回看的句子只能圈出、回描、划掉已有元素（ring/retrace/strike），不画新东西：${extra.map((x) => x.id).join('、')}`);
+      if (p.role === 'aha' || p.camera === 'focus') E(`${P}.revisit`, '回看和推近（顿悟句、camera=focus）不能同时用');
+    }
     if (p.focus) for (const fid of p.focus) if (!beats.phrases.some((q) => (q.actions || []).some((x) => x.id === fid))) E(`${P}.focus`, `「${fid}」不是分镜里的元素`);
     const st = strip(p.text || '');
     for (const a of p.actions || []) {
@@ -209,6 +225,15 @@ export function validateBeats(beats, style, reg) {
     if (!fs.existsSync(fp)) { E(`facts[${i}].source`, `找不到资料文件 ${file}`); return; }
     if (anchor && !fs.readFileSync(fp, 'utf8').includes(anchor)) E(`facts[${i}].source`, `资料文件里找不到「${anchor}」`);
   });
+
+  // 念法：本机品牌配置（brand.local.json 的 spoken）里写了某个词怎么念（「锟仔ai科学」念「锟仔爱科学」，不是一个个字母读），
+  // 旁白稿和分镜 text 就要写念法，字幕 caption 和画面上的字照旧（用户听 E01 v17：ai 被读成两个字母）
+  const BRAND = path.join(ENGINE, 'brand.local.json');
+  const say = fs.existsSync(BRAND) ? JSON.parse(fs.readFileSync(BRAND, 'utf8')).spoken ?? {} : {};
+  for (const [w, s] of Object.entries(say)) {
+    if ((beats.narration?.script ?? '').includes(w)) E('narration.script', `旁白稿里的「${w}」要写成念法「${s}」（字幕 caption 和画面上的字照旧写「${w}」）`);
+    beats.phrases.forEach((p, i) => { if (p.text.includes(w)) E(`phrases[${i}].text`, `「${w}」要写成念法「${s}」，字幕写在 caption 里`); });
+  }
 
   // 字幕：每个画幅下不超过规定行数
   for (const [t, tg] of Object.entries(style.targets)) {

@@ -74,6 +74,7 @@
   "maxSpeedBoost": 1.8,
   "aha": { "lead": 0.3, "moveDur": 0.9, "hold": 0.8, "minPush": 1.1, "maxPush": 1.35, "pad": 110, "zoomMax": 1.5, "holdAfter": 0.5, "pauseAfter": 0.6, "maxOffCenter": 0.2, "offCenterNote": "推近后焦点中心离取景框中心不超过取景框宽、高的这个比例（最偏落在三分线附近）；只求不切字时，推近会把焦点挤到画面顶上、下面大半空着" },
   "finalOverviewHold": 1.4,
+  "overviewMaxSec": null, "overviewNote": "片尾全景（camera=overview）从近景拉到整张纸最多走多少秒，落在这段时间里最后一句说完的地方，之后停在整张纸上；null＝一直拉到最后一句说完",
   "minCameraGap": 1.2,
   "chapterMoveMin": 1.8, "chapterMoveNote": "换节时镜头沿纸面移过去至少这么久（秒），前一句太短时让第一笔晚一点落；审片 E01 v1：一次换节只用 1.05 秒，像甩镜头"
  },
@@ -120,6 +121,8 @@
   "musicRel": -21,
   "chimeRel": -14,
   "duckDb": -8,
+  "duckHoldGap": 0,
+  "duckHoldGapNote": "句间停顿短于这么多秒时音乐保持压低、不回升（0 表示每个停顿都回升）。回升让音乐有呼吸，但小停顿里频繁冒出来会像说话时有背景噪音；取多少是创作取舍，私有配置里定",
   "foleyDuck": 0.75,
   "voiceComp": { "threshold": -24, "ratio": 2, "window": 0.01, "tau": 0.05, "note": "人声轻压缩：TTS 原声峰响比 18dB，直接拉到 -16 LUFS 会削顶；压一点再做真峰值限幅，响度和峰值都到位" },
   "limiterLook": 0.003,

@@ -14,7 +14,7 @@ export type PenSeg =
   | { kind: 'down'; t0: number; t1: number; stroke: number };
 export type Effect = { id: string; type: 'glow'; cx: number; cy: number; r: number; color: string; t0: number; t1: number; t2?: number; t3?: number; rays?: number[] };
 export type Cam = { x: number; y: number; z: number };
-export type CamMove = { t0: number; t1: number; from: Cam; to: Cam; focus?: string[] }; // focus：推近镜头的焦点元素
+export type CamMove = { t0: number; t1: number; from: Cam; to: Cam; focus?: string[]; curve?: 'glide' }; // focus：推近镜头的焦点元素；curve：glide 是片尾长镜头的匀速曲线
 export type Timeline = {
   id: string; canvas: { w: number; h: number; fps: number }; fps: number; durationInFrames: number; duration: number;
   narration: string; audio?: string; strokes: Stroke[]; penTrack: PenSeg[]; effects: Effect[];
@@ -85,14 +85,28 @@ export function penAt(tl: Timeline, t: number, mode: InkMode): PenState {
   return { x: end[0], y: end[1], down: true, lift: 0, heading: Math.atan2(b[1] - a[1], b[0] - a[0]) };
 }
 
+// 长镜头（curve=glide，片尾几十秒拉到整张纸）：中间匀速、两头各 ramp 秒缓起缓停；缩放按对数插值，看起来是匀速在拉远。
+// 普通缓动用在几十秒的镜头上，前后各十几秒几乎不动（审片 E01 v13：拉远前 13 秒像定格，旁白说的东西还没进画面）
+export function glideEase(u: number, dur: number, ramp = 1.5): number {
+  const r = Math.min(0.45, ramp / Math.max(dur, 1e-6)), k = 1 / (2 * r * (1 - r));
+  if (u < r) return u * u * k;
+  if (u > 1 - r) return 1 - (1 - u) * (1 - u) * k;
+  return (u - r / 2) / (1 - r);
+}
+export function camLerp(m: CamMove, t: number): Cam {
+  const u = progress(t, m.t0, m.t1);
+  if (m.curve === 'glide') {
+    const e = glideEase(u, m.t1 - m.t0);
+    return { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z * Math.pow(m.to.z / m.from.z, e) };
+  }
+  const e = ease(u);
+  return { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e };
+}
 export function cameraAt(moves: CamMove[], t: number): Cam {
   let c = moves[0].from;
   for (const m of moves) {
     if (t >= m.t1) c = m.to;
-    else if (t > m.t0) {
-      const e = ease(progress(t, m.t0, m.t1));
-      c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e };
-    }
+    else if (t > m.t0) c = camLerp(m, t);
   }
   return c;
 }

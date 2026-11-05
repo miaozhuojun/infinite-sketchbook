@@ -665,6 +665,7 @@ phrases.forEach((p, pi) => {
         while (phrases[last + 1]?.camera === 'overview') last++;
         const t0 = Math.max(report.phrases[pi].at, holdUntil), t1 = Math.max(t0 + M.cameraMove[0] + M.cameraMove[1], report.phrases[last].audioEnd);
         pushMove(t0, t1, tc);
+        camera[camera.length - 1].curve = 'glide';
         newChapter.add(camera[camera.length - 1]);
       }
     } else if (tc.revisit) {
@@ -695,7 +696,9 @@ if (focusCam[phrases.length - 1]) {
 }
 const lastCamEnd = camera[camera.length - 1].t1;
 // 自检：每一笔画完的时刻都在取景框内
-const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0), e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } return c; };
+// 和渲染端 src/timeline.ts 的 camLerp 同一套插值（glide：中间匀速、两头各 1.5 秒缓起缓停、缩放按对数）
+const glideE = (u, dur) => { const r = Math.min(0.45, 1.5 / Math.max(dur, 1e-6)), k = 1 / (2 * r * (1 - r)); return u < r ? u * u * k : u > 1 - r ? 1 - (1 - u) * (1 - u) * k : (u - r / 2) / (1 - r); };
+const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0); if (m.curve === 'glide') { const e = glideE(u, m.t1 - m.t0); c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z * Math.pow(m.to.z / m.from.z, e) }; } else { const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } } return c; };
 for (const s of strokes) {
   const c = camAt(s.t1), pr = new svgPathProperties(s.d);
   for (let k = 0; k <= 12; k++) {

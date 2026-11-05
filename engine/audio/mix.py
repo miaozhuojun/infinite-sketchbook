@@ -100,7 +100,7 @@ pencil = [y for y in (load(n) for n in AU.get("pencilSamples", [])) if y is not 
 # （v1 用连续白噪声，用户反馈"太大、太假"；改为颗粒式合成并大幅降低电平）
 pools = []
 for y in pencil:
-    e = np.sqrt(uniform_filter1d(y ** 2, int(0.02 * SR)))
+    e = np.sqrt(np.maximum(uniform_filter1d(y ** 2, int(0.02 * SR)), 0))  # 重采样后的录音在静音处滤波会出极小的负数，开方成 NaN，整份录音就找不到「正在写」的段
     pools.append((y, e > e.max() * 10 ** (-25 / 20)))  # 20ms 包络高于峰值 -25dB 算「正在写」
 grains = np.zeros(N)   # 颗粒冲激
 rub = np.zeros(N)      # 纸面摩擦底噪
@@ -219,7 +219,7 @@ for c in tl["audioClips"]:
     a, b = int(c["at"] * SR), int((c["at"] + c["srcOut"] - c["srcIn"]) * SR)
     duck_db[a:b] = AU["duckDb"]
 k = int(0.25 * SR)
-duck_db = np.convolve(duck_db, np.ones(k) / k, mode="same")
+duck_db = uniform_filter1d(duck_db, k, mode="constant")  # 0.25 秒滑动平均（和 np.convolve 同结果，快几百倍：原来一个画幅要 42 秒）
 music *= 10 ** (duck_db / 20)
 foley_duck = 10 ** (duck_db * AU["foleyDuck"] / 20)  # 说话时书写声也让一让（约 -6dB）
 

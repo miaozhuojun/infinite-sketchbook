@@ -10,14 +10,18 @@ import { PY_QA, PY_MLX } from './pyenv.mjs';
 
 const basePath = process.argv[2];
 const base = JSON.parse(fs.readFileSync(basePath, 'utf8'));
+// 旁白类注入可以另用一份基线（--speech-base）：旁白检查按当前 voice.json 的标准查，基线要是按同一套配音规范配出来的那一集，不然基线自己就过不了
+const speechBasePath = process.argv.includes('--speech-base') ? process.argv[process.argv.indexOf('--speech-base') + 1] : basePath;
+const sbase = JSON.parse(fs.readFileSync(speechBasePath, 'utf8'));
+const sbeatsSrc = JSON.parse(fs.readFileSync(`data/${sbase.beatsId}.beats.json`, 'utf8'));
 const beatsSrc = JSON.parse(fs.readFileSync(`data/${base.beatsId}.beats.json`, 'utf8'));
 const results = [], skipped = [];
 const record = (name, caught, out) => { results.push({ name, caught }); console.log(`${caught ? '✓ 抓到' : '✗ 漏掉'}  ${name}`); if (!caught) console.log(out.slice(-700)); };
 const skip = (name, why) => { skipped.push({ name, why }); console.log(`–  跳过  ${name}`); };
 
 // ---------- 时间线上的注入（渲染后检查：铅笔、运笔、镜头、字幕、安全区、旁白） ----------
-function expectFail(name, mutate, runner, mustSay) {
-  const tl = structuredClone(base);
+function expectFail(name, mutate, runner, mustSay, from = base) {
+  const tl = structuredClone(from);
   tl.id = '_selftest';
   const extra = mutate(tl) || {};
   const p = path.resolve('build/_selftest.timeline.json');
@@ -30,9 +34,9 @@ function expectFail(name, mutate, runner, mustSay) {
 const pencil = (p) => spawnSync('node', ['qa/pencil_check.mjs', p], { encoding: 'utf8' });
 const safezone = (p) => spawnSync('node', ['qa/safezone_check.mjs', p], { encoding: 'utf8' });
 const speech = (p) => spawnSync(PY_MLX, ['speech_check.py', p, path.resolve('.')], { encoding: 'utf8', cwd: '../tts' });
-const noSpeech = beatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
+const noSpeech = sbeatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
 const OTHER_VOICE = path.resolve('qa/fixtures/other-voice.mp3');
-const speechCase = (name, mutate, mustSay, why = noSpeech) => (why ? skip(name, why) : expectFail(name, mutate, speech, mustSay));
+const speechCase = (name, mutate, mustSay, why = noSpeech) => (why ? skip(name, why) : expectFail(name, mutate, speech, mustSay, sbase));
 
 // 挑注入目标用的几何：和渲染、检查共用同一套镜头
 const toScreen = (tl, [x, y], t) => { const c = cameraAt(tl.camera, t); return [(x - c.x) * c.z + tl.view.cx, (y - c.y) * c.z + tl.view.cy]; };
@@ -51,7 +55,7 @@ function restAcross(tl, pts, t0) {
 const b1 = pencil(path.resolve(basePath));
 console.log(b1.status === 0 ? '✓ 基线：铅笔与运笔检查通过' : '✗ 基线就没通过，自测无意义');
 // 旁白类注入要以这份时间线自己的旁白为基线：基线就不过，后面的「抓到」可能只是碰巧
-const b2 = noSpeech ? null : speech(path.resolve(basePath));
+const b2 = noSpeech ? null : speech(path.resolve(speechBasePath));
 console.log(!b2 ? `–  旁白类注入跳过：${noSpeech}` : b2.status === 0 ? '✓ 基线：旁白检查通过' : '✗ 旁白基线没通过，旁白类自测无意义：\n' + ((b2.stdout || '') + (b2.stderr || '')).slice(-600));
 
 expectFail('笔身突然转动（姿态曲线跳变 0.8）', (tl) => { for (let i = writingFrame(tl); i < tl.pencil.sway.length; i++) tl.pencil.sway[i] += 0.8; }, pencil, '[失败] 笔身不晃眼');
@@ -178,19 +182,26 @@ expectFail('水印压在画好的内容上', (tl) => {
   wmOf(tl).spans = [{ t0: s.t1, t1: tl.duration, x, y: y - 10, anchor: 'l' }];
 }, safezone, '[失败] 水印避开字幕、平台界面和内容');
 speechCase('旁白切点切进一个字的正中间', (tl) => {
-  const timing = JSON.parse(fs.readFileSync(path.resolve('data', beatsSrc.narration.timing), 'utf8'));
+  const timing = JSON.parse(fs.readFileSync(path.resolve('data', sbeatsSrc.narration.timing), 'utf8'));
   const c = tl.audioClips.find((x) => timing.words.filter((w) => w.start >= x.srcIn && w.end <= x.srcOut).length >= 3);
   const inClip = timing.words.filter((w) => w.start >= c.srcIn && w.end <= c.srcOut);
-  c.srcIn = (inClip[2].start + inClip[2].end) / 2;
+  // 切在这个字最响的地方（按源音频能量找）：对齐的字范围前后差几十毫秒，取中点可能正好落在两字之间的空隙（E01 v17 的「和」）
+  const r = spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np
+x, sr = sf.read(${JSON.stringify(path.resolve('public', sbase.source))}, dtype='float64'); x = x.mean(1) if x.ndim > 1 else x
+a, b = int(${inClip[2].start} * sr), int(${inClip[2].end} * sr); h = int(0.01 * sr)
+lv = [np.sqrt((x[i:i + h] ** 2).mean()) for i in range(a, max(a + 1, b - h), h)]
+print((a + int(np.argmax(lv)) * h + h / 2) / sr)`], { encoding: 'utf8' });
+  c.srcIn = Number(r.stdout.trim()) || (inClip[2].start + inClip[2].end) / 2;
 }, '[失败] 拼接切点落在静音处');
 speechCase('旁白里两个字掉到成人男声的音高（降一个八度，用户两次听出的「学会」畸变）', (tl) => {
   // 最后一段旁白里找一段 0.3 秒的浊音，降一个八度（拉长一倍再取前半，长度不变、音高减半），别的都不动
-  const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `
 import soundfile as sf, json, numpy as np
 from scipy.signal import resample
 x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
-c = json.loads(${JSON.stringify(JSON.stringify(base.audioClips.at(-1)))})
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
 a = int((c['at'] + 0.4) * sr); n = int(0.3 * sr)
 seg = x[a:a + n]; low = resample(seg, 2 * n)[:n]
 x[a:a + n] = low * (np.abs(seg).max() / (np.abs(low).max() + 1e-9))
@@ -199,12 +210,94 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 没有掉嗓子');
+speechCase('整条配音底下垫着嘶嘶的背景噪声（参考音带底噪时会这样；用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
+  // 源配音整条叠上白噪声（比说话低 20dB）；背景干净看全片 9 秒窗 DNSMOS BAK 的中位数
+  const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+m = x if x.ndim == 1 else x[:, 0]
+lv = np.sqrt((m.reshape(-1)[: len(m) // 480 * 480].reshape(-1, 480) ** 2).mean(1)); r = np.sqrt((lv[lv > lv.max() * 0.01] ** 2).mean())
+n = np.random.default_rng(1).standard_normal(len(m)) * r * 10 ** (-20 / 20)
+x = x + (n if x.ndim == 1 else n[:, None])
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 背景干净');
+speechCase('一开口就沙沙响、说完就没（噪声只叠在说话声上；用户听 E01 v7–v14）', (tl) => {
+  // 按源配音的响度包络给白噪声开关：只在发声时叠上（比说话低 22dB），停顿处还是干净的。DNSMOS 对这种噪声不敏感，要靠浊音谱平坦度
+  const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np
+from scipy.ndimage import uniform_filter1d
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+m = x if x.ndim == 1 else x[:, 0]
+env = np.sqrt(uniform_filter1d(m ** 2, int(0.02 * sr)))
+n = np.random.default_rng(2).standard_normal(len(m)) * env * 10 ** (-22 / 20) * 1.4
+x = x + (n if x.ndim == 1 else n[:, None])
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 说话时没有沙沙声');
+speechCase('有一句换成了别人的声音（像几个人你一句我一句；用户听 E01 v15）', (tl) => {
+  // 源配音里最后一段旁白换成另一个人的声音（同样长、同样响），别的句子不动
+  const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np, subprocess, imageio_ffmpeg, tempfile, os
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+tmp = tempfile.mktemp(suffix='.wav'); subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-loglevel', 'error', '-i', ${JSON.stringify(OTHER_VOICE)}, '-ac', '1', '-ar', str(sr), tmp], check=True)
+o, _ = sf.read(tmp, dtype='float64'); os.remove(tmp)
+c = __import__('json').loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+a, b = int(c['srcIn'] * sr), int(c['srcOut'] * sr)
+seg = x[a:b] if x.ndim == 1 else x[a:b, 0]
+rep = np.resize(o, b - a) * (np.sqrt((seg ** 2).mean()) / (np.sqrt((o ** 2).mean()) + 1e-9))
+if x.ndim == 1: x[a:b] = rep
+else: x[a:b, :] = rep[:, None]
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 每句都是同一个人');
+speechCase('有一句带了房间回声（一句有回音一句没有；用户听 E01 v16）', (tl) => {
+  // 源配音最后一段卷积一个 0.5 秒的指数衰减混响，别的句子不动
+  const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np, json
+from scipy.signal import fftconvolve
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+a, b = int(c['srcIn'] * sr), int(c['srcOut'] * sr)
+t = np.arange(int(0.5 * sr)) / sr; ir = np.random.default_rng(3).standard_normal(len(t)) * np.exp(-t * 6.9 / 0.5); ir[0] = 4.0
+seg = x[a:b] if x.ndim == 1 else x[a:b, 0]
+w = fftconvolve(seg, ir)[: b - a]; w *= np.sqrt((seg ** 2).mean() / ((w ** 2).mean() + 1e-12))
+if x.ndim == 1: x[a:b] = w
+else: x[a:b, :] = w[:, None]
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 每句没有回声');
+speechCase('有一句比别的句子响 6dB（句与句音量不一样）', (tl) => {
+  const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, numpy as np, json
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+a, b = int(c['srcIn'] * sr), int(c['srcOut'] * sr)
+x[a:b] *= 10 ** (6 / 20)
+sf.write(${JSON.stringify(dst)}, np.clip(x, -1, 1), sr)`]);
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 每句基础音量一致');
 speechCase('旁白里一个字的开头被抹掉 80ms', (tl) => {
-  const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `
 import soundfile as sf, json, numpy as np
 x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
-c = json.loads(${JSON.stringify(JSON.stringify(base.audioClips.at(-1)))})
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
 a = int((c['at'] + 0.03) * sr)
 k = a + int(np.argmax(np.abs(x[a:a + int(0.6 * sr)]) > 0.05))
 x[k:k + int(0.08 * sr)] = 0
@@ -214,9 +307,9 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   return { cleanup: [dst] };
 }, '[失败] 拼接后声音完整');
 speechCase('旁白里一个字被吞掉（整个字弱 40dB）', (tl) => {
-  const timing = JSON.parse(fs.readFileSync(path.resolve('data', beatsSrc.narration.timing), 'utf8'));
+  const timing = JSON.parse(fs.readFileSync(path.resolve('data', sbeatsSrc.narration.timing), 'utf8'));
   const c = tl.audioClips[1], w = timing.words.filter((x) => x.start >= c.srcIn && x.end <= c.srcOut)[2];
-  const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `
 import soundfile as sf
 x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
@@ -227,9 +320,9 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   return { cleanup: [dst] };
 }, '[失败] 没有吞字');
 speechCase('句末的字被吞掉（整字静音）', (tl) => {
-  const timing = JSON.parse(fs.readFileSync(path.resolve('data', beatsSrc.narration.timing), 'utf8'));
+  const timing = JSON.parse(fs.readFileSync(path.resolve('data', sbeatsSrc.narration.timing), 'utf8'));
   const c = tl.audioClips.reduce((m, x) => (x.srcOut - x.srcIn > m.srcOut - m.srcIn ? x : m)), w = timing.words.filter((x) => x.start >= c.srcIn && x.end <= c.srcOut).at(-1);
-  const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `
 import soundfile as sf
 x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
@@ -240,9 +333,12 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   return { cleanup: [dst] };
 }, '[失败] 没有吞字');
 speechCase('字被压成 0ms、邻字也没变长（真吞掉，不是对齐毛病）', (tl) => {
-  const timing = JSON.parse(fs.readFileSync(path.resolve('data', beatsSrc.narration.timing), 'utf8'));
-  const c = tl.audioClips[1], ws = timing.words.filter((x) => x.start >= c.srcIn && x.end <= c.srcOut), w = ws[2];
-  const src = path.resolve('public', base.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  const timing = JSON.parse(fs.readFileSync(path.resolve('data', sbeatsSrc.narration.timing), 'utf8'));
+  // 挑一个前后邻字时长都正常的字（不到中位数的 1.5 倍）：邻字本来就长时，检查会当成「对齐器把它并进邻字了」放过去，这个用例就测不到
+  const med = [...timing.words.filter((x) => x.text.length === 1).map((x) => x.end - x.start)].sort((p, q) => p - q)[Math.floor(timing.words.length / 2)];
+  const pickW = (ws) => ws.find((x, k) => k > 0 && k < ws.length - 1 && ws[k - 1].end - ws[k - 1].start < 1.5 * med && ws[k + 1].end - ws[k + 1].start < 1.5 * med);
+  const c = tl.audioClips.find((x) => pickW(timing.words.filter((y) => y.start >= x.srcIn && y.end <= x.srcOut))), ws = timing.words.filter((x) => x.start >= c.srcIn && x.end <= c.srcOut), w = pickW(ws);
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `
 import soundfile as sf
 x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
@@ -250,7 +346,7 @@ x[int(${c.at + w.start - c.srcIn} * sr):int(${c.at + w.end - c.srcIn} * sr)] = 0
 sf.write(${JSON.stringify(dst)}, x, sr)`]);
   w.end = w.start; // 配音时对齐把这个字压成 0ms，前后两个字的时长不变
   fs.writeFileSync('data/_selftest.timing.json', JSON.stringify(timing));
-  fs.writeFileSync('data/_selftest.beats.json', JSON.stringify({ ...beatsSrc, id: '_selftest', narration: { ...beatsSrc.narration, timing: '_selftest.timing.json' } }));
+  fs.writeFileSync('data/_selftest.beats.json', JSON.stringify({ ...sbeatsSrc, id: '_selftest', narration: { ...sbeatsSrc.narration, timing: '_selftest.timing.json' } }));
   tl.beatsId = '_selftest';
   tl.narration = 'audio/_selftest.narration.wav';
   delete tl.audio;

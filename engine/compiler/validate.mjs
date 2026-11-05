@@ -106,6 +106,11 @@ export function validateBeats(beats, style, reg) {
     if (!sentences.includes(t)) E('narration.reseed', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
     if (!Number.isInteger(k) || k < 1) E('narration.reseed', `「${t}」的偏移要写正整数`);
   }
+  // tone：按句标语气，配音时按它挑候选（语气名在不在 voice.json 的 tones 里，配音时查）
+  for (const [t, m] of Object.entries(beats.narration?.tone ?? {})) {
+    if (!sentences.includes(t)) E('narration.tone', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
+    if (typeof m !== 'string' || !m.trim() || m.includes('=')) E('narration.tone', `「${t}」的语气要写 voice.json 的 tones 里的名字`);
+  }
   // mood：按句选情绪参考音（语气跟着内容变）。哪句用什么情绪是创作取舍，这里只查格式；情绪名在不在本机 voice.json 里，配音时查
   for (const [t, m] of Object.entries(beats.narration?.mood ?? {})) {
     if (!sentences.includes(t)) E('narration.mood', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);

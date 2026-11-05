@@ -45,26 +45,29 @@ from mlx_audio.tts.utils import load_model
 from voice import load_voice, similarity, pitch_drops
 voice = load_voice()
 x0, sr0 = mono(root / "public" / tl["narration"])
-sim = similarity(load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base")), x0, sr0, voice)
+_tts = load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base"))  # 只载一次，后面每句音色一致也用它（原来载两遍）
+sim = similarity(_tts, x0, sr0, voice)
 check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似度 {sim:.3f}（下限 {voice['minSimilarity']}）")
 
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
 floor = voice.get("pitchFloorHz", 0)
 timing0 = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
+# 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾。
+# 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上）
+def sentence_ranges():
+    S = timing0.get("sentences", [])
+    overlap = lambda c, s: min(c["srcOut"], s["end"]) - max(c["srcIn"], s["start"])
+    owner = [max(range(len(S)), key=lambda k: overlap(c, S[k])) if S else None for c in tl["audioClips"]]
+    for k in range(len(S)):
+        cs = [c for c, o in zip(tl["audioClips"], owner) if o == k]
+        if cs:
+            yield k, min(c["at"] for c in cs), max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
+
+
 if floor:
     # 按句量：判断「听得见的部分」要拿这一句自己的响度做参照，和配音时逐句自检一致；拿整段旁白做参照时，
     # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
-    # 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾
-    # 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上，会退回整段量）
-    def sentence_ranges():
-        S = timing0.get("sentences", [])
-        overlap = lambda c, s: min(c["srcOut"], s["end"]) - max(c["srcIn"], s["start"])
-        owner = [max(range(len(S)), key=lambda k: overlap(c, S[k])) if S else None for c in tl["audioClips"]]
-        for k in range(len(S)):
-            cs = [c for c, o in zip(tl["audioClips"], owner) if o == k]
-            if cs:
-                yield min(c["at"] for c in cs), max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
-    ranges = list(sentence_ranges()) or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
+    ranges = [(a, b) for _, a, b in sentence_ranges()] or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
     drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
     def phrase_at(t):
         c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
@@ -75,7 +78,7 @@ if floor:
 #     句内起伏 = 浊音基频 5%–95% 分位差几个半音；句间变化 = 各句音区（中位基频）的标准差。念课文式的配音两项都偏小
 from voice import pitch_range_st, pitch_median_hz
 if voice.get("pitchRangeSt") or voice.get("registerSpreadSt"):
-    xs, xsr = mono(root / "public" / beats["narration"]["audio"])
+    xs, xsr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
     tm = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
     P = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
     ranges, regs, k = [], [], 0
@@ -97,8 +100,65 @@ if voice.get("pitchRangeSt") or voice.get("registerSpreadSt"):
               f"句间音区变化 {spread:.1f} 个半音（真实 ≥{need_s}）" + ("" if ok else "；最平的：" + "、".join(f"「{t[:12]}」{r:.1f}" for r, t in flat)
               + "。可以在分镜 narration.mood 里按句指定情绪参考音"))
 
+# 0d. 背景干净：每句旁白的 DNSMOS BAK（背景噪声分，1–5，越高越干净）不低于 voice.json 的 minBak。
+#     用户听 E01 v7「说话时有明显背景噪音」，音色相似度、谐噪比、电平都看不出来；BAK 按句排，最差的几句（「那怎么办？」2.66）明显比别的句子脏
+min_bak = voice.get("minBak", 0)
+if min_bak:
+    # 在源配音上量（和配音生成时拼好的整段是同一个文件）。DNSMOS 对短片段很敏感：同一句挪 5 个采样 BAK 能差 0.2–0.3，
+    # 9 秒窗挪 37 个采样能差 0.8，单句、单窗都当不了关卡；全片 9 秒窗的中位数稳定（挪动只差 ±0.05），
+    # 用它拦「整条配音都脏」（比如参考音有底噪）。个别句子偏脏在配音生成时逐句筛（takeMinBak）
+    from dnsmos import score as dnsmos_score
+    xs0, ssr0 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    _, bw0 = dnsmos_score(xs0, ssr0, jitter=1)
+    med_b = float(np.median(bw0))
+    check("背景干净", med_b >= min_bak, f"整条配音 DNSMOS BAK 9 秒窗中位 {med_b:.2f}（下限 {min_bak}），10% 分位 {np.percentile(bw0, 10):.2f}")
+
+# 0e. 说话时没有沙沙声：在源配音上逐句量浊音谱平坦度（voice.py 的 voiced_flatness），全片中位数不高于 maxFlatMedian。
+#     用户听 E01 v7–v14「一开口就有背景噪声、说完就没」：那几版中位 0.128，听着干净的 0.083，真人录音 0.03–0.045
+max_flat = voice.get("maxFlatMedian", 0)
+if max_flat:
+    from voice import voiced_flatness
+    xs1, ssr1 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans1 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    fl = sorted(((voiced_flatness(xs1[int(s["start"] * ssr1):int(s["end"] * ssr1)], ssr1), s["text"]) for s in spans1), reverse=True)
+    med_fl = float(np.median([v for v, _ in fl]))
+    check("说话时没有沙沙声", med_fl <= max_flat, f"{len(fl)} 句浊音谱平坦度中位 {med_fl:.3f}（上限 {max_flat}；真人录音约 0.03–0.045），最高的：" + "、".join(f"「{t[:8]}」{v:.3f}" for v, t in fl[:3]))
+
+# 0f. 每句都是同一个人：源配音逐句的说话人嵌入和整集平均的余弦相似度，最低的一句不低于 minConsistency。
+#     按句生成时音色会一句一句地飘（用户听 E01 v15：像几个人你一句我一句）；整段的「音色一致性」只看平均，看不出来
+min_cons = voice.get("minConsistency", 0)
+if min_cons:
+    from voice import embedding as spk_emb
+    xs2, ssr2 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans2 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    E = []
+    for s2 in spans2:
+        e = spk_emb(_tts, xs2[int(s2["start"] * ssr2):int(s2["end"] * ssr2)].astype(np.float32), ssr2); E.append(e / np.linalg.norm(e))
+    cen = np.mean(E, 0); cen /= np.linalg.norm(cen)
+    cs = sorted(((float(e @ cen), s2["text"]) for e, s2 in zip(E, spans2)))
+    check("每句都是同一个人", cs[0][0] >= min_cons, f"{len(cs)} 句和整集平均音色的相似度最低 {cs[0][0]:.3f}（下限 {min_cons}），中位 {np.median([c for c, _ in cs]):.3f}；最不像的：" + "、".join(f"「{t[:8]}」{c:.3f}" for c, t in cs[:3]))
+
+# 0g/0h. 回声一致、基础响度一致（VOICE_PIPELINE.md）：在源配音上逐句量。用户听 E01 v16：一句有回音一句没有、句与句音量不一样
+max_echo, max_spread = voice.get("maxEcho", 0), voice.get("maxLevelSpreadDb", 0)
+if max_echo or max_spread:
+    from voice import echo_ms, pause_points, active_level_db
+    xs3, ssr3 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans3 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
+    ec, lv = [], []
+    for s3 in spans3:
+        seg = xs3[int(s3["start"] * ssr3):int(s3["end"] * ssr3)]
+        ec.append((echo_ms(seg, ssr3, pause_points(timing0["words"], s3["start"], s3["end"])), s3["text"]))
+        lv.append((active_level_db(seg, ssr3), s3["text"]))
+    if max_echo:
+        ec.sort(reverse=True)
+        check("每句没有回声", ec[0][0] <= max_echo, f"{len(ec)} 句停顿处衰减 20dB 的时间最长 {ec[0][0]:.0f}ms（上限 {max_echo}；干声约 60–90ms），中位 {np.median([e for e, _ in ec]):.0f}ms；最长的：" + "、".join(f"「{t[:8]}」{e:.0f}ms" for e, t in ec[:3]))
+    if max_spread:
+        lv.sort()
+        sp = lv[-1][0] - lv[0][0]
+        check("每句基础音量一致", sp <= max_spread, f"{len(lv)} 句基础响度最响和最轻差 {sp:.1f}dB（上限 {max_spread}dB）：最轻「{lv[0][1][:8]}」{lv[0][0]:.1f}dB，最响「{lv[-1][1][:8]}」{lv[-1][0]:.1f}dB")
+
 # 1. 拼接切点
-src, ssr = mono(root / "public" / beats["narration"]["audio"])
+src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)
 bad = []
 for c in tl["audioClips"]:

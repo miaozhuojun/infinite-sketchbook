@@ -187,6 +187,11 @@ squashed = lambda rel: [w["text"] for w in rel if len(w["text"]) == 1 and w["end
 asr_text = lambda path: re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower().translate(DIG)
 
 
+# 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
+# 「这就叫机器学习。」几乎全是 j/q/x，浊音谱平坦度天生偏高，30 多个种子都在 0.09 以上；原来每次跑都扔掉重配、再退回同一条，一次三分钟
+FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
+
+
 def synth_sentence(text, seed0, R, strict=False):
     """生成一句：一个个种子试，硬关卡（时长、回转拼音、掉音、掉嗓子、对齐、沙沙声、回声）都过的留作候选，
     凑够 CANDS 条（或试满 max_tries 次）后，按语气目标和音色接近度打分挑一条（VOICE_PIPELINE.md 第三步）。
@@ -270,7 +275,8 @@ def synth_sentence(text, seed0, R, strict=False):
     # 别的自检都过、只是背景分没到：用这几次里最干净的一条（背景分只是筛子，不该让整集配不出来）
     if best_flat:
         print(f"    {args.max_tries} 次里没有一条沙沙声低于 {MAX_FLAT}，用最干净的种子 {best_flat[1][2]}（{best_flat[0]:.3f}）")
-        return best_flat[1]
+        a_, sr_, sd_, nt_, rel_, bk_ = best_flat[1]
+        return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + FLAT_FALLBACK, rel_, bk_
     if best:
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
@@ -343,10 +349,11 @@ for i, sent in enumerate(sents):
         if len(x_c) - len(trim_edges(x_c, sr_c)) > 0.3 * sr_c or squashed(json.load(open(key + ".json", encoding="utf-8"))["words"]):
             print(f"  缓存里的「{sent}」句首尾静音过长或对齐有字不到 50ms，重新生成")
             cached = False
-        elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO:
+        # 缓存检查比生成时松 5%（回差）：缓存存成 16 位整数，重读后量出来会差一点，卡在线上的句子每次跑都被扔掉重配（「那就再补一条…」生成时 0.090、重读 0.091）
+        elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO * 1.05:
             print(f"  缓存里的「{sent}」有回声，重新生成")
             cached = False
-        elif MAX_FLAT and voiced_flatness(x_c, sr_c) > MAX_FLAT:
+        elif MAX_FLAT and json.load(open(key + ".json", encoding="utf-8")).get("flatFallback") != MAX_FLAT and voiced_flatness(x_c, sr_c) > MAX_FLAT * 1.05:
             print(f"  缓存里的「{sent}」说话时有沙沙声，重新生成")
             cached = False
         elif GEN_BAK:
@@ -377,7 +384,8 @@ for i, sent in enumerate(sents):
             audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
             note = (note + "；" if note else "") + f"自动换「{FALLBACK}」参考音"
         sf.write(key + ".wav", audio, sr)
-        json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+        json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
+                   **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     takes.append([audio, sr, seed, note, rel])
     mood = mood_of.get(sent.strip())
     print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")

@@ -45,7 +45,8 @@ from mlx_audio.tts.utils import load_model
 from voice import load_voice, similarity, pitch_drops
 voice = load_voice()
 x0, sr0 = mono(root / "public" / tl["narration"])
-sim = similarity(load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base")), x0, sr0, voice)
+_tts = load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base"))  # 只载一次，后面每句音色一致也用它（原来载两遍）
+sim = similarity(_tts, x0, sr0, voice)
 check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似度 {sim:.3f}（下限 {voice['minSimilarity']}）")
 
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
@@ -128,8 +129,6 @@ if max_flat:
 min_cons = voice.get("minConsistency", 0)
 if min_cons:
     from voice import embedding as spk_emb
-    if "_tts" not in dir():
-        _tts = load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base"))
     xs2, ssr2 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
     spans2 = timing0.get("sentences") or [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
     E = []

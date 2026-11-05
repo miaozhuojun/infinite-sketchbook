@@ -187,9 +187,11 @@ squashed = lambda rel: [w["text"] for w in rel if len(w["text"]) == 1 and w["end
 asr_text = lambda path: re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower().translate(DIG)
 
 
-def synth_sentence(text, seed0, R):
+def synth_sentence(text, seed0, R, strict=False):
     """生成一句：一个个种子试，硬关卡（时长、回转拼音、掉音、掉嗓子、对齐、沙沙声、回声）都过的留作候选，
-    凑够 CANDS 条（或试满 max_tries 次）后，按语气目标和音色接近度打分挑一条（VOICE_PIPELINE.md 第三步）。"""
+    凑够 CANDS 条（或试满 max_tries 次）后，按语气目标和音色接近度打分挑一条（VOICE_PIPELINE.md 第三步）。
+    strict：重配已有的一句时（吞字、音色一致），只收全部关卡都过的候选，不退而求其次——
+    E01 v17 音色一致重配收了一条沙沙声 0.116 的「这就叫机器学习。」，下次跑缓存检查又把它扔掉重配，每次多花三分钟"""
     ref = re.sub(PUNCT, "", text).lower().translate(DIG)
     tmp = args.out + ".sent.wav"
     best = None  # 只差背景分的候选里最干净的一条
@@ -263,6 +265,8 @@ def synth_sentence(text, seed0, R):
         if len(cands) > 1:
             print(f"    {len(cands)} 条候选按「{tone}」挑了种子 {pick[2]}（音区 {12 * np.log2(pr['f0'] / BASE_F0) if BASE_F0 and pr['f0'] else 0:+.1f} 半音、起伏 {pr['range']:.1f}、句末 {pr['end']:+.1f}）")
         return pick
+    if strict:
+        raise SystemExit(f"「{text}」{args.max_tries} 次里没有全部关卡都过的候选")
     # 别的自检都过、只是背景分没到：用这几次里最干净的一条（背景分只是筛子，不该让整集配不出来）
     if best_flat:
         print(f"    {args.max_tries} 次里没有一条沙沙声低于 {MAX_FLAT}，用最干净的种子 {best_flat[1][2]}（{best_flat[0]:.3f}）")
@@ -273,7 +277,7 @@ def synth_sentence(text, seed0, R):
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
 
 
-def split_synth(sent, seed0, pause=0.25):
+def split_synth(sent, seed0, pause=0.25, strict=False):
     """自动拆句：一句试满都没过（多半是长陈述句句末掉嗓子），在最后一个逗号、冒号或分号处拆成两半，各按一句配，
     中间留 pause 秒（一个逗号的停顿）拼回去。字不变，时间线里还是一句。两半都要各自过全部关卡"""
     body = sent.rstrip("。？！")
@@ -283,8 +287,8 @@ def split_synth(sent, seed0, pause=0.25):
     a_txt, b_txt = body[:cut] + "。", body[cut + 1:] + sent[len(body):]
     print(f"  「{sent}」拆成「{a_txt}」「{b_txt}」两半分别配")
     try:
-        r1 = synth_sentence(a_txt, seed0, ref_for(sent))
-        r2 = synth_sentence(b_txt, seed0 + 50, ref_for(sent))
+        r1 = synth_sentence(a_txt, seed0, ref_for(sent), strict)
+        r2 = synth_sentence(b_txt, seed0 + 50, ref_for(sent), strict)
     except SystemExit:
         return None
     a1, sr_, s1, n1, rel1, bk1 = r1; a2, _, _, n2, rel2, _ = r2
@@ -294,17 +298,17 @@ def split_synth(sent, seed0, pause=0.25):
     return audio, sr_, s1, "；".join(x for x in [n1, n2, "自动拆成两半配"] if x), rel, bk1
 
 
-def make_take(sent, seed0):
+def make_take(sent, seed0, strict=False):
     """配一句的完整做法（主循环、拼好后的吞字重配、音色一致重配都用它）：先按 seed0 起试一轮，不过就再试 extraRounds 轮新种子，
     还不过就自动拆成两半配；都不行返回 None"""
     for r in range(1 + voice.get("extraRounds", 0)):
         try:
-            res = synth_sentence(sent, seed0 + r * args.max_tries, ref_for(sent))
+            res = synth_sentence(sent, seed0 + r * args.max_tries, ref_for(sent), strict)
             return res[:3] + ((res[3] + "；" if res[3] else "") + f"多试了 {r} 轮",) + res[4:] if r else res
         except SystemExit:
             if r < voice.get("extraRounds", 0):
                 print(f"  「{sent}」{args.max_tries} 次没过，换下一轮种子再试")
-    return split_synth(sent, seed0)
+    return split_synth(sent, seed0, strict=strict)
 
 
 # 按句生成（句号、问号、叹号处断开）：每句单独自检、单独重试；句间统一留 gap 秒停顿，
@@ -412,7 +416,7 @@ for rnd in range(4):
         raise SystemExit("重配 3 轮后仍有字偏弱：" + "；".join(m for _, m in weak))
     for i in bad:
         print(f"  拼好后第 {i + 1} 句有字偏弱（{'；'.join(m for k, m in weak if words[k]['sent'] == i)}），换下一个种子重配")
-        res = make_take(sents[i], takes[i][2] + 1)
+        res = make_take(sents[i], takes[i][2] + 1, strict=True)
         if not res:
             print(f"    第 {i + 1} 句换种子没配出来，留原来那条"); continue
         audio, sr, seed, note, rel, bk = res
@@ -426,6 +430,10 @@ MIN_CONS = voice.get("takeMinConsistency", 0)
 if MIN_CONS:
     embs = [None] * len(sents)
     best_c = {}
+    # 已经为音色一致重配过、留下了最像的一条的句子，缓存里记着 consChecked，以后不再重配：种子是确定的，再试也是同样几条（原来每次跑都重来，一次三分钟）
+    meta_of = lambda i: (lambda k: json.load(open(k, encoding="utf-8")) if os.path.exists(k) else {})(os.path.join(CACHE, cache_key(sents[i])) + ".json")
+    settled = {i for i in range(len(sents)) if meta_of(i).get("consChecked")}
+    tried = set()
     for rnd in range(4):
         for i, tk in enumerate(takes):
             if embs[i] is None:
@@ -435,14 +443,16 @@ if MIN_CONS:
         for i, c in enumerate(cos):
             if i not in best_c or c > best_c[i][0]:
                 best_c[i] = (c, list(takes[i]))
-        bad = [i for i, c in enumerate(cos) if c < MIN_CONS]
+        bad = [i for i, c in enumerate(cos) if c < MIN_CONS and i not in settled]
         if not bad or rnd == 3:
             break
         for i in bad:
             print(f"  第 {i + 1} 句音色和整集不太像（{cos[i]:.3f}，要 ≥{MIN_CONS}），换下一个种子重配：{sents[i]}")
-            res = make_take(sents[i], takes[i][2] + 1)
+            tried.add(i)
+            res = make_take(sents[i], takes[i][2] + 1, strict=True)
             if not res:
-                print(f"    第 {i + 1} 句换种子没配出更好的，留原来那条"); continue
+                settled.add(i)  # 这一轮全部关卡都过的一条都没有，再试下一轮也是从同一个种子起，不再试
+                print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res
             takes[i] = [audio, sr, seed, note, rel]; embs[i] = None
     final = list(cos)
@@ -453,9 +463,11 @@ if MIN_CONS:
     for i, tk in enumerate(takes):
         key = os.path.join(CACHE, cache_key(sents[i]))
         meta = json.load(open(key + ".json", encoding="utf-8")) if os.path.exists(key + ".json") else {}
-        if meta.get("seed") != tk[2]:
-            sf.write(key + ".wav", tk[0], tk[1])
-            json.dump({"text": sents[i], "seed": tk[2], "note": tk[3], "words": tk[4]}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+        if meta.get("seed") != tk[2] or (i in tried and not meta.get("consChecked")):
+            if meta.get("seed") != tk[2]:
+                sf.write(key + ".wav", tk[0], tk[1]); meta = {}
+            json.dump({**meta, "text": sents[i], "seed": tk[2], "note": tk[3], "words": tk[4], **({"consChecked": True} if i in tried else {})},
+                      open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     full, words, spans = assemble()
     print(f"  每句音色和整集平均的相似度（换回最像的之后，按换之前的整集平均估）：最低 {min(final):.3f}，中位 {np.median(final):.3f}")
 for w in words:

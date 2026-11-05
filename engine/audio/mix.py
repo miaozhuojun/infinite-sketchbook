@@ -100,7 +100,7 @@ pencil = [y for y in (load(n) for n in AU.get("pencilSamples", [])) if y is not 
 # （v1 用连续白噪声，用户反馈"太大、太假"；改为颗粒式合成并大幅降低电平）
 pools = []
 for y in pencil:
-    e = np.sqrt(uniform_filter1d(y ** 2, int(0.02 * SR)))
+    e = np.sqrt(np.maximum(uniform_filter1d(y ** 2, int(0.02 * SR)), 0))  # 重采样后的录音在静音处滤波会出极小的负数，开方成 NaN，整份录音就找不到「正在写」的段
     pools.append((y, e > e.max() * 10 ** (-25 / 20)))  # 20ms 包络高于峰值 -25dB 算「正在写」
 grains = np.zeros(N)   # 颗粒冲激
 rub = np.zeros(N)      # 纸面摩擦底噪
@@ -215,11 +215,16 @@ music *= fade
 
 # 人声出现时把音乐压低（侧链式闪避），用旁白片段时间表，平滑过渡
 duck_db = np.full(N, 0.0)
-for c in tl["audioClips"]:
-    a, b = int(c["at"] * SR), int((c["at"] + c["srcOut"] - c["srcIn"]) * SR)
-    duck_db[a:b] = AU["duckDb"]
+clips = sorted((c["at"], c["at"] + c["srcOut"] - c["srcIn"]) for c in tl["audioClips"])
+for a, b in clips:
+    duck_db[int(a * SR):int(b * SR)] = AU["duckDb"]
+# 句间停顿短于 duckHoldGap 秒时音乐不回升：每个小停顿里音乐都冒上来，听着像说话时有背景噪音（用户听 E01 v7；DNSMOS 说话段最差窗 1.76 → 2.60）
+hold = AU.get("duckHoldGap", 0)
+for (a0, b0), (a1, b1) in zip(clips, clips[1:]):
+    if a1 - b0 < hold:
+        duck_db[int(b0 * SR):int(a1 * SR)] = AU["duckDb"]
 k = int(0.25 * SR)
-duck_db = np.convolve(duck_db, np.ones(k) / k, mode="same")
+duck_db = uniform_filter1d(duck_db, k, mode="constant")  # 0.25 秒滑动平均（和 np.convolve 同结果，快几百倍：原来一个画幅要 42 秒）
 music *= 10 ** (duck_db / 20)
 foley_duck = 10 ** (duck_db * AU["foleyDuck"] / 20)  # 说话时书写声也让一让（约 -6dB）
 

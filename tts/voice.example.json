@@ -53,5 +53,13 @@
   "rateCv": 0.15,
   "longPauses": 12,
   "pauses": 45
- }
+ },
+ "chunk": {
+  "maxSentences": 3,
+  "maxChars": 60
+ },
+ "chunkNote": "两三句同语气的话一起配，在句间停顿处切开：句首不用每句从头起调，接得更顺。切不开、对不上字的整段退回逐句配；成片检查点名的句子标 .nochunk 以后逐句配",
+ "takeNoBreaks": true,
+ "maxBreaks": 0,
+ "breaksNote": "破音：音高突然跳 14 半音以上又不是八度（voice.py 的 pitch_breaks）。takeNoBreaks 让生成时就挑掉有破音的候选；maxBreaks 是成片旁白检查的上限；成片拼好后还剩的破音、掉嗓子、回声句自动严格重配，最多 3 轮"
 }

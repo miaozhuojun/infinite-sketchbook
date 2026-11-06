@@ -275,3 +275,17 @@ def read_numbers(s):
     import re as _re
     return _re.sub(r"\d+", lambda m: "".join(_D[int(c)] for c in m[0]) if len(m[0]) == 4 and 1000 <= int(m[0]) <= 2099 or len(m[0]) > 4 or m[0].startswith("0") and len(m[0]) > 1
                    else _cn(int(m[0])), s)
+
+
+def pitch_breaks(x, sr, min_st=14.0, merge=0.05):
+    """破音：浊音里相邻两帧（1ms）音高突然跳 min_st 半音以上、又不是正好一个或两个八度（八度跳多半是基频估错，不是声音坏了）。
+    用户听 E02 v3「好几处声音畸变」：E02 每分钟 1.9 处，E01 只有 0.3 处，原来没有一项检查管它。返回 [(时刻, 跳了几个半音)]"""
+    tr = f0_track(x, sr)
+    out, prev = [], None
+    for t, f in tr:
+        if f and prev and prev[1] and t - prev[0] < 0.012:
+            j = abs(12 * np.log2(f / prev[1]))
+            if j > min_st and abs(j - 12) > 1.5 and abs(j - 24) > 1.5 and (not out or t - out[-1][0] > merge):
+                out.append((round(float(t), 3), round(float(j), 1)))
+        prev = (t, f)
+    return out

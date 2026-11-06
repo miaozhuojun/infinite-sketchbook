@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import read_numbers, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import read_numbers, pitch_breaks, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -52,6 +52,8 @@ GEN_FLOOR = FLOOR * 1.03
 GEN_BAK = voice.get("takeMinBak", 0)
 # 说话时的沙沙声（浊音谱平坦度，见 voice.py），高于 takeMaxFlat 就换种子；10 次都不到就用最干净的一条
 MAX_FLAT = voice.get("takeMaxFlat", 0)
+# 破音（voice.py 的 pitch_breaks）：候选里有一处就丢（用户听 E02 v3「好几处声音畸变」，E02 每分钟 1.9 处、E01 0.3 处）
+NO_BREAKS = voice.get("takeNoBreaks", False)
 # 回声：停顿处衰减 20dB 的时间（毫秒）高于 takeMaxEcho 就换种子（参考音录在有回声的房间时，每句学到的回声多少不一）
 MAX_ECHO = voice.get("takeMaxEcho", 0)
 # 每句候选几条、按语气挑（VOICE_PIPELINE.md 第三步）；--tone「句子=语气」覆盖自动判断（问句→好奇、感叹→兴奋、其余→认真讲）
@@ -195,7 +197,7 @@ asr_text = lambda path: read_numbers(re.sub(PUNCT, "", asr.generate(path, langua
 FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
 
 
-def synth_sentence(text, seed0, R, strict=False):
+def synth_sentence(text, seed0, R, strict=False, tone=None):
     """生成一句：一个个种子试，硬关卡（时长、回转拼音、掉音、掉嗓子、对齐、沙沙声、回声）都过的留作候选，
     凑够 CANDS 条（或试满 max_tries 次）后，按语气目标和音色接近度打分挑一条（VOICE_PIPELINE.md 第三步）。
     strict：重配已有的一句时（吞字、音色一致），只收全部关卡都过的候选，不退而求其次——
@@ -205,7 +207,7 @@ def synth_sentence(text, seed0, R, strict=False):
     best = None  # 只差背景分的候选里最干净的一条
     best_flat = None  # 只差沙沙声的候选里最干净的一条
     cands = []
-    tone = tone_of(text); target = TONES.get(tone, {})
+    tone = tone or tone_of(text); target = TONES.get(tone, {})
     for attempt in range(args.max_tries):
         if len(cands) >= CANDS:
             break
@@ -228,6 +230,10 @@ def synth_sentence(text, seed0, R, strict=False):
         drops = pitch_drops(audio, sr, GEN_FLOOR) if FLOOR else []
         if drops:
             print(f"    种子 {seed}：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（生成时下限 {GEN_FLOOR:.0f}Hz），换种子重来")
+            continue
+        brk = pitch_breaks(audio, sr) if NO_BREAKS else []
+        if brk:
+            print(f"    种子 {seed}：破音 " + "、".join(f"{t:.2f}s 跳 {j:.0f} 半音" for t, j in brk) + "，换种子重来")
             continue
         note = None
         if c == 0 and dz == 0:
@@ -338,8 +344,90 @@ stray = [t for t in mood_of if t not in {x.strip() for x in sents}]
 if stray:
     raise SystemExit("--mood 里这些不是旁白稿里的一整句：" + "；".join(stray))
 n_cached = 0
+
+
+def split_chunk(res, texts):
+    """一段一起配出来的声音，按句切开：在每两句之间停顿的正中切（每句要几个字按去标点数）。句间没有停顿就切不开，返回 None"""
+    audio, sr_, seed, note, rel = res
+    counts = [len(re.sub(PUNCT, "", t)) for t in texts]
+    ends, acc, ci, target = [], 0, 0, counts[0]
+    for j, w in enumerate(rel):
+        acc += len(re.sub(PUNCT, "", w["text"]))
+        if acc >= target and len(ends) < len(counts) - 1:
+            ends.append(j); ci += 1; target += counts[ci]
+    if len(ends) != len(counts) - 1:
+        return None
+    cuts, starts = [0.0], [0]
+    for j in ends:
+        e, s2 = rel[j]["end"], rel[j + 1]["start"]
+        if s2 - e < 0.12:
+            return None
+        cuts.append((e + s2) / 2); starts.append(j + 1)
+    cuts.append(len(audio) / sr_); starts.append(len(rel))
+    out = []
+    for k in range(len(texts)):
+        a, b = cuts[k], cuts[k + 1]
+        ws = [dict(w, start=round(w["start"] - a, 3), end=round(w["end"] - a, 3)) for w in rel[starts[k]:starts[k + 1]]]
+        out.append((audio[int(a * sr_):int(b * sr_)], sr_, seed, (note + "；" if note else "") + f"整段一起配（{len(texts)} 句）", ws))
+    return out
+
+
+# 两三句一起配（voice.json 的 chunk）：按句单独生成，每句都从头起调，听着一句一句断开、有顿挫（用户听 E02 v3：不自然）。
+# 语气相同的相邻句子凑成一段（最多 chunk.maxSentences 句、chunk.maxChars 个字）一次配出来，再在句间停顿的正中切开，
+# 同一段里的句子之间不再另加停顿。一段配不过（全部关卡）就退回逐句配
+CHUNK = voice.get("chunk") or {}
+pre, joined = {}, set()  # pre[i]：这一句从段里切出来的 take；joined：这一句后面紧跟同一段的下一句（拼接时不另加停顿）
+if CHUNK.get("maxSentences", 1) > 1:
+    groups, cur = [], []
+    clean_len = lambda t: len(re.sub(PUNCT, "", t))
+    for i, sent in enumerate(sents):
+        brk = cur and (len(cur) >= CHUNK["maxSentences"] or sum(clean_len(sents[k]) for k in cur) + clean_len(sent) > CHUNK.get("maxChars", 60)
+                       or tone_of(sent) != tone_of(sents[cur[0]]) or sent.strip() in reseed or sents[cur[0]].strip() in reseed or sent.strip() in mood_of)
+        if brk:
+            groups.append(cur); cur = []
+        cur.append(i)
+    if cur:
+        groups.append(cur)
+    for g in groups:
+        if len(g) < 2:
+            continue
+        text = "".join(sents[k] for k in g)
+        ckey = os.path.join(CACHE, "chunk-" + cache_key(text))
+        res = None
+        if not args.no_cache and os.path.exists(ckey + ".wav") and os.path.exists(ckey + ".json"):
+            a_, s_ = sf.read(ckey + ".wav", dtype="float32"); m_ = json.load(open(ckey + ".json", encoding="utf-8"))
+            if not (NO_BREAKS and pitch_breaks(a_, s_)):
+                res = (a_, s_, m_["seed"], "缓存", m_["words"])
+        if res is None:
+            print(f"  {len(g)} 句一起配：{text}")
+            try:
+                r = synth_sentence(text, seed_of(sents[g[0]]), ref_for(sents[g[0]]), strict=True, tone=tone_of(sents[g[0]]))
+            except SystemExit:
+                print("    这一段一起配不过，退回逐句配")
+                continue
+            res = r[:5]
+            sf.write(ckey + ".wav", r[0], r[1])
+            json.dump({"text": text, "seed": r[2], "note": r[3], "words": r[4]}, open(ckey + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+        parts = split_chunk(res, [sents[k] for k in g])
+        if not parts:
+            print(f"    「{text[:16]}…」句间没有停顿，切不开，退回逐句配")
+            continue
+        for k, take in zip(g, parts):
+            # 这一句拼好后查出过破音、已经单独重配过（.nochunk 标记），就用单独配的那条
+            if not os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk"):
+                pre[k] = take
+        joined.update(k for k in g[:-1] if k in pre and k + 1 in pre)
+
 for i, sent in enumerate(sents):
     t0 = time.time()
+    if i in pre:  # 整段一起配好的，直接用
+        audio, sr, seed, note, rel = pre[i]
+        takes.append([audio, sr, seed, note, rel])
+        n_cached += note.startswith("缓存")
+        if FLOW:
+            PREV = prosody(audio, sr, rel)
+        print(f"  第 {i + 1}/{len(sents)} 句（种子 {seed}，{len(audio) / sr:.2f}s）：{note}  {sent}")
+        continue
     fb_mark = os.path.join(CACHE, cache_key(sent)) + ".fallback"
     if FALLBACK and sent.strip() not in mood_of and os.path.exists(fb_mark):
         mood_of[sent.strip()] = FALLBACK
@@ -354,6 +442,9 @@ for i, sent in enumerate(sents):
             print(f"  缓存里的「{sent}」句首尾静音过长或对齐有字不到 50ms，重新生成")
             cached = False
         # 缓存检查比生成时松 5%（回差）：缓存存成 16 位整数，重读后量出来会差一点，卡在线上的句子每次跑都被扔掉重配（「那就再补一条…」生成时 0.090、重读 0.091）
+        elif NO_BREAKS and pitch_breaks(x_c, sr_c):
+            print(f"  缓存里的「{sent}」有破音，重新生成")
+            cached = False
         elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO * 1.05:
             print(f"  缓存里的「{sent}」有回声，重新生成")
             cached = False
@@ -413,7 +504,7 @@ def assemble():
     for i, (sent, (audio, sr_, _, _, rel)) in enumerate(zip(sents, takes)):
         spans.append({"text": sent, "start": round(t, 3), "end": round(t + len(audio) / sr_, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和逐句自检用同一段声音
         words.extend({"text": w["text"], "start": round(w["start"] + t, 3), "end": round(w["end"] + t, 3), "sent": i} for w in rel)
-        gap = np.zeros(int(args.gap * sr_) if i < len(sents) - 1 else 0, dtype=np.float32)
+        gap = np.zeros(int(args.gap * sr_) if i < len(sents) - 1 and i not in joined else 0, dtype=np.float32)  # 同一段一起配的句子之间，停顿已经在声音里
         pieces += [finish(audio, sr_), gap]
         t += (len(audio) + len(gap)) / sr_
     return np.concatenate(pieces), words, spans
@@ -435,9 +526,50 @@ for rnd in range(4):
             print(f"    第 {i + 1} 句换种子没配出来，留原来那条"); continue
         audio, sr, seed, note, rel, bk = res
         takes[i] = [audio, sr, seed, note, rel]
+        joined.discard(i); joined.discard(i - 1)  # 单独重配了，前后按句间停顿拼
         key = os.path.join(CACHE, cache_key(sents[i]))
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+# 拼好后在整段上按成片旁白检查的口径再查一遍（一段一起配的声音切开、对齐响度以后，个别卡在线上的会冒出来；E02 v4「定在5」破音），
+# 查出来的句子单独换种子重配，最多 3 轮——不用人去成片里找、手动换种子
+# 也查成片旁白检查要查的其余几项（掉嗓子用成片的下限、每句回声）：E02 v4 有一句生成时过了、拼好后掉嗓子 139Hz，一句回声 122ms
+FINAL_ECHO = voice.get("maxEcho", 0)
+def assembled_defects(full, spans, words):
+    bad = {}
+    for t_, j in (pitch_breaks(full, sr) if NO_BREAKS else []):
+        for k, sp in enumerate(spans):
+            if sp["start"] - 0.05 <= t_ <= sp["end"] + 0.05:
+                bad.setdefault(k, []).append(f"破音 {t_:.2f}s")
+    for k, sp in enumerate(spans):
+        seg = full[int(sp["start"] * sr):int(sp["end"] * sr)]
+        if FLOOR and pitch_drops(seg, sr, FLOOR):
+            bad.setdefault(k, []).append("掉嗓子")
+        if FINAL_ECHO:
+            ws = [dict(w, start=w["start"] - sp["start"], end=w["end"] - sp["start"]) for w in words if w["sent"] == k]
+            if (ec := echo_ms(seg, sr, pause_points(ws))) > FINAL_ECHO:
+                bad.setdefault(k, []).append(f"回声 {ec:.0f}ms")
+    return bad
+if NO_BREAKS or FLOOR or FINAL_ECHO:
+    for rnd in range(3):
+        full, words, spans = assemble()
+        defects = assembled_defects(full, spans, words)
+        bad = sorted(defects)
+        if not bad:
+            break
+        for i in bad:
+            print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}，单独换种子重配：{sents[i]}")
+            res = make_take(sents[i], takes[i][2] + 1, strict=True)
+            if not res:
+                print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
+            audio, sr, seed, note, rel, bk = res
+            takes[i] = [audio, sr, seed, note, rel]
+            joined.discard(i); joined.discard(i - 1)
+            key = os.path.join(CACHE, cache_key(sents[i]))
+            sf.write(key + ".wav", audio, sr)
+            json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+            open(key + ".nochunk", "w").write("拼好后查出问题，单独重配")  # 以后这一句不再从整段里切
+            pre.pop(i, None)
+
 # 每句都是同一个人：按句生成时每句是单独采样的，音色会一句一句地飘，听着像几个人你一句我一句（用户听 E01 v15）。
 # 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，最多 3 轮；还不够就留最像的那条
 MIN_CONS = voice.get("takeMinConsistency", 0)
@@ -469,10 +601,12 @@ if MIN_CONS:
                 print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res
             takes[i] = [audio, sr, seed, note, rel]; embs[i] = None
+            joined.discard(i); joined.discard(i - 1)
     final = list(cos)
     for i, c in enumerate(cos):
         if c < MIN_CONS and best_c[i][0] > c:
             takes[i] = best_c[i][1]; final[i] = best_c[i][0]
+            joined.discard(i); joined.discard(i - 1)
             print(f"  第 {i + 1} 句重配 3 轮仍不到 {MIN_CONS}，用最像的一条（{best_c[i][0]:.3f}）")
     for i, tk in enumerate(takes):
         key = os.path.join(CACHE, cache_key(sents[i]))

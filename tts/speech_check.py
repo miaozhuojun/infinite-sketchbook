@@ -157,6 +157,15 @@ if max_echo or max_spread:
         sp = lv[-1][0] - lv[0][0]
         check("每句基础音量一致", sp <= max_spread, f"{len(lv)} 句基础响度最响和最轻差 {sp:.1f}dB（上限 {max_spread}dB）：最轻「{lv[0][1][:8]}」{lv[0][0]:.1f}dB，最响「{lv[-1][1][:8]}」{lv[-1][0]:.1f}dB")
 
+# 0j. 没有破音：成片旁白里音高突然跳 14 半音以上、又不是八度的地方（voice.py 的 pitch_breaks），不超过 maxBreaks 处。
+#     用户听 E02 v3「好几处声音畸变」：E02 每分钟 1.9 处、E01 0.3 处，原来的检查一项都没报
+if "maxBreaks" in voice:
+    from voice import pitch_breaks
+    xs5, ssr5 = mono(root / "public" / tl["narration"])
+    bk5 = pitch_breaks(xs5, ssr5)
+    near = lambda t: next((c["phrase"][:10] for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), "")
+    check("没有破音", len(bk5) <= voice["maxBreaks"], f"{len(bk5)} 处（上限 {voice['maxBreaks']}）" + ("：" + "；".join(f"{t:.2f}s「{near(t)}」跳 {j:.0f} 半音" for t, j in bk5[:6]) if bk5 else ""))
+
 # 0i. 连贯（建议，不拦）：句与句之间音高重新起头多大、语速稳不稳、成片里句间长停顿有几处，和上一集（voice.json 的 flowBaseline）比。
 #     用户 2026-11-06：E02 要比 E01 更连贯流畅自然，要有一套一集比一集好的机制（VOICE_PIPELINE.md「连贯」）
 if voice.get("flowBaseline"):

@@ -122,6 +122,11 @@ expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (t
   const m = tl.camera.filter((x) => x.t1 > x.t0).sort((a, b) => far(b) - far(a))[0];
   m.t1 = m.t0 + Math.max(0.05, far(m) / (2 * (tl.style.motion.flightSpeed ?? tl.style.motion.moveSpeed))); // 压到上限的 2 倍速（固定 0.8 秒时，演示片最远一次也才 600px，压完仍不超速）
 }, pencil, '[失败] 镜头不甩');
+expectFail('铅笔轨迹中间断了一截（笔在那段时间没有位置，渲染时会一帧闪出画外）', (tl) => {
+  // 删掉轨迹正中的一段：审片 E02 v9 发现的笔闪，原因是轨迹有空档
+  const i = Math.floor(tl.penTrack.length / 2);
+  tl.penTrack.sort((a, b) => a.t0 - b.t0).splice(i, 1);
+}, pencil, '[失败] 铅笔轨迹没有空档');
 expectFail('片尾铅笔停在画面中间', (tl) => {
   const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);
   last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中

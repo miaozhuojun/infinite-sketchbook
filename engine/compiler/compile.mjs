@@ -665,6 +665,19 @@ for (const x of trailOf(sched)) flag('sync.trail', `「${actionsById.get(x.id).t
 
 // ---------- 压力采样：渲染端用 perfect-freehand 生成变宽笔迹，笔尖位置也取自同一组点（见 library/kit.mjs） ----------
 for (const s of strokes) s.pts = samplePts(s);
+// 轨迹空档补齐：排程偶尔在两段之间留下空档（回看、只说不画的句子前后），笔在那段时间没有位置，渲染端会让它一帧闪出画外
+// （审片 E02 v9：全片 4 处）。按时间排好，空档里补一段停笔，停在上一段的终点
+{
+  penTrack.sort((a, b) => a.t0 - b.t0);
+  const endOf = (sg) => (sg.kind === 'move' ? sg.to : sg.kind === 'rest' ? sg.at : strokes[sg.stroke].pts.at(-1).slice(0, 2));
+  for (let i = penTrack.length - 1; i > 0; i--) {
+    const prevEnd = Math.max(...penTrack.slice(0, i).map((x) => x.t1)), gap = penTrack[i].t0 - prevEnd;
+    if (gap > 1e-3) {
+      const last = penTrack.slice(0, i).reduce((m, x) => (x.t1 > m.t1 ? x : m));
+      penTrack.splice(i, 0, { kind: 'rest', t0: prevEnd, t1: penTrack[i].t0, at: endOf(last) });
+    }
+  }
+}
 
 // ---------- 镜头关键帧：普通句在第一笔前移到全景；顿悟句在提示词前 lead 秒推近到位，停留 ≥hold 秒；结尾回到全景 ----------
 const camera = [], newChapter = new Set(); // newChapter：换节的那次镜头移动，不和前一次合并

@@ -62,7 +62,15 @@ export function penAt(tl: Timeline, t: number, mode: InkMode): PenState {
   const segs = tl.penTrack;
   // 时间超出轨迹范围时取首/尾段（平滑采样会取到 t<0 或片尾之后）
   let seg = t < segs[0].t0 ? segs[0] : segs[segs.length - 1];
-  for (const s of segs) if (t >= s.t0 && t < s.t1) { seg = s; break; }
+  let hit = false;
+  for (const s of segs) if (t >= s.t0 && t < s.t1) { seg = s; hit = true; break; }
+  // 落在两段之间的空档里：停在空档前那一段结束的地方。原来取整条轨迹的最后一段（片尾飞出画外那段），
+  // 笔在空档里一帧消失、过一会儿又在原地冒出来（审片 E02 v9：全片 4 处，铅笔检查没抓到）
+  if (!hit && t >= segs[0].t0) {
+    let prev: typeof seg | null = null;
+    for (const s of segs) if (s.t1 <= t && (!prev || s.t1 > prev.t1)) prev = s;
+    if (prev && prev !== segs[segs.length - 1]) { seg = prev; t = prev.t1 - 1e-6; }
+  }
   // 停住时笔贴着纸；抬笔量只在移动中从 0 平滑升起再落回 0，全程连续，影子不会跳
   if (seg.kind === 'rest') return { x: seg.at[0], y: seg.at[1], down: false, lift: 0, heading: 0 };
   if (seg.kind === 'move') {

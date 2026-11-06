@@ -588,6 +588,47 @@ else expectBeats('自测题全是复述题，没有一道解释或迁移题', (b
   b.brief = { ...(b.brief ?? {}), objectives: b.brief?.objectives?.length ? b.brief.objectives : ['能说出这一集讲的东西'] };
   for (const q of b.quiz ?? []) { q.kind = 'recall'; q.objective = 0; }
 }, validate, /没有一道 explain 或 transfer 题/, { any: true });
+// 写稿自查（compiler/script_checks.mjs；E02 v6–v13 理解度测试每轮找出的「靠猜」）。注入都自己带上要用的旁白，不挑基线：演示片段和每一期都能跑
+const FILL = '这一句是补上的。'.repeat(4); // 把「讲清它的那半句」推到第一次说到之后四句（要求三句以内）
+expectBeats('写稿自查：新词第一次说到以后，隔了好几句才讲清', (b) => {
+  b.kind = 'episode';
+  b.narration.script = `嘎嘣来了。${b.narration.script}${FILL}嘎嘣就是一种声音。`;
+  b.brief = { ...(b.brief ?? {}), terms: [{ term: '嘎嘣', explain: '嘎嘣就是一种声音' }] };
+}, validate, /「嘎嘣」.*隔了 \d+ 句/, { any: true });
+expectBeats('写稿自查：换成新例子，没写怎么接上熟悉的例子', (b) => {
+  b.kind = 'episode';
+  b.narration.script = `给它看一张卡片，卡片上有个记号。${b.narration.script}`;
+  b.brief = { ...(b.brief ?? {}), terms: [{ term: '卡片', kind: 'example', explain: '卡片上有个记号' }] };
+}, validate, /「卡片」.*没写 bridge/, { any: true });
+expectBeats('写稿自查：画面上写了一个旁白没说过的数', (b) => {
+  const p = b.phrases.find((q) => q.actions?.length && !q.revisit?.length && !q.camera), a0 = p.actions[0];
+  p.actions.push({ id: '_num', type: 'text', at: a0.at, text: '37', x: (a0.x ?? a0.cx ?? 400) + 40, y: (a0.y ?? a0.cy ?? 400) + 160, size: 72 });
+}, validate, /其中的 37 旁白到这句.*还没说到/, { any: true });
+expectBeats('写稿自查：开场的小故事后面没再提到', (b) => {
+  b.kind = 'episode';
+  const p = b.phrases[0];
+  p.role = 'hook'; p.text = '火星上的兔子会不会弹钢琴'; p.caption = '火星上的兔子，会不会弹钢琴？';
+  for (const a of p.actions ?? []) a.at = '火星';
+  delete b.brief?.payoff;
+}, validate, /开场的小故事.*在后面没再提到/, { any: true });
+expectBeats('写稿自查：留给下一集的不是一个问题', (b) => {
+  b.kind = 'episode';
+  for (const q of b.phrases) if (q.role === 'next') q.role = 'recap'; // 基线自己的预告（E02 已经是问句）先去掉，只留注入的这一句
+  const p = b.phrases.at(-1);
+  p.role = 'next'; p.text = '下一集我们接着讲'; p.caption = '下一集，我们接着讲';
+  b.narration.script += '下一集，我们接着讲。';
+}, validate, /没有说成一个问题/, { any: true });
+expectBeats('写稿自查：预告的问题用了这一集没讲过的词', (b) => {
+  b.kind = 'episode';
+  const p = b.phrases.at(-1);
+  p.role = 'next'; p.text = '下一集它怎么学会反向传播'; p.caption = '下一集，它怎么学会反向传播？';
+  b.narration.script += '下一集，它怎么学会反向传播？';
+}, validate, /「反向.*前面没讲过/, { any: true });
+expectBeats('写稿自查：示意数值的来历在用它之后才交代', (b) => {
+  b.kind = 'episode';
+  b.narration.script = `加起来等于97。${b.narration.script}${FILL}97是我们随便定的。`;
+  b.facts = [...(b.facts ?? []), { match: ['97'], kind: 'example', from: { 97: '97是我们随便定的' } }];
+}, validate, /97 在第 1 句.*就用上了/, { any: true });
 {
   // 理解度打分：关键词全对，但测试者说有一处跟不上、视频也没说下一集讲——要判不过（悬念可以，一头雾水不行）
   const bp = path.resolve('data', `${base.beatsId ?? base.id}.beats.json`), b = JSON.parse(fs.readFileSync(bp, 'utf8'));

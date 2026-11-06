@@ -673,8 +673,10 @@ for (const s of strokes) s.pts = samplePts(s);
   for (let i = penTrack.length - 1; i > 0; i--) {
     const prevEnd = Math.max(...penTrack.slice(0, i).map((x) => x.t1)), gap = penTrack[i].t0 - prevEnd;
     if (gap > 1e-3) {
-      const last = penTrack.slice(0, i).reduce((m, x) => (x.t1 > m.t1 ? x : m));
-      penTrack.splice(i, 0, { kind: 'rest', t0: prevEnd, t1: penTrack[i].t0, at: endOf(last) });
+      // 空档里让笔滑到下一段的起点，不停在原处（停在原处常常压着刚画的东西，审片 E02 v11：3 处压了 1.5 秒）；起点就是原处时才原地停
+      const last = penTrack.slice(0, i).reduce((m, x) => (x.t1 > m.t1 ? x : m)), nx = penTrack[i];
+      const from = endOf(last), to = nx.kind === 'move' ? nx.from : nx.kind === 'rest' ? nx.at : strokes[nx.stroke].pts[0].slice(0, 2);
+      penTrack.splice(i, 0, Math.hypot(to[0] - from[0], to[1] - from[1]) > 2 ? { kind: 'move', t0: prevEnd, t1: nx.t0, from, to } : { kind: 'rest', t0: prevEnd, t1: nx.t0, at: from });
     }
   }
 }

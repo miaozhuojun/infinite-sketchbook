@@ -133,6 +133,10 @@ export function validateBeats(beats, style, reg) {
     if (!p.text) E(P, '缺少 text');
     if (p.role && !ROLES.has(p.role)) E(`${P}.role`, `只能是 ${[...ROLES].join(' / ')}`);
     if (p.camera && !['focus', 'overview'].includes(p.camera)) E(`${P}.camera`, '只能是 focus（推近这句的元素）或 overview');
+    if (p.frame !== undefined) {
+      if (!Array.isArray(p.frame) || !p.frame.length) E(`${P}.frame`, '要列出前面画过的元素 id：这句的镜头要把它们整段框进来');
+      else for (const fid of p.frame) if (!beats.phrases.slice(0, pi + 1).some((q) => (q.actions || []).some((x) => x.id === fid))) E(`${P}.frame`, `「${fid}」不是这句或前面句子里画过的元素`);
+    }
     if (p.chapter !== undefined && (typeof p.chapter !== 'string' || ![...p.chapter].length || [...p.chapter].length > style.chapters.titleMax)) E(`${P}.chapter`, `节名要写，最多 ${style.chapters.titleMax} 个字（B 站分段章节标题要少于 16 个汉字）`);
     if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
     if (p.camera === 'overview' && (p.actions || []).length) E(`${P}.camera`, 'overview（整张纸全景）的句子不画新东西（actions 要空着）');
@@ -235,8 +239,10 @@ export function validateBeats(beats, style, reg) {
     beats.phrases.forEach((p, i) => { if (p.text.includes(w)) E(`phrases[${i}].text`, `「${w}」要写成念法「${s}」，字幕写在 caption 里`); });
   }
 
-  // 字幕：每个画幅下不超过规定行数
-  for (const [t, tg] of Object.entries(style.targets)) {
+  // 字幕：这一期要出的每个画幅下不超过规定行数。画幅写了 sub.maxLines 的，编译时会在标点处把长句拆成几张，只要拆得开就不算超
+  const outTargets = beats.targets ?? style.defaultTargets ?? Object.keys(style.targets);
+  for (const [t, tg] of Object.entries(style.targets).filter(([t]) => outTargets.includes(t))) {
+    if (tg.sub.maxLines) continue;
     for (const p of beats.phrases) {
       const n = breakLines(p.caption || p.text, tg.sub.size, tg.sub.width).length;
       if (n > style.subtitle.maxLines) E(`字幕[${t}]`, `「${p.caption || p.text}」要折成 ${n} 行，超过 ${style.subtitle.maxLines} 行，请拆句`);

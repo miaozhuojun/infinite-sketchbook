@@ -204,6 +204,8 @@ const computePhraseCam = () => {
       continue;
     }
     for (const a of p.actions) if (geo.has(a.id)) acc.push(...geo.get(a.id));
+    // frame：这句的镜头还要把这些前面画过的元素整段框进来（同一张图分几节讲时，换节只框新画的东西，旁边的字会被切在画面边上；E02）
+    for (const id of p.frame ?? []) if (geo.has(id)) acc.push(...geo.get(id));
     if (!acc.length) { out.push(null); continue; }
     const b = bboxOf(acc);
     out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(ZMIN, Math.min(ZMAX, fitZ(b, 70))) });

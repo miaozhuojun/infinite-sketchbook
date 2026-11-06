@@ -217,7 +217,7 @@ def prosody(x, sr, words):
     # 句首、句尾 0.3 秒浊音的中位基频：量句与句之间的音高「重新起头」有多大（E01 句首比上一句句尾平均高 6 个半音，听着像一句一句分开说）
     start = float(np.median([f for t, f in tr if t < tr[0][0] + 0.3])) if tr else 0.0
     endf0 = float(np.median([f for t, f in tr if t > tr[-1][0] - 0.3])) if tr else 0.0
-    return {"f0": med, "range": rng, "rate": chars / max(span, 0.3), "end": slope, "start": start, "endf0": endf0}
+    return {"f0": med, "range": rng, "rate": chars / max(span, 0.3), "end": slope, "start": start, "endf0": endf0, "artRate": art_rate(words)}
 
 
 def flow_cost(p, prev, flow, base_rate, tone_rate=None):
@@ -277,6 +277,16 @@ def read_numbers(s):
                    else _cn(int(m[0])), s)
 
 
+SAID_PUNCT = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
+
+
+def said_text(s):
+    """回转比对用的「念出来的字」：先按念法换数字，再去标点（顺序不能反：先去标点「1、1、0」会连成 110，念成「一百一十」；E02 v6 两次栽在这里）。
+    配音生成的逐句比对、整段比对和成片旁白检查都用它，口径只有一处"""
+    import re as _re
+    return _re.sub(SAID_PUNCT, "", read_numbers(str(s).lower()))
+
+
 def pitch_breaks(x, sr, min_st=14.0, merge=0.05):
     """破音：浊音里相邻两帧（1ms）音高突然跳 min_st 半音以上、又不是正好一个或两个八度（八度跳多半是基频估错，不是声音坏了）。
     用户听 E02 v3「好几处声音畸变」：E02 每分钟 1.9 处，E01 只有 0.3 处，原来没有一项检查管它。返回 [(时刻, 跳了几个半音)]"""
@@ -289,3 +299,41 @@ def pitch_breaks(x, sr, min_st=14.0, merge=0.05):
                 out.append((round(float(t), 3), round(float(j), 1)))
         prev = (t, f)
     return out
+
+
+# ---------- 起音收音不硬切、语速一致（用户听 E02 v5：「1:20 有个突兀的声音」「有的地方突然加快语速」） ----------
+def hard_edges(x, sr, silent_db=-60.0, loud_db=-35.0, look=0.03):
+    """硬切：声音从纯静音一下子起来（前 look 秒都低于 silent_db，下一个 2ms 就到 loud_db 以上），或者说着说着一下子掉进纯静音。
+    正常的字头字尾要十几毫秒才起来、落下（「投」从 -56 到 -30 用了 16ms）；E02 v5「权重越大」的「权」2ms 里从静音跳到 -20dB，
+    是剪掉开头串进来的多余字时切在了发声处、又没淡入。返回 [(起/收, 时刻, 那 2ms 的峰值 dB)]"""
+    x = np.asarray(x, dtype=np.float64); x = x.mean(1) if x.ndim > 1 else x
+    w = max(1, int(0.002 * sr)); n = len(x) // w
+    if n < 3:
+        return []
+    db = 20 * np.log10(np.abs(x[: n * w]).reshape(n, w).max(1) + 1e-9)
+    k = max(1, int(look / 0.002)); out = []
+    for i in range(k, n - k):
+        if db[i] > loud_db and db[i - k:i].max() < silent_db:
+            out.append(("起", round(i * w / sr, 3), round(float(db[i]), 1)))
+        if db[i] > loud_db and db[i + 1:i + 1 + k].max() < silent_db:
+            out.append(("收", round((i + 1) * w / sr, 3), round(float(db[i]), 1)))
+    return out
+
+
+def soften_edges(x, sr, ms=10.0):
+    """两头各做 ms 毫秒的升余弦淡入淡出：一条配音不管在哪里被剪开，接进成片时都不会「咔」一声"""
+    x = np.array(x, dtype=np.float32, copy=True); n = min(len(x) // 4, int(ms / 1000 * sr))
+    if n > 1:
+        r = (0.5 - 0.5 * np.cos(np.linspace(0, np.pi, n))).astype(np.float32)
+        x[:n] *= r; x[-n:] *= r[::-1]
+    return x
+
+
+def art_rate(words, gap_cap=0.12):
+    """说话的语速（字/秒）：只算嘴在动的时间，字间停顿最多算 gap_cap 秒。逗号处的停顿不算进去，
+    长句、短句、带逗号和不带逗号的句子才能放在一起比（原来的「字数 / 首字到末字」把停顿算进去，带逗号的句子显得慢）"""
+    ws = [w for w in words if w.get("text")]
+    if not ws:
+        return 0.0
+    t = sum(w["end"] - w["start"] for w in ws) + sum(min(gap_cap, max(0.0, b["start"] - a["end"])) for a, b in zip(ws, ws[1:]))
+    return sum(len(w["text"]) for w in ws) / max(t, 0.3)

@@ -215,7 +215,8 @@ check("拼接切点落在静音处", not bad, "；".join(bad) if bad else f"{len
 narr = str(root / "public" / tl["narration"])
 x, sr = mono(narr)
 timing = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
-script = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", timing["text"])
+from voice import said_text
+script = said_text(timing["text"])  # 先换念法再去标点（「1、1、0」不连成 110），和配音生成同一个口径
 items = []
 for c in tl["audioClips"]:
     for w in timing["words"]:
@@ -276,7 +277,8 @@ check("发声中无断音/爆音", not dropouts and jumps == 0, f"字中间掉�
 # 4. 总混可懂度
 if tl.get("audio"):
     asr = load_stt(str(Path(__file__).parent / "models/Qwen3-ASR-0.6B"))
-    hyp = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", asr.generate(str(root / "public" / tl["audio"]), language="Chinese").text)
+    from voice import read_numbers
+    hyp = said_text(asr.generate(str(root / "public" / tl["audio"]), language="Chinese").text)
     from pypinyin import lazy_pinyin  # 按拼音比：同音字不算错（成/乘），读错的音仍算错
     DIG = str.maketrans("0123456789", "零一二三四五六七八九")
     from voice import read_numbers
@@ -289,6 +291,32 @@ if tl.get("audio"):
             prev, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, prev + (r[i - 1] != h[j - 1]))
     cer = d[len(h)] / max(1, len(r))
     check("总混可懂度", cer <= 0.02, f"拼音错误率 {cer:.3f}" + ("" if cer <= 0.02 else f"，识别为：{hyp}"))
+
+# 0k. 起音收音不硬切：声音从纯静音 2ms 里就起到 -35dB 以上，或者说着说着一下子断成纯静音（voice.py 的 hard_edges）。
+#     用户听 E02 v5「1:20 有个突兀的声音」：「权重越大」的「权」2ms 里从静音跳到 -20dB，剪开头串进来的字时切在了发声处
+from voice import hard_edges, art_rate
+he = hard_edges(x0, sr0)
+revoice_at.extend(t for _, t, _ in he)
+def clip_at(t):
+    c = next((c for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), None)
+    return f"「{c['phrase'][:10]}」" if c else ""
+check("起音收音不硬切", not he, f"{len(he)} 处：" + "；".join(f"{t:.2f}s{clip_at(t)}{k}音 {d:.0f}dB" for k, t, d in he[:6]) if he else "每个字头字尾都是渐起渐落")
+
+# 0l. 语速一致：每句只算嘴在动的时间的语速（voice.py 的 art_rate），离这个声音的语速 rate.target 不超过 rate.maxDev。
+#     用户听 E02 v5「有的地方突然加快语速，语速要基本保持一致，情绪、音调可以随内容自然变化」：各句 3.1–5.0 字/秒，相邻两句差到 20%
+RATE = voice.get("rate") or {}
+if RATE.get("target") and timing0.get("sentences"):
+    rates = []
+    for k, sp in enumerate(timing0["sentences"]):
+        ws = [w for w in timing0["words"] if sp["start"] - 0.01 <= w["start"] < sp["end"] + 0.01]
+        if ws:
+            rates.append((k, art_rate(ws), sp))
+    off = [(k, r, sp) for k, r, sp in rates if abs(r / RATE["target"] - 1) > RATE.get("maxDev", 0.10)]
+    for k, r, sp in off:
+        revoice_at.extend(a + 0.01 for kk, a, b in sentence_ranges() if kk == k)
+    rs = [r for _, r, _ in rates]
+    check("语速一致", not off, (f"{len(off)} 句离 {RATE['target']} 字/秒超过 {RATE.get('maxDev', 0.10):.0%}：" + "；".join(f"「{sp['text'][:10]}」{r:.2f}" for _, r, sp in off[:6]) + "；")
+          * bool(off) + f"全片每句 {min(rs):.2f}–{max(rs):.2f} 字/秒，波动 {np.std(rs) / np.mean(rs):.2f}")
 
 rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
 rv = sorted({timing0["sentences"][k]["text"] for k, a, b in sentence_ranges() for t in revoice_at if a - 0.05 <= t <= b + 0.05}) if timing0.get("sentences") else []

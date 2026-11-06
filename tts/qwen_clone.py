@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import read_numbers, pitch_breaks, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -54,6 +54,10 @@ GEN_BAK = voice.get("takeMinBak", 0)
 MAX_FLAT = voice.get("takeMaxFlat", 0)
 # 破音（voice.py 的 pitch_breaks）：候选里有一处就丢（用户听 E02 v3「好几处声音畸变」，E02 每分钟 1.9 处、E01 0.3 处）
 NO_BREAKS = voice.get("takeNoBreaks", False)
+# 语速一致（用户听 E02 v5：「有的地方语速正常，有的地方突然加快」；各句 3.1–5.0 字/秒，相邻两句差到 20%）：
+# rate.target 是这个声音说话的语速（字/秒，只算嘴在动的时间，见 voice.py 的 art_rate），生成时候选离它超过 takeTol 不要，
+# 拼好后每句离它超过 maxDev 的单独重配。情绪、音调照旧随语气变，语速不跟着变
+RATE = voice.get("rate") or {}
 # 回声：停顿处衰减 20dB 的时间（毫秒）高于 takeMaxEcho 就换种子（参考音录在有回声的房间时，每句学到的回声多少不一）
 MAX_ECHO = voice.get("takeMaxEcho", 0)
 # 每句候选几条、按语气挑（VOICE_PIPELINE.md 第三步）；--tone「句子=语气」覆盖自动判断（问句→好奇、感叹→兴奋、其余→认真讲）
@@ -189,7 +193,7 @@ def align(audio, sr, text):
 
 # 对齐出来不到 50ms 的单字：要么真吞了，要么对齐器没对上；两种都换种子（成片旁白检查的「没有吞字」靠这份逐字时间）
 squashed = lambda rel: [w["text"] for w in rel if len(w["text"]) == 1 and w["end"] - w["start"] < 0.05]
-asr_text = lambda path: read_numbers(re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower())
+asr_text = lambda path: said_text(asr.generate(path, language="Chinese").text)
 
 
 # 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
@@ -202,10 +206,11 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     凑够 CANDS 条（或试满 max_tries 次）后，按语气目标和音色接近度打分挑一条（VOICE_PIPELINE.md 第三步）。
     strict：重配已有的一句时（吞字、音色一致），只收全部关卡都过的候选，不退而求其次——
     E01 v17 音色一致重配收了一条沙沙声 0.116 的「这就叫机器学习。」，下次跑缓存检查又把它扔掉重配，每次多花三分钟"""
-    ref = read_numbers(re.sub(PUNCT, "", text).lower())
+    ref = said_text(text)  # 先换念法再去标点，见 voice.py 的 said_text
     tmp = args.out + ".sent.wav"
     best = None  # 只差背景分的候选里最干净的一条
     best_flat = None  # 只差沙沙声的候选里最干净的一条
+    best_rate = None  # 只差语速的候选里离目标最近的一条
     cands = []
     tone = tone or tone_of(text); target = TONES.get(tone, {})
     for attempt in range(args.max_tries):
@@ -224,6 +229,14 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         if not (0.12 * n_chars <= dur <= 0.45 * n_chars + 1.5):
             print(f"    种子 {seed}：{dur:.1f}s 对 {n_chars} 个字不合理（失控或吞句），换种子重来")
             continue
+        # 语速粗筛：识别、对齐要好几秒，先按「有声音的时长」粗估语速，差得太远的直接换种子（E02 v6 加语速关卡后配音慢了一倍）。
+        # 粗估和逐字对齐量出来的语速差不多，留 12% 余量，只筛掉明显不行的
+        if RATE.get("target"):
+            h10 = int(0.01 * sr); lv10 = 20 * np.log10(np.sqrt(np.convolve(audio.astype(np.float64) ** 2, np.ones(h10) / h10, "valid")[::h10]) + 1e-9)
+            est = n_chars / max(0.3, (lv10 > lv10.max() - 35).sum() * 0.01) / 1.05  # 粗估比逐字对齐平均快 5%（323 条缓存标定：误筛 3/189，提前筛掉 28/134）
+            if abs(est / RATE["target"] - 1) > RATE.get("takeTol", 0.08) + 0.12:
+                print(f"    种子 {seed}：粗估语速 {est:.2f} 字/秒，离 {RATE['target']} 太远，不识别了，换种子重来")
+                continue
         sf.write(tmp, audio, sr)
         hyp = asr_text(tmp)
         c, dz = cer(syl(ref), syl(hyp)), dropouts(audio, sr)
@@ -241,14 +254,14 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         hs, rs = syl(hyp), syl(ref)
         if note is None and dz == 0 and 0 < len(hs) - len(rs) <= 3 and hs[len(hs) - len(rs):] == rs:
             prefix = hyp[: len(hs) - len(rs)]
-            audio = trim_leaked_prefix(audio, sr, prefix, ref)
+            audio = soften_edges(trim_leaked_prefix(audio, sr, prefix, ref), sr)  # 剪开处淡入：E02 v5「权」2ms 里从静音跳到 -20dB，咔一声
             sf.write(tmp, audio, sr)
             if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, GEN_FLOOR)):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
             print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
             continue
-        audio = trim_edges(audio, sr)
+        audio = soften_edges(trim_edges(audio, sr), sr)
         rel = align(audio, sr, text)
         if squashed(rel):
             print(f"    种子 {seed}：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
@@ -270,8 +283,14 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             continue
         # 打分：离语气目标多远 + 和声音包音色差多少（同一段参考音挑出来的，语气有变化、音色不变）
         pr = prosody(audio, sr, rel)
+        if RATE.get("target") and abs(pr["artRate"] / RATE["target"] - 1) > RATE.get("takeTol", 0.08):
+            print(f"    种子 {seed}：语速 {pr['artRate']:.2f} 字/秒，离这个声音的 {RATE['target']} 超过 {RATE.get('takeTol', 0.08):.0%}，换种子重来")
+            if not best_rate or abs(pr["artRate"] / RATE["target"] - 1) < best_rate[0]:
+                best_rate = (abs(pr["artRate"] / RATE["target"] - 1), (audio, sr, seed, note, rel, bk))
+            continue
         e = embedding(tts, audio, sr)
-        score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, BASE_RATE, target.get("rate"))
+        # 配了语速目标时，连贯打分不再拿声音包的基准语速比（量法不同：声音包按「首字到末字」量，逗号停顿算进去，每句都显得慢，候选就偏向快的那条）
+        score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, None if RATE.get("target") else BASE_RATE, target.get("rate"))
         cands.append((score, (audio, sr, seed, note, rel, bk), pr))
     if cands:
         cands.sort(key=lambda q: q[0])
@@ -281,6 +300,9 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         return pick
     if strict:
         raise SystemExit(f"「{text}」{args.max_tries} 次里没有全部关卡都过的候选")
+    if best_rate:
+        print(f"    {args.max_tries} 次里没有一条语速在目标 ±{RATE.get('takeTol', 0.08):.0%} 里，用最接近的种子 {best_rate[1][2]}（差 {best_rate[0]:.0%}）")
+        return best_rate[1]
     # 别的自检都过、只是背景分没到：用这几次里最干净的一条（背景分只是筛子，不该让整集配不出来）
     if best_flat:
         print(f"    {args.max_tries} 次里没有一条沙沙声低于 {MAX_FLAT}，用最干净的种子 {best_flat[1][2]}（{best_flat[0]:.3f}）")
@@ -358,11 +380,19 @@ def split_chunk(res, texts):
     if len(ends) != len(counts) - 1:
         return None
     cuts, starts = [0.0], [0]
+    h = int(0.01 * sr_)
+    peak = 20 * np.log10(np.abs(audio).max() + 1e-9)
     for j in ends:
         e, s2 = rel[j]["end"], rel[j + 1]["start"]
         if s2 - e < 0.12:
             return None
-        cuts.append((e + s2) / 2); starts.append(j + 1)
+        # 切在句间停顿里最安静的 10ms 上，不按对齐的正中切：对齐的字尾常早几十毫秒，正中切会切在上一句的尾音里
+        # （E02 v5「还是右边」的「边」还在响就断了）；停顿里最安静处也不够静，就不切，整段退回逐句配
+        i0, i1 = int(e * sr_), max(int(e * sr_) + 1, int(s2 * sr_) - h)
+        lv = [20 * np.log10(np.sqrt((audio[i:i + h] ** 2).mean()) + 1e-9) for i in range(i0, i1, max(1, h // 2))]
+        if not lv or min(lv) > peak - 45:
+            return None
+        cuts.append((i0 + int(np.argmin(lv)) * max(1, h // 2) + h // 2) / sr_); starts.append(j + 1)
     cuts.append(len(audio) / sr_); starts.append(len(rel))
     out = []
     for k in range(len(texts)):
@@ -505,7 +535,7 @@ def assemble():
         spans.append({"text": sent, "start": round(t, 3), "end": round(t + len(audio) / sr_, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和逐句自检用同一段声音
         words.extend({"text": w["text"], "start": round(w["start"] + t, 3), "end": round(w["end"] + t, 3), "sent": i} for w in rel)
         gap = np.zeros(int(args.gap * sr_) if i < len(sents) - 1 and i not in joined else 0, dtype=np.float32)  # 同一段一起配的句子之间，停顿已经在声音里
-        pieces += [finish(audio, sr_), gap]
+        pieces += [soften_edges(finish(audio, sr_), sr_), gap]  # 每条两头淡入淡出：不管在哪儿剪开过，接进来都不咔
         t += (len(audio) + len(gap)) / sr_
     return np.concatenate(pieces), words, spans
 
@@ -544,12 +574,17 @@ def assembled_defects(full, spans, words):
         seg = full[int(sp["start"] * sr):int(sp["end"] * sr)]
         if FLOOR and pitch_drops(seg, sr, FLOOR):
             bad.setdefault(k, []).append("掉嗓子")
+        ws_k = [w for w in words if w["sent"] == k]
+        if (he := hard_edges(seg, sr)):
+            bad.setdefault(k, []).append("硬切 " + "、".join(f"{a}{t:.2f}s" for a, t, _ in he))
+        if RATE.get("target") and ws_k and abs(art_rate(ws_k) / RATE["target"] - 1) > RATE.get("maxDev", 0.10):
+            bad.setdefault(k, []).append(f"语速 {art_rate(ws_k):.2f} 字/秒（目标 {RATE['target']}，最多差 {RATE.get('maxDev', 0.10):.0%}）")
         if FINAL_ECHO:
             ws = [dict(w, start=w["start"] - sp["start"], end=w["end"] - sp["start"]) for w in words if w["sent"] == k]
             if (ec := echo_ms(seg, sr, pause_points(ws))) > FINAL_ECHO:
                 bad.setdefault(k, []).append(f"回声 {ec:.0f}ms")
     return bad
-if NO_BREAKS or FLOOR or FINAL_ECHO:
+if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
     for rnd in range(3):
         full, words, spans = assemble()
         defects = assembled_defects(full, spans, words)
@@ -626,7 +661,7 @@ print(f"  {len(sents)} 句里 {n_cached} 句用了缓存，{len(sents) - n_cache
 sf.write(args.out + ".wav", full, sr)
 
 # 整段再回转核对一遍
-c_all = cer(syl(read_numbers(clean.lower())), syl(asr_text(args.out + ".wav")))
+c_all = cer(syl(said_text(args.text)), syl(asr_text(args.out + ".wav")))
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 # 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡

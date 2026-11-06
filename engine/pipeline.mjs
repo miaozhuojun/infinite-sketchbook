@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
 import { GL } from './qa/gl.mjs';
 import { loadStyle } from './compiler/validate.mjs';
@@ -68,7 +69,7 @@ run('墨迹叠色检查（交叠处不发黑、红压灰仍是红）', 'node', [
 const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、字幕）', 'node', ['compiler/validate.mjs', beatsPath]);
 
 // 1. 配音：分镜里写了旁白稿就每次都按稿生成（内置回转检查、开头多字修剪、换种子重试）。
-// 配音按句缓存，没改的句子直接复用，所以每次跑也只多十几秒；这样音频一定和当前的稿子对得上，不会拿旧音频配新稿
+// 配音按句缓存，没改的句子直接复用；稿子和配音设置都没变时整步跳过（见下）。这样音频一定和当前的稿子对得上，不会拿旧音频配新稿
 const audioPath = path.join('public', beats.narration.audio || '');
 // 配音没配出来就停在这里：后面的编译、渲染、旁白检查都会拿上一版的配音去做，白跑几分钟，报告还会误导（E01 v17 实测）
 let voiceOk = true;
@@ -77,7 +78,13 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
   // 自动换种子（见文末）：成片旁白检查点名的句子，偏移记在配音目录的 <id>.autoreseed.json，比分镜里手写的 reseed 优先，以后每次都用
   const autoReseed = fs.existsSync(base + '.autoreseed.json') ? JSON.parse(fs.readFileSync(base + '.autoreseed.json', 'utf8')) : {};
-  if (PY_MLX) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, ['qwen_clone.py', beats.narration.script, base, ...Object.entries({ ...(beats.narration.reseed ?? {}), ...autoReseed }).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`]), ...Object.entries(beats.narration.tone ?? {}).flatMap(([t, m]) => ['--tone', `${t}=${m}`])], { cwd: '../tts' })) fs.copyFileSync(base + '.wav', audioPath); }
+  const voiceArgs = ['qwen_clone.py', beats.narration.script, base, ...Object.entries({ ...(beats.narration.reseed ?? {}), ...autoReseed }).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`]), ...Object.entries(beats.narration.tone ?? {}).flatMap(([t, m]) => ['--tone', `${t}=${m}`])];
+  // 配音没变就不重跑（用户 2026-11-06：E02 做了快十个小时）：旁白稿、语气、换种子、配音配置和配音程序都和上次配成功时一样，
+  // 音频和逐字时间也都在，就直接用上次的。全走缓存时配音这一步也要 3–10 分钟（逐句复查缓存、整段回转识别、拼好后的复查），改版面的那几轮白等
+  const voiceKey = createHash('sha1').update(JSON.stringify([voiceArgs, ...['voice.json', 'qwen_clone.py', 'voice.py'].map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
+  const keyFile = base + '.voicekey', sameVoice = fs.existsSync(keyFile) && fs.readFileSync(keyFile, 'utf8') === voiceKey && fs.existsSync(base + '.wav') && fs.existsSync(base + '.timing.json');
+  if (PY_MLX && sameVoice) { skip('配音生成', '旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的配音'); fs.copyFileSync(base + '.wav', audioPath); }
+  else if (PY_MLX) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, voiceArgs, { cwd: '../tts' })) { fs.copyFileSync(base + '.wav', audioPath); fs.writeFileSync(keyFile, voiceKey); } }
   else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
   else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
     problems: [`没有音频 ${audioPath}，也没有本地配音环境（PY_MLX）：在 tts/ 装好配音环境，或把音频放到这个位置`] });
@@ -178,7 +185,7 @@ lines.push('## 接下来（程序判断不了的）',
 fs.writeFileSync(path.join(outDir, 'report.md'), lines.join('\n'));
 fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify({ id: beats.id, targets, ok: !failed.length, skipped: skipped.map((s) => s.name), stages }, null, 1));
 console.log(`\n${failed.length ? '✗' : '✓'} ${verdict}，报告：${path.join(outDir, 'report.md')}`);
-// 自动换种子重配：没过的只有旁白检查，且它点名了掉嗓子、破音的句子（<时间线>.revoice.json），就给这几句换种子、整条重跑，最多两轮。
+// 自动换种子重配：没过的只有旁白检查，且它点名了掉嗓子、破音、硬切、语速不对的句子（<时间线>.revoice.json），就给这几句换种子、整条重跑，最多两轮。
 // 配音那边拼好后已经查过一遍，可成片旁白（重采样、插停顿、片段淡入淡出）上偶尔还会查出来（E02 v5），原来要人手动写 reseed 再跑
 const round = Number(process.env.PIPE_REVOICE ?? 0);
 const revoice = [...new Set(targets.flatMap((t) => { const f = `build/${beats.id}-${t}.timeline.revoice.json`; return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; }))];
@@ -187,7 +194,7 @@ if (failed.length && revoice.length && round < 2 && PY_MLX && failed.every((s) =
   const auto = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
   for (const sent of revoice) auto[sent] = Math.max(auto[sent] ?? 0, beats.narration.reseed?.[sent] ?? 0) + 1;
   fs.writeFileSync(f, JSON.stringify(auto, null, 1));
-  console.log(`\n↻ 旁白检查点名 ${revoice.length} 句掉嗓子或破音，换种子重配后整条重跑（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
+  console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切或语速不对），换种子重配后整条重跑（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
   const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, PIPE_REVOICE: String(round + 1) } });
   process.exit(r.status ?? 1);
 }

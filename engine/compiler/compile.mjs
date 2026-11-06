@@ -179,6 +179,9 @@ function bboxOf(list) {
   return { x0, y0, x1, y1 };
 }
 const fitZ = (b, pad) => Math.min(VIEW.w / (b.x1 - b.x0 + 2 * pad), VIEW.h / (b.y1 - b.y0 + 2 * pad));
+// 整页全景缩得很小（0.3 倍）时，纸面上留的 70px 边在屏幕上只剩 20px，最上面的字贴着 YouTube 暂停时的标题栏（E02 v6 试编）：
+// 按屏幕留边算，至少 padPx 屏幕像素
+const fitZScreen = (b, padPx) => { let z = fitZ(b, 70); for (let k = 0; k < 4; k++) z = fitZ(b, Math.max(70, padPx / z)); return z; };
 // 全景取景：到这一句为止的全部内容
 // 每句的全景取景：框住这一节到这句为止画过的东西。分了章节时，换节就从新的一块纸开始框，镜头沿纸面移过去
 // （整集几分钟、好几节内容画在纸上不同的地方；一直框住全部，越往后字越小）
@@ -192,7 +195,7 @@ const computePhraseCam = () => {
       const all = [...geo.values()].flat();
       if (all.length) {
         const b = bboxOf(all);
-        out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(M.overviewZoomMin ?? 0.1, Math.min(ZMAX, fitZ(b, 70))), overview: true });
+        out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(M.overviewZoomMin ?? 0.1, Math.min(ZMAX, fitZScreen(b, 44))), overview: true });
       } else out.push(null);
       continue;
     }
@@ -259,6 +262,11 @@ const related = (a, b) => {
   if (a.type === 'text' && b.type === 'text') return false;
   // 同一个门槛量表的几部分（底线和门槛虚线、数值柱）本来就画在一起：base 相同就是同一个量表
   if (a.type === 'meter' && b.type === 'meter' && a.base === b.base) return true;
+  // 同一个旋钮先画本体、再画「拧过」（part=turn）：圆心和半径相同就是同一个旋钮
+  if (a.type === 'knob' && b.type === 'knob' && a.cx === b.cx && a.cy === b.cy && a.r === b.r) return true;
+  // on 可以一层层挂：「拧过」挂在旋钮上、旋钮挂在线上，「拧过」和线也算贴着画的
+  const onChain = (x) => { const c = []; for (let y = actionsById.get(x.on); y && c.length < 4; y = actionsById.get(y.on)) c.push(y.id); return c; };
+  if (onChain(a).includes(b.id) || onChain(b).includes(a.id)) return true;
   return a.on === b.id || b.on === a.id || (a.on && a.on === b.on);
 };
 const strokeSamples = new WeakMap();
@@ -363,7 +371,7 @@ const textInk = new Map([...geo].map(([id, l]) => [id, l.filter((s) => s.kind ==
 // 比检查更严：算"在画外"要整段越过画布边再留 6px；算"在画面里"要离画布边至少 24px（理解度测试说算式开头的 1 贴着左边缘）
 // 字幕衬底也算画面边：文字整段在字幕上方才算「在画面里」（审片：推近把 x₃ 推到字幕衬底下面，只露半截）
 const SUB_TOP = TGT.sub.top - style.subtitle.plate.padY;
-const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []);
+const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []).filter((z) => !z.advice); // advice 的遮挡区只在检查里给建议，不左右镜头
 // 元素包围盒缓存（取景搜索要试上千个位置，每次重新采样路径太慢）；元素被重画后自动失效
 const boxCache = new Map();
 // 和安全区检查同一份几何：路径范围再向外扩半个笔宽（检查按实际墨迹算，取景只看路径中心线时会差几像素，推近停在字的边上）
@@ -629,6 +637,30 @@ for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)}
 const { strokes, penTrack, effects, audioClips, report } = sched;
 let { penFree, penPos } = sched;
 const problems = [...layoutProblems], advice = [...layoutAdvice], flag = flagTo(problems, advice);
+// 写出来的字，旁白要在同一句里说到：写在别的句子里、要过一秒多才说到的，就是音画不同步（用户看 E02 v5「开头有点音画不同步」：
+// 「上一集说好了……」时先写了「规则」、还划掉了，旁白下一句「它不背规则」才说到）。有意先写的（比如先抛个词再解释），动作上写 ahead: true
+{
+  const cjkOf = (t) => String(t ?? '').replace(/[^\u4e00-\u9fff]/g, '');
+  for (const a of sched.report.actions) {
+    const act = actionsById.get(a.id), p = phrases[a.phrase];
+    if (!act || act.type !== 'text' || act.ahead || !p) continue;
+    // 只查整段都是汉字的字（「天黑×4」这种带符号的标注是回指前面说过的东西）；写的时候（这句说完前）已经说过的也不算先写
+    const w = cjkOf(act.text);
+    if (w.length < 2 || w.length !== String(act.text).replace(/[\s，。、？！?!]/g, '').length) continue;
+    // 同一句里写得比说早：「1958年，美国科学家罗森布拉特」在「美国科学家」上就写「罗森布拉特」，比说到早 1.1 秒（审片 E02 v6）
+    const own = fullText.indexOf(w, p.i0);
+    if (own >= 0 && own <= p.i1 && !fullText.slice(0, p.i0).includes(w)) {
+      const saidOwn = sched.report.phrases[a.phrase].at + (charTimes[own].s - p.cutIn);
+      if (saidOwn - a.start > 0.8) flag('sync.early', `「${act.text}」(${a.id}) 比旁白说到它早写了 ${r2(saidOwn - a.start)}s：提示词改成「${w}」或它前面紧挨的词；有意先写就在这个动作上写 ahead: true`);
+      continue;
+    }
+    if (fullText.slice(0, p.i1 + 1).includes(w)) continue;
+    const idx = fullText.indexOf(w, p.i1 + 1), k = idx < 0 ? -1 : phrases.findIndex((q) => q.i0 <= idx && idx <= q.i1);
+    if (k < 0) continue;
+    const said = sched.report.phrases[k].at + (charTimes[idx].s - phrases[k].cutIn);
+    if (said - a.start > 1.0) flag('sync.ahead', `「${act.text}」(${a.id}) 在「${p.text.slice(0, 12)}」这句就写了，旁白到「${phrases[k].text.slice(0, 12)}」才说到（早 ${r2(said - a.start)}s）：挪到说到它的那句的词上；有意先写就在这个动作上写 ahead: true`);
+  }
+}
 for (const x of trailOf(sched)) flag('sync.trail', `「${actionsById.get(x.id).text ?? actionsById.get(x.id).label}」(${x.id}) ${x.late ? `在这句旁白说完后才起笔（${x.start}s，句末 ${x.audioEnd}s）` : `书写只有 ${Math.round(x.share * 100)}% 和本句旁白重叠（要求 ≥${M.textOverlapMin * 100}%）`}，需要把它提到更早的词上或拆句`);
 
 // ---------- 压力采样：渲染端用 perfect-freehand 生成变宽笔迹，笔尖位置也取自同一组点（见 library/kit.mjs） ----------

@@ -2,6 +2,7 @@
 // 错误（hard）只管机械上会坏的：组件与参数、引用、事实出处、字幕折行、平台章节规格。
 // 创作取舍（叙事结构、字号阶梯、手写字号下限）按风格规范 gates 的级别，默认只给建议，不拦截。
 // 用法：node compiler/validate.mjs data/<id>.beats.json
+import { polyphoneIssues } from './polyphones.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +26,7 @@ export const loadStyle = (beats) => {
 // 关卡级别：gates 里写 advice 的只给建议；没列出的都是 hard
 export const gateLevel = (style, id) => (style.gates?.[id] === 'advice' ? 'advice' : 'hard');
 export const strip = (s) => s.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '');
-const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed']);
+const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead']);
 const ROLES = new Set(['hook', 'setup', 'aha', 'recap', 'next']);
 
 // 估算一行字的宽度：中文全角，其余半角
@@ -216,6 +217,19 @@ export function validateBeats(beats, style, reg) {
   const quiz = beats.quiz || [];
   if (quiz.length < rules.minQuiz) G('narrative.quiz', 'quiz', `至少 ${rules.minQuiz} 道自测题`);
   quiz.forEach((q, i) => { if (!q.q || !q.a || !Array.isArray(q.keywords) || !q.keywords.length) E(`quiz[${i}]`, '需要 q（问题）、a（答案）、keywords（判分关键词组）'); });
+  // 题型（用户 2026-11-06：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来——题目只考复述，照抄旁白就能得分）：
+  // kind 是 recall（复述）/ explain（用自己的话说清这里的东西是什么、为什么）/ transfer（换一组数、换一个情况还会不会）；
+  // objective 写这道题考 brief.objectives 的第几条（从 0 起）。每条学习目标至少一道 explain 或 transfer
+  const KINDS = new Set(['recall', 'explain', 'transfer']);
+  quiz.forEach((q, i) => {
+    if (q.kind != null && !KINDS.has(q.kind)) E(`quiz[${i}].kind`, `只能是 recall、explain、transfer`);
+    if (q.objective != null && !(Number.isInteger(q.objective) && q.objective >= 0 && q.objective < (beats.brief?.objectives?.length ?? 0))) E(`quiz[${i}].objective`, `要写 brief.objectives 的下标（0 到 ${(beats.brief?.objectives?.length ?? 1) - 1}）`);
+  });
+  // 只管要求有自测题的作品（完整一集）；演示片段这类 minQuiz 为 0 的不查
+  if (rules.minQuiz > 0) (beats.brief?.objectives ?? []).forEach((o, k) => {
+    if (!quiz.some((q) => q.objective === k && (q.kind === 'explain' || q.kind === 'transfer')))
+      G('narrative.quizDepth', `brief.objectives[${k}]`, `「${o.slice(0, 20)}」没有一道 explain 或 transfer 题（只考复述，照抄旁白就能答对，看不出懂没懂）：加一道，写上 kind 和 objective: ${k}`);
+  });
 
   // 事实出处：旁白里的数字、年份、英文专有名词都要有出处，或明确标为示意数值
   // 用带标点的旁白稿（没有就用字幕）：去掉标点的句子会把「1、1、0」连读成 110；句与句之间加分隔，避免把相邻两句的数字连读（5|7 → 57）
@@ -240,6 +254,10 @@ export function validateBeats(beats, style, reg) {
     if ((beats.narration?.script ?? '').includes(w)) E('narration.script', `旁白稿里的「${w}」要写成念法「${s}」（字幕 caption 和画面上的字照旧写「${w}」）`);
     beats.phrases.forEach((p, i) => { if (p.text.includes(w)) E(`phrases[${i}].text`, `「${w}」要写成念法「${s}」，字幕写在 caption 里`); });
   }
+
+  // 多音字：结构助词「地」这类配音模型常念错、回转识别又听不出的，旁白稿写成同音字（字幕照旧），见 compiler/polyphones.mjs
+  for (const x of polyphoneIssues(beats.narration?.script ?? '')) E('narration.script', `「${x.text}」${x.why}：旁白稿写成「${x.say}」（字幕 caption 和画面上照旧写「${x.text}」）`);
+  beats.phrases.forEach((p, i) => { for (const x of polyphoneIssues(p.text)) E(`phrases[${i}].text`, `「${x.text}」${x.why}：写成念法「${x.say}」，字幕写在 caption 里`); });
 
   // 字幕：这一期要出的每个画幅下不超过规定行数。画幅写了 sub.maxLines 的，编译时会在标点处把长句拆成几张，只要拆得开就不算超
   const outTargets = beats.targets ?? style.defaultTargets ?? Object.keys(style.targets);

@@ -1,5 +1,5 @@
 // 检查器自测：对一份已通过的时间线/分镜注入已知缺陷，每一项检查都必须报出来；否则说明检查形同虚设。
-// 引擎、组件库、风格规范或检查器改动后先跑这个。用法：node qa/selftest.mjs build/<id>-<画幅>.timeline.json（任何画幅都行：平台界面、版式类注入按这条基线的画幅和界面算）
+// 引擎、组件库、风格规范或检查器改动后先跑这个。用法：node qa/selftest.mjs build/<id>-<画幅>.timeline.json [--skip speech]（任何画幅都行：平台界面、版式类注入按这条基线的画幅和界面算；按改了什么跳过整组：--skip speech（没改配音和旁白检查）、--skip compile（没改编译器和分镜校验），可以写成 --skip speech,compile）
 // 注入目标按类型和时间挑（文字、图形、推近镜头……），不认某一期的元素名，演示分镜和每一期都能当基线；CI 跑的是演示分镜。
 // 旁白类注入要真人配音和本地配音环境：配音是合成提示音（演示分镜）或没有 PY_MLX 时整组跳过，结果里写明跳过了哪些、为什么。
 import fs from 'node:fs';
@@ -35,7 +35,11 @@ function expectFail(name, mutate, runner, mustSay, from = base) {
 const pencil = (p) => spawnSync('node', ['qa/pencil_check.mjs', p], { encoding: 'utf8' });
 const safezone = (p) => spawnSync('node', ['qa/safezone_check.mjs', p], { encoding: 'utf8' });
 const speech = (p) => spawnSync(PY_MLX, ['speech_check.py', p, path.resolve('.')], { encoding: 'utf8', cwd: '../tts' });
-const noSpeech = sbeatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
+// --skip speech,compile：按改了什么跳过整组。speech：没动 tts/ 和旁白检查时跳过旁白类注入；compile：没动编译器和分镜校验时跳过要重新编译的注入（大分镜每条要编译一分半钟）。
+// 旁白类注入这一组二十来条、每条都要重新加载识别模型，
+// 占自测八成的时间（一次二十多分钟）；改了配音或旁白检查才需要跑（用户 2026-11-06：流程太长）
+const SKIP = new Set(process.argv.includes('--skip') ? process.argv[process.argv.indexOf('--skip') + 1].split(',') : []);
+const noSpeech = SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : sbeatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
 const OTHER_VOICE = path.resolve('qa/fixtures/other-voice.mp3');
 const speechCase = (name, mutate, mustSay, why = noSpeech) => (why ? skip(name, why) : expectFail(name, mutate, speech, mustSay, sbase));
 
@@ -126,7 +130,7 @@ expectFail('片尾铅笔停在画面中间', (tl) => {
 // 往平台界面里挪：按基线画幅实际有的界面区算位置（原来写死 9:16 的 TikTok 底栏和右侧按钮列，16:9 基线上这两条注入落不到任何界面里，永远「漏掉」）
 const uiZones = (tl) => tl.platforms.flatMap((pf) => (tl.platformUI?.[pf] ?? []).map((z) => ({ ...z, pf })));
 {
-  const W = base.canvas.w, H = base.canvas.h, zs = uiZones(base);
+  const W = base.canvas.w, H = base.canvas.h, zs = uiZones(base).filter((z) => !z.advice); // 只给建议的遮挡区另有用例
   const bottom = zs.filter((z) => z.b >= H - 2 && z.r - z.l >= W / 2).sort((a, b) => a.t - b.t)[0];
   if (bottom) expectFail(`字幕挪进 ${bottom.pf} 的${bottom.name}`, (tl) => { tl.sub.top = bottom.t + 10; }, safezone, '[失败] 字幕避开平台界面');
   else skip('字幕挪进底部平台界面', '基线画幅的平台界面里没有底部横条');
@@ -135,6 +139,12 @@ const uiZones = (tl) => tl.platforms.flatMap((pf) => (tl.platformUI?.[pf] ?? [])
   if (side) expectFail(`内容整体右移进 ${side.pf} 的${side.name}`, (tl) => { tl.view.cx += (side.l + side.r) / 2 - W / 2; }, safezone, '[失败] 内容避开平台界面'); // 画面中心挪到这条界面的正中
   else if (top) expectFail(`内容整体上移进 ${top.pf} 的${top.name}`, (tl) => { tl.view.cy -= 380; }, safezone, '[失败] 内容避开平台界面');
   else skip('内容整体挪进平台界面', '基线画幅没有侧边或顶部的平台界面');
+}
+// 竖握手机看横版（抖音信息流）的按钮列：基线画幅有这类只给建议的遮挡区时，把内容整体右移到按钮列底下，检查要给建议
+{
+  const feed = uiZones(base).find((z) => z.advice);
+  if (feed) expectFail(`文字整体右移进 ${feed.pf} 的${feed.name}`, (tl) => { tl.view.cx += (feed.l + feed.r) / 2 - base.canvas.w / 2; tl.view.cy += (feed.t + feed.b) / 2 - base.canvas.h / 2; }, safezone, '文字避开竖握手机看横版时的按钮列');
+  else skip('文字挪进竖握手机看横版时的按钮列', '基线画幅没有这类遮挡区');
 }
 expectFail('推近镜头把一段文字切成半截', (tl) => {
   // 找一个推近镜头和一段已写的文字，把镜头挪到让这段文字正好骑在画面左边缘上
@@ -178,7 +188,7 @@ expectFail('镜头停稳时一个图形被画布左边缘切掉一截、其余�
   const w = (sx, sy) => [(sx - tl.view.cx) / c.z + c.x, (sy - tl.view.cy) / c.z + c.y], y = (tl.frame.t + tl.frame.b) / 2;
   const [ax, ay] = w(-60, y), [bx, by] = w(tl.frame.l + 200, y);
   tl.strokes.push({ id: '_cut#0', action: '_cut', group: '_cut', kind: 'shape', color: 'ink', d: `M ${ax} ${ay} L ${bx} ${by}`, len: Math.hypot(bx - ax, by - ay), t0: Math.min(m.t1 + 0.1, tl.duration - 0.4), t1: Math.min(m.t1 + 0.3, tl.duration - 0.2), pts: [[ax, ay, 0.5], [bx, by, 0.5]] });
-}, safezone, '_cut 在 ');
+}, safezone, '_cut');
 expectFail('镜头停稳时一个字的最后一笔露在画面左缘几像素（路径在画外，笔宽伸进来）', (tl) => {
   // 最后一镜里加一笔「字」：路径中心线在画布左缘外 2px，笔宽 12px，墨迹伸进画面 4px。只看路径点、不算笔宽时会当成整段在画外
   const m = tl.camera.at(-1), c = m.to, y = (tl.frame.t + tl.frame.b) / 2;
@@ -260,6 +270,36 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 没有破音');
+speechCase('旁白里一个字从纯静音硬起（剪开处没淡入，用户听 E02 v5「1:20 有个突兀的声音」）', (tl) => {
+  // 最后一段旁白开头 0.6 秒处，把前面 40ms 清成纯静音：声音从静音一下子跳回正在发声的地方
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, json, numpy as np
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+m = x if x.ndim == 1 else x[:, 0]
+a0 = int((c['at'] + 0.3) * sr); w = int(0.01 * sr)
+lv = [np.abs(m[i:i + w]).max() for i in range(a0, a0 + int(1.5 * sr), w)]
+a = a0 + int(np.argmax(lv)) * w  # 这段里最响的地方，一定在发声
+x[a - int(0.04 * sr):a] = 0
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.narration = 'audio/_selftest.narration.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 起音收音不硬切');
+speechCase('一句话突然说快了四成（用户听 E02 v5「有的地方突然加快语速」）', (tl) => {
+  // 逐字时间里最后一句的字都压短到 0.7 倍（字/秒 ×1.43），其余不动；旁白检查读的是分镜指向的逐字时间，所以另写一份分镜指过去
+  const bp = path.resolve('data', `${sbase.beatsId}.beats.json`), b = JSON.parse(fs.readFileSync(bp, 'utf8'));
+  const tp = path.resolve('data', b.narration.timing), tm = JSON.parse(fs.readFileSync(tp, 'utf8'));
+  const last = tm.sentences.at(-1);
+  const L = last.start, k = (t) => L + (t - L) * 0.7; // 整句往句首压：字和字间的停顿一起变短
+  for (const w of tm.words) if (w.start >= L - 0.01) { w.start = k(w.start); w.end = k(w.end); }
+  const tdst = path.resolve('../tts/out/_selftest.timing.json'), bdst = path.resolve('data/_selftest_rate.beats.json');
+  fs.writeFileSync(tdst, JSON.stringify(tm));
+  fs.writeFileSync(bdst, JSON.stringify({ ...b, id: '_selftest_rate', narration: { ...b.narration, timing: path.relative(path.resolve('data'), tdst) } }));
+  tl.beatsId = '_selftest_rate';
+  return { cleanup: [tdst, bdst] };
+}, '[失败] 语速一致');
 speechCase('整条配音底下垫着嘶嘶的背景噪声（参考音带底噪时会这样；用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
   // 源配音整条叠上白噪声（比说话低 20dB）；背景干净看全片 9 秒窗 DNSMOS BAK 的中位数
   const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
@@ -413,6 +453,7 @@ const firstText = (b) => acts(b).find((a) => a.type === 'text');
 const adviceOf = (out) => [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])].join('\n');
 // advice：要报成建议；any：报成建议或错误都算（注入的间距在不同基线上可能刚好压在一起，那就是错误）
 function expectBeats(name, mutate, cmd, mustMatch, { advice = false, any = false } = {}) {
+  if (SKIP.has('compile')) return skip(name, '这次没改编译器和分镜校验（--skip compile）');
   const b = structuredClone(beatsSrc);
   b.id = '_selftest';
   // 注入改的是动作上的 x/y 这些字段；基线分镜给编译画幅写了 layout 覆盖时，先把覆盖并进动作本身，改的位置才真的生效
@@ -496,6 +537,62 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
   const r = spawnSync('node', ['compiler/validate.mjs', 'data/_selftest.beats.json'], { encoding: 'utf8', env: { ...process.env, SKETCH_PROFILE: prof } }), out = (r.stdout || '') + (r.stderr || '');
   record('私有创作配置把「字号阶梯」升成 hard 后判错误', r.status !== 0 && /\[错误\].*不在字号阶梯/.test(out), out);
   fs.rmSync('data/_selftest.beats.json', { force: true }); fs.rmSync(prof, { force: true });
+}
+// 写在画面上的字，旁白下一句才说到（用户看 E02 v5「开头有点音画不同步」：先写了「规则」，下一句「它不背规则」才说到）
+{
+  // 先在基线分镜里找注入点：一句 i 和它后面隔一句以上的 j，j 里有个连着的两字词，i 说完以前、以及 i 和 j 之间都没说过。
+  // 只从原句里真正连着的汉字里挑（去掉数字再拼会拼出旁白里没有的词，演示片「2加2等于4」拼成「加等」，注入落空）；挑不到就跳过
+  const cjkRuns = (t) => t.match(/[一-鿿]{2,}/g) ?? [];
+  const said = (a, z) => beatsSrc.phrases.slice(a, z).map((q) => q.text).join('|');
+  let at = null;
+  for (let i = 0; i < beatsSrc.phrases.length - 2 && !at; i++) {
+    const pi = beatsSrc.phrases[i];
+    if (!pi.actions?.length || pi.revisit?.length || pi.camera) continue;
+    for (let j = i + 2; j < beatsSrc.phrases.length && !at; j++) for (const run of cjkRuns(beatsSrc.phrases[j].text)) {
+      for (let k = 0; k + 2 <= run.length && !at; k++) { const w = run.slice(k, k + 2); if (!said(0, j).includes(w)) at = { i, w }; }
+    }
+  }
+  if (!at) skip('一个词先写在画面上，旁白隔一句才说到', '基线分镜太短，找不到隔一句才说到的词');
+  else expectBeats('一个词先写在画面上，旁白隔一句才说到', (b) => {
+    const a0 = b.phrases[at.i].actions[0];
+    b.phrases[at.i].actions.push({ id: '_ahead', type: 'text', at: a0.at, text: at.w, x: (a0.x ?? a0.cx ?? 400) + 40, y: (a0.y ?? a0.cy ?? 400) + 160, size: 72 });
+  }, (p) => ['compiler/compile.mjs', p, '--target', TGT], /才说到/, { any: true });
+}
+// 同一句里字比话早写（审片 E02 v6：在「美国科学家」上就写「罗森布拉特」，早 1.1 秒）：挑一句较长的话，在它第一个词上写它最后两个字
+{
+  // 先在基线分镜里找：一句话汉字够多（≥10 个），句首有个连着的两字词当提示词，句末那个连着的两字词这句之前没说过、在这句里只出现一次
+  const runs = (t) => t.match(/[一-鿿]{2,}/g) ?? [];
+  const before = (i) => beatsSrc.phrases.slice(0, i).map((q) => q.text).join('|');
+  const k = beatsSrc.phrases.findIndex((q, i) => {
+    const rs = runs(q.text), w = rs.at(-1)?.slice(-2);
+    return q.actions?.length && !q.revisit?.length && !q.camera && rs.join('').length >= 10 && rs.length && w && q.text.endsWith(w) && q.text.indexOf(w) === q.text.length - 2 && !before(i).includes(w);
+  });
+  if (k < 0) skip('同一句里，句末的词在句首就写出来', '基线分镜没有够长的句子');
+  else expectBeats('同一句里，句末的词在句首就写出来', (b) => {
+    const q = b.phrases[k], rs = runs(q.text), w = rs.at(-1).slice(-2), a0 = q.actions[0];
+    q.actions.push({ id: '_early', type: 'text', at: rs[0].slice(0, 2), text: w, x: (a0.x ?? a0.cx ?? 400) + 40, y: (a0.y ?? a0.cy ?? 400) + 160, size: 72 });
+  }, (p) => ['compiler/compile.mjs', p, '--target', TGT], /早写了/, { any: true });
+}
+// 多音字：结构助词「地」（用户听 E02 v5：「细细地讲」念成了 dì）
+expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，我们慢慢地看。');
+}, validate, /「慢慢地」.*念 de/, { any: true });
+// 自测题只考复述（用户：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来）
+if (!(beatsSrc.quiz ?? []).length) skip('自测题全是复述题，没有一道解释或迁移题', '基线分镜没有自测题（演示片段不要求）');
+else expectBeats('自测题全是复述题，没有一道解释或迁移题', (b) => {
+  b.brief = { ...(b.brief ?? {}), objectives: b.brief?.objectives?.length ? b.brief.objectives : ['能说出这一集讲的东西'] };
+  for (const q of b.quiz ?? []) { q.kind = 'recall'; q.objective = 0; }
+}, validate, /没有一道 explain 或 transfer 题/, { any: true });
+{
+  // 理解度打分：关键词全对，但测试者说有一处跟不上、视频也没说下一集讲——要判不过（悬念可以，一头雾水不行）
+  const bp = path.resolve('data', `${base.beatsId ?? base.id}.beats.json`), b = JSON.parse(fs.readFileSync(bp, 'utf8'));
+  if ((b.quiz ?? []).length) {
+    const f = path.resolve('build/_selftest.answers.json');
+    fs.writeFileSync(f, JSON.stringify({ answers: b.quiz.map((q, i) => ({ id: i + 1, a: q.keywords.map((g) => g[0]).join('，') })), unclear: [{ where: '第 3 节', what: '从上一个例子一下跳到这里，没交代，只能猜', later: false, state: '靠猜' }] }));
+    const r = spawnSync(PY_QA, ['qa/comprehension.py', 'score', bp, f], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+    record('理解度：题都答对，但有一处跟不上、又不是留给下一集的', r.status !== 0 && out.includes('[失败] 跟不上'), out);
+    fs.rmSync(f, { force: true });
+  } else skip('理解度：有一处跟不上', '基线分镜没有自测题');
 }
 expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), a0 = p.actions[0];

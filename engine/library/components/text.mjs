@@ -18,7 +18,7 @@ export default {
     cases: [{ text: 'w_1=4 x_2+x_3', x: 0, y: 0, size: 40 }, { text: '1+3+0=4<5', x: 0, y: 0, size: 56 }, { text: '×4 ×1 =7', x: 0, y: 0, size: 112 }],
   },
   draw(a, k) {
-    const size = a.size, color = k.color, rnd = k.rnd, W = k.style.ink.penWidth;
+    const size = a.size, color = k.color, rnd = k.rnd, W = k.width; // k.width：一支笔的笔宽；风格写了 ink.textWidthBySize 时小字写轻一点（见 kit.mjs）
     const tokens = [];
     for (let i = 0; i < a.text.length; i++) {
       const c = a.text[i];

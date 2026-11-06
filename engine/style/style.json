@@ -9,7 +9,8 @@
   "type.scale": "advice", "type.minCjk": "advice", "type.minScreen": "advice", "layout.textGap": "advice", "layout.shapeGap": "advice",
   "camera.ahaPush": "advice", "camera.ahaNoZoomOut": "advice", "camera.ahaCentered": "advice", "framing.shapeCut": "advice",
   "sync.trail": "advice", "sync.lag": "advice", "pace.pause": "advice",
-  "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice"
+  "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
+  "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice"
  },
 
  "palette": {
@@ -174,7 +175,7 @@
  },
 
  "platformUI": {
-  "note": "各平台界面遮挡区（屏幕像素，按该画幅原始分辨率）。为近似值，用于避让检查；平台改版后在此更新。",
+  "note": "各平台界面遮挡区（屏幕像素，按该画幅原始分辨率）。为近似值，用于避让检查；平台改版后在此更新。advice: true 的遮挡区只给建议、不拦截，也不参与编译时的镜头避让（douyin-feed-16x9：抖音信息流里竖握手机看横版，画面在屏幕中间一条，右下的点赞、评论按钮列压在画面右边约 12%、下面六成；转成全屏横看时没有。按 9:19.5 的手机估算，2026-11-06）。",
   "tiktok": [
    { "name": "右侧按钮列", "l": 948, "r": 1080, "t": 760, "b": 1620 },
    { "name": "底部账号与文案", "l": 0, "r": 948, "t": 1550, "b": 1920 },
@@ -196,6 +197,9 @@
   ],
   "bilibili": [
    { "name": "暂停时进度条与控件", "l": 0, "r": 1920, "t": 1000, "b": 1080 }
+  ],
+  "douyin-feed-16x9": [
+   { "name": "竖握手机看横版时的右侧按钮列", "l": 1685, "r": 1920, "t": 390, "b": 1080, "advice": true }
   ],
   "x": [
    { "name": "右下静音/时长角标", "l": 900, "r": 1080, "t": 990, "b": 1080 }

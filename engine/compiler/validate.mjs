@@ -242,7 +242,13 @@ export function validateBeats(beats, style, reg) {
   // 字幕：这一期要出的每个画幅下不超过规定行数。画幅写了 sub.maxLines 的，编译时会在标点处把长句拆成几张，只要拆得开就不算超
   const outTargets = beats.targets ?? style.defaultTargets ?? Object.keys(style.targets);
   for (const [t, tg] of Object.entries(style.targets).filter(([t]) => outTargets.includes(t))) {
-    if (tg.sub.maxLines) continue;
+    if (tg.sub.maxLines) { // 编译时在标点处拆卡：标点之间的每一段都要放得下
+      for (const p of beats.phrases) for (const piece of (p.caption || p.text).split(/[，、；：,;:]/)) {
+        const n = breakLines(piece, tg.sub.size, tg.sub.width).length;
+        if (n > tg.sub.maxLines) E(`字幕[${t}]`, `「${piece}」这一段标点之间要折成 ${n} 行，这个画幅一屏只放 ${tg.sub.maxLines} 行，拆不开，请拆句或加逗号`);
+      }
+      continue;
+    }
     for (const p of beats.phrases) {
       const n = breakLines(p.caption || p.text, tg.sub.size, tg.sub.width).length;
       if (n > style.subtitle.maxLines) E(`字幕[${t}]`, `「${p.caption || p.text}」要折成 ${n} 行，超过 ${style.subtitle.maxLines} 行，请拆句`);

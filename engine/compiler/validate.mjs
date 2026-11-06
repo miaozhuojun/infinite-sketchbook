@@ -3,6 +3,7 @@
 // 创作取舍（叙事结构、字号阶梯、手写字号下限）按风格规范 gates 的级别，默认只给建议，不拦截。
 // 用法：node compiler/validate.mjs data/<id>.beats.json
 import { polyphoneIssues } from './polyphones.mjs';
+import { scriptIssues } from './script_checks.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -258,6 +259,10 @@ export function validateBeats(beats, style, reg) {
   // 多音字：结构助词「地」这类配音模型常念错、回转识别又听不出的，旁白稿写成同音字（字幕照旧），见 compiler/polyphones.mjs
   for (const x of polyphoneIssues(beats.narration?.script ?? '')) E('narration.script', `「${x.text}」${x.why}：旁白稿写成「${x.say}」（字幕 caption 和画面上照旧写「${x.text}」）`);
   beats.phrases.forEach((p, i) => { for (const x of polyphoneIssues(p.text)) E(`phrases[${i}].text`, `「${x.text}」${x.why}：写成念法「${x.say}」，字幕写在 caption 里`); });
+
+  // 写稿自查（compiler/script_checks.mjs）：新词当场讲清、画面上的数旁白说到、示意数值交代从哪来、开场的小故事回收、留给下一集的是个问题。
+  // 只查写没写、在不在、隔了多远，默认是建议（gates 的 script.*）；brief.terms 这类引用写错了（引的半句不在旁白里）才是错误
+  for (const x of scriptIssues(beats, style)) (x.gate ? G(x.gate, x.where, x.msg) : E(x.where, x.msg));
 
   // 字幕：这一期要出的每个画幅下不超过规定行数。画幅写了 sub.maxLines 的，编译时会在标点处把长句拆成几张，只要拆得开就不算超
   const outTargets = beats.targets ?? style.defaultTargets ?? Object.keys(style.targets);

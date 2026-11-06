@@ -94,6 +94,8 @@ jobs:
         run: npx remotion browser ensure
       - name: 流水线（没有品牌配置：不加水印；配音是合成的：不查旁白）
         run: node pipeline.mjs data/demo.beats.json
+      - name: 静帧审稿（试编时间线上渲静帧，出审稿和理解度材料）
+        run: node qa/still_review.mjs data/demo.beats.json --out out/demo/stills
       - name: 上传报告和成片
         if: always()
         uses: actions/upload-artifact@v7

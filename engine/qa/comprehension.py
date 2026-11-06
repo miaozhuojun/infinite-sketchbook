@@ -1,10 +1,14 @@
 """理解度测试：检验"看完能不能学懂"，不靠制作方自评。
 pack：把成片按"每句话画完"的时刻抽帧，连同旁白文字和自测题（不含答案）按节打包，交给一个没看过备课材料的新 agent 作答；
       它扮零基础观众，每看完一节先写这一节讲了什么、哪里没跟上，再往下看，最后答题，并列出所有没看懂的地方；
+      第三个参数也可以是静帧目录（qa/still_review.mjs 按 times 给的时刻渲好的 01.png、02.png……）：没配音、没渲整片时，在试编时间线上先测
+times：打印每句该截哪一帧（秒），静帧审稿按它渲染，和成片截帧同一个算法
 score：按分镜里每道题的关键词组判分（每组至少命中一个同义词才算对）；没看懂的地方里，视频没说下一集再讲、又会让人跟不上后面的，
        一处就不过——片尾留的悬念可以，一头雾水不行（用户 2026-11-06：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来）。
 用法：
   ../.venv-qa/bin/python qa/comprehension.py pack  data/<id>.beats.json build/<id>-9x16.timeline.json out/<id>/9x16.mp4 out/<id>/comprehension
+  ../.venv-qa/bin/python qa/comprehension.py pack  data/<id>.beats.json build/_dry-<id>-16x9.timeline.json <静帧目录> out/<id>/stills/comprehension
+  ../.venv-qa/bin/python qa/comprehension.py times data/<id>.beats.json build/<id>-16x9.timeline.json
   ../.venv-qa/bin/python qa/comprehension.py score data/<id>.beats.json out/<id>/comprehension/answers.json
 """
 import json
@@ -12,19 +16,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-import imageio_ffmpeg
-
 cmd = sys.argv[1]
 beats = json.loads(Path(sys.argv[2]).read_text())
 quiz = beats.get("quiz", [])
 
-if cmd == "pack":
-    tl = json.loads(Path(sys.argv[3]).read_text())
-    video, out = sys.argv[4], Path(sys.argv[5])
-    (out / "frames").mkdir(parents=True, exist_ok=True)
-    lines = []
-    # 一句旁白的字幕可能在标点处拆成几段（maxLines），拆出来的后段带 join：先并回一句一条，再和分镜的句子一一对上。
-    # 原来直接按下标配对，拆过的片子句子和字幕错位，帧截错时刻，后面的句子（片尾回顾）整段丢掉
+
+def merged_subs(tl):
+    """一句旁白的字幕可能在标点处拆成几段（maxLines），拆出来的后段带 join：先并回一句一条，再和分镜的句子一一对上。
+    原来直接按下标配对，拆过的片子句子和字幕错位，帧截错时刻，后面的句子（片尾回顾）整段丢掉"""
     subs = []
     for s in tl["subtitles"]:
         if s.get("join") and subs:
@@ -33,6 +32,12 @@ if cmd == "pack":
             subs.append(dict(s))
     if len(subs) != len(tl["report"]["phrases"]):
         sys.exit(f"字幕并回后 {len(subs)} 条，分镜 {len(tl['report']['phrases'])} 句，对不上，理解度材料不可信")
+    return subs
+
+
+def frame_times(tl):
+    """每句截哪一刻（秒）：[(句子下标, 时刻, 字幕原文)]"""
+    subs, out = merged_subs(tl), []
     for i, (p, s) in enumerate(zip(tl["report"]["phrases"], subs)):
         # 这一句的事都发生完（画完、灯亮或灯灭的效果走完、铅笔让开）之后、下一句开始之前截一帧。
         # 只看画完会截早：理解度测试看到「灯就亮」那帧灯还没亮、「灯就不亮」那帧灯还亮着
@@ -51,9 +56,30 @@ if cmd == "pack":
             t = fly["t1"] + 0.02
         elif fly and fly["t0"] + 0.02 >= max([s["t0"] + 0.3, *effects]):
             t = fly["t0"] + 0.02
+        out.append((i, t, s["text"]))
+    return out
+
+
+if cmd == "times":
+    tl = json.loads(Path(sys.argv[3]).read_text())
+    print(json.dumps([{"i": i, "t": round(t, 3), "frame": int(t * tl["fps"])} for i, t, _ in frame_times(tl)]))
+
+elif cmd == "pack":
+    tl = json.loads(Path(sys.argv[3]).read_text())
+    video, out = Path(sys.argv[4]), Path(sys.argv[5])
+    (out / "frames").mkdir(parents=True, exist_ok=True)
+    stills = video.is_dir()  # 静帧目录：按 times 的时刻渲好的 01.png……（试编时间线上测，没有成片）
+    lines = []
+    for i, t, text in frame_times(tl):
         f = out / "frames" / f"{i + 1:02d}.png"
-        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", video, "-frames:v", "1", "-vf", "scale=540:-1", str(f)], check=True)
-        lines.append((p["at"], f"{i + 1}. 旁白：「{s['text']}」 → 画面：frames/{f.name}"))
+        if stills:
+            from PIL import Image
+            im = Image.open(video / f"{i + 1:02d}.png").convert("RGB")
+            im.resize((540, round(im.height * 540 / im.width)), Image.LANCZOS).save(f)
+        else:
+            import imageio_ffmpeg
+            subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1", "-vf", "scale=540:-1", str(f)], check=True)
+        lines.append((tl["report"]["phrases"][i]["at"], f"{i + 1}. 旁白：「{text}」 → 画面：frames/{f.name}"))
     (out / "questions.json").write_text(json.dumps([{"id": i + 1, "q": q["q"]} for i, q in enumerate(quiz)], ensure_ascii=False, indent=1))
     # 按节分组：每看完一节先写这一节讲了什么、哪里没跟上，再往下看——一次看完全部再答题，跳得太快的地方察觉不到
     chs = tl.get("chapters") or [{"t": 0, "title": "全片"}]
@@ -63,9 +89,13 @@ if cmd == "pack":
         seg = [l for at, l in lines if c["t"] - 0.01 <= at < t1 - 0.01]
         if seg:
             body += [f"### 第 {k + 1} 节：{c['title']}", "", *seg, "", f"（看完这一节，先在 checkpoints 里写下第 {k + 1} 节讲了什么、哪里没跟上，再往下看。）", ""]
+    # 剧集的第 2 集起：测试者也没看过前几集（E02 v6：「不背规则」，没看过上一集的人不知道规则是什么）
+    serial = beats.get("series", {}).get("serial") and (beats.get("series", {}).get("episode") or 1) > 1
+    prior = "这是一个系列里的一集，前面几集你都没看过：视频里提到「上一集」的东西，只按这一集里交代的来理解。" if serial else ""
     (out / "pack.md").write_text(
         "# 理解度测试材料\n\n"
         "你是第一次看这段视频的普通观众：零基础，不懂编程，不知道感知机、神经网络这些词，没见过打孔卡片和老式计算机。"
+        + prior +
         "你只知道下面的画面和旁白。视频里没讲的，不要用你自己知道的东西补上；要靠猜、或者跳得太快没跟上，就照实说。\n\n"
         "做法：\n"
         "1. 一节一节往下看，每看完一节，先在 checkpoints 里写这一节讲了什么（一两句）、哪里没跟上，再看下一节，不要先翻到后面。\n"

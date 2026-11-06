@@ -10,7 +10,8 @@
   "camera.ahaPush": "advice", "camera.ahaNoZoomOut": "advice", "camera.ahaCentered": "advice", "framing.shapeCut": "advice",
   "sync.trail": "advice", "sync.lag": "advice", "pace.pause": "advice",
   "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
-  "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice"
+  "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
+  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice"
  },
 
  "palette": {
@@ -210,7 +211,7 @@
  },
 
  "narrative": {
-  "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2 },
+  "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2, "termWithin": 3, "termWithinNote": "写稿自查（compiler/script_checks.mjs）：新词、新例子第一次说到以后，最多隔几句就要讲清（brief.terms 的 explain、bridge）" },
   "segment": { "requireRoles": [], "minQuiz": 0 }
  }
 }

@@ -51,6 +51,9 @@ check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似�
 
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
 floor = voice.get("pitchFloorHz", 0)
+# 掉嗓子、破音落在的时刻：最后归到句子，写进 <时间线>.revoice.json，流水线据此给这几句自动换种子重配一轮（不用人手动 reseed）。
+# E02 v5：配音那边拼好后查过没问题，成片旁白（48k、插了停顿、片段两头 3ms 淡入淡出）上又查出一句掉嗓子
+revoice_at = []
 timing0 = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
 # 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾。
 # 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上）
@@ -69,6 +72,7 @@ if floor:
     # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
     ranges = [(a, b) for _, a, b in sentence_ranges()] or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
     drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
+    revoice_at.extend(a for a, _, _ in drops)
     def phrase_at(t):
         c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
         return f"「{c['phrase'][:10]}」" if c else ""
@@ -157,6 +161,42 @@ if max_echo or max_spread:
         sp = lv[-1][0] - lv[0][0]
         check("每句基础音量一致", sp <= max_spread, f"{len(lv)} 句基础响度最响和最轻差 {sp:.1f}dB（上限 {max_spread}dB）：最轻「{lv[0][1][:8]}」{lv[0][0]:.1f}dB，最响「{lv[-1][1][:8]}」{lv[-1][0]:.1f}dB")
 
+# 0j. 没有破音：成片旁白里音高突然跳 14 半音以上、又不是八度的地方（voice.py 的 pitch_breaks），不超过 maxBreaks 处。
+#     用户听 E02 v3「好几处声音畸变」：E02 每分钟 1.9 处、E01 0.3 处，原来的检查一项都没报
+if "maxBreaks" in voice:
+    from voice import pitch_breaks
+    xs5, ssr5 = mono(root / "public" / tl["narration"])
+    bk5 = pitch_breaks(xs5, ssr5)
+    near = lambda t: next((c["phrase"][:10] for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), "")
+    if len(bk5) > voice["maxBreaks"]:
+        revoice_at.extend(t for t, _ in bk5)
+    check("没有破音", len(bk5) <= voice["maxBreaks"], f"{len(bk5)} 处（上限 {voice['maxBreaks']}）" + ("：" + "；".join(f"{t:.2f}s「{near(t)}」跳 {j:.0f} 半音" for t, j in bk5[:6]) if bk5 else ""))
+
+# 0i. 连贯（建议，不拦）：句与句之间音高重新起头多大、语速稳不稳、成片里句间长停顿有几处，和上一集（voice.json 的 flowBaseline）比。
+#     用户 2026-11-06：E02 要比 E01 更连贯流畅自然，要有一套一集比一集好的机制（VOICE_PIPELINE.md「连贯」）
+if voice.get("flowBaseline"):
+    from voice import prosody
+    xs4, ssr4 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans4 = timing0.get("sentences") or []
+    pr4 = []
+    for s4 in spans4:
+        ws4 = [dict(w, start=w["start"] - s4["start"], end=w["end"] - s4["start"]) for w in timing0["words"] if s4["start"] - 1e-3 <= w["start"] and w["end"] <= s4["end"] + 1e-3]
+        if ws4:
+            pr4.append(prosody(xs4[int(s4["start"] * ssr4):int(s4["end"] * ssr4)], ssr4, ws4))
+    resets = [abs(12 * np.log2(b["start"] / a["endf0"])) for a, b in zip(pr4, pr4[1:]) if a["endf0"] and b["start"]]
+    rates = np.array([q["rate"] for q in pr4])
+    cl = tl["audioClips"]
+    gaps = [cl[i + 1]["at"] - (cl[i]["at"] + cl[i]["srcOut"] - cl[i]["srcIn"]) for i in range(len(cl) - 1)]
+    longp = sum(g > 1.5 for g in gaps)
+    bl = voice["flowBaseline"]
+    cmp = lambda now, before, fmt: f"{fmt.format(now)}（{bl['episode']} {fmt.format(before)}，{'好些' if now < before else '没变好'}）"
+    if resets and len(rates):
+        print("  [建议] 说话连贯：" + "；".join([
+            f"句首比上一句句尾高出的音高中位 {cmp(float(np.median(resets)), bl['resetMedianSt'], '{:.1f}')} 半音",
+            f"90% 分位 {cmp(float(np.percentile(resets, 90)), bl['resetP90St'], '{:.1f}')}",
+            f"语速波动 {cmp(float(rates.std() / rates.mean()), bl['rateCv'], '{:.2f}')}",
+            f"句间停顿超过 1.5 秒 {cmp(longp, bl['longPauses'], '{}')} 处（共 {len(gaps)} 处）"]))
+
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)
@@ -175,7 +215,8 @@ check("拼接切点落在静音处", not bad, "；".join(bad) if bad else f"{len
 narr = str(root / "public" / tl["narration"])
 x, sr = mono(narr)
 timing = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
-script = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", timing["text"])
+from voice import said_text
+script = said_text(timing["text"])  # 先换念法再去标点（「1、1、0」不连成 110），和配音生成同一个口径
 items = []
 for c in tl["audioClips"]:
     for w in timing["words"]:
@@ -236,11 +277,13 @@ check("发声中无断音/爆音", not dropouts and jumps == 0, f"字中间掉�
 # 4. 总混可懂度
 if tl.get("audio"):
     asr = load_stt(str(Path(__file__).parent / "models/Qwen3-ASR-0.6B"))
-    hyp = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", asr.generate(str(root / "public" / tl["audio"]), language="Chinese").text)
+    from voice import read_numbers
+    hyp = said_text(asr.generate(str(root / "public" / tl["audio"]), language="Chinese").text)
     from pypinyin import lazy_pinyin  # 按拼音比：同音字不算错（成/乘），读错的音仍算错
     DIG = str.maketrans("0123456789", "零一二三四五六七八九")
-    r = lazy_pinyin(script.lower().translate(DIG), errors=lambda x: list(x))
-    h = lazy_pinyin(hyp.lower().translate(DIG), errors=lambda x: list(x))
+    from voice import read_numbers
+    r = lazy_pinyin(read_numbers(script.lower()), errors=lambda x: list(x))
+    h = lazy_pinyin(read_numbers(hyp.lower()), errors=lambda x: list(x))
     d = list(range(len(h) + 1))
     for i in range(1, len(r) + 1):
         prev, d[0] = d[0], i
@@ -249,5 +292,38 @@ if tl.get("audio"):
     cer = d[len(h)] / max(1, len(r))
     check("总混可懂度", cer <= 0.02, f"拼音错误率 {cer:.3f}" + ("" if cer <= 0.02 else f"，识别为：{hyp}"))
 
+# 0k. 起音收音不硬切：声音从纯静音 2ms 里就起到 -35dB 以上，或者说着说着一下子断成纯静音（voice.py 的 hard_edges）。
+#     用户听 E02 v5「1:20 有个突兀的声音」：「权重越大」的「权」2ms 里从静音跳到 -20dB，剪开头串进来的字时切在了发声处
+from voice import hard_edges, art_rate
+he = hard_edges(x0, sr0)
+revoice_at.extend(t for _, t, _ in he)
+def clip_at(t):
+    c = next((c for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), None)
+    return f"「{c['phrase'][:10]}」" if c else ""
+check("起音收音不硬切", not he, f"{len(he)} 处：" + "；".join(f"{t:.2f}s{clip_at(t)}{k}音 {d:.0f}dB" for k, t, d in he[:6]) if he else "每个字头字尾都是渐起渐落")
+
+# 0l. 语速一致：每句只算嘴在动的时间的语速（voice.py 的 art_rate），离这个声音的语速 rate.target 不超过 rate.maxDev。
+#     用户听 E02 v5「有的地方突然加快语速，语速要基本保持一致，情绪、音调可以随内容自然变化」：各句 3.1–5.0 字/秒，相邻两句差到 20%
+RATE = voice.get("rate") or {}
+if RATE.get("target") and timing0.get("sentences"):
+    rates = []
+    for k, sp in enumerate(timing0["sentences"]):
+        ws = [w for w in timing0["words"] if sp["start"] - 0.01 <= w["start"] < sp["end"] + 0.01]
+        if ws:
+            rates.append((k, art_rate(ws), sp))
+    off = [(k, r, sp) for k, r, sp in rates if abs(r / RATE["target"] - 1) > RATE.get("maxDev", 0.10)]
+    for k, r, sp in off:
+        revoice_at.extend(a + 0.01 for kk, a, b in sentence_ranges() if kk == k)
+    rs = [r for _, r, _ in rates]
+    check("语速一致", not off, (f"{len(off)} 句离 {RATE['target']} 字/秒超过 {RATE.get('maxDev', 0.10):.0%}：" + "；".join(f"「{sp['text'][:10]}」{r:.2f}" for _, r, sp in off[:6]) + "；")
+          * bool(off) + f"全片每句 {min(rs):.2f}–{max(rs):.2f} 字/秒，波动 {np.std(rs) / np.mean(rs):.2f}")
+
+rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
+rv = sorted({timing0["sentences"][k]["text"] for k, a, b in sentence_ranges() for t in revoice_at if a - 0.05 <= t <= b + 0.05}) if timing0.get("sentences") else []
+if rv:
+    rv_path.write_text(json.dumps(rv, ensure_ascii=False, indent=1))
+    print(f"要换种子重配的句子：{len(rv)} 句（{rv_path.name}）")
+elif rv_path.exists():
+    rv_path.unlink()
 print(f"\n旁白检查失败 {len(fails)} 项")
 sys.exit(1 if fails else 0)

@@ -214,7 +214,25 @@ def prosody(x, sr, words):
     chars = sum(len(w["text"]) for w in words); span = (words[-1]["end"] - words[0]["start"]) if words else 1.0
     tail = [(t, 12 * np.log2(f / med)) for t, f in tr if words and t >= words[-1]["end"] - 0.4] if med else []
     slope = float(np.polyfit([t for t, _ in tail], [s for _, s in tail], 1)[0]) if len(tail) > 20 else 0.0
-    return {"f0": med, "range": rng, "rate": chars / max(span, 0.3), "end": slope}
+    # 句首、句尾 0.3 秒浊音的中位基频：量句与句之间的音高「重新起头」有多大（E01 句首比上一句句尾平均高 6 个半音，听着像一句一句分开说）
+    start = float(np.median([f for t, f in tr if t < tr[0][0] + 0.3])) if tr else 0.0
+    endf0 = float(np.median([f for t, f in tr if t > tr[-1][0] - 0.3])) if tr else 0.0
+    return {"f0": med, "range": rng, "rate": chars / max(span, 0.3), "end": slope, "start": start, "endf0": endf0, "artRate": art_rate(words)}
+
+
+def flow_cost(p, prev, flow, base_rate, tone_rate=None):
+    """和上一句接不接得上（越小越好）：句首比上一句句尾高出多少半音（超过 maxReset 才罚），
+    语速离这一集的基准多远（语气目标里没写语速的句子，超过 rateTol 才罚）。flow 是 voice.json 的 flow"""
+    if not flow:
+        return 0.0
+    c = 0.0
+    if prev and prev.get("endf0") and p.get("start"):
+        reset = abs(12 * np.log2(p["start"] / prev["endf0"]))
+        c += flow.get("resetWeight", 1.0) * (max(0.0, reset - flow.get("maxReset", 4.0)) / 2.0) ** 2
+    if base_rate and tone_rate is None and p.get("rate"):
+        dev = abs(p["rate"] / base_rate - 1)
+        c += flow.get("rateWeight", 1.0) * (max(0.0, dev - flow.get("rateTol", 0.12)) / 0.1) ** 2
+    return float(c)
 
 
 def tone_cost(p, target, base_f0, base_rate):
@@ -231,3 +249,91 @@ def tone_cost(p, target, base_f0, base_rate):
     if target.get("end") == "fall":
         c += (max(0.0, p["end"] + 1.0) / 2.0) ** 2
     return float(c)
+
+
+_D = "零一二三四五六七八九"
+
+
+def _cn(n):
+    """0–9999 的中文读法（五十、一百零三、一千二百）"""
+    if n < 10:
+        return _D[n]
+    if n < 20:
+        return "十" + (_D[n % 10] if n % 10 else "")
+    if n < 100:
+        return _D[n // 10] + "十" + (_D[n % 10] if n % 10 else "")
+    if n < 1000:
+        r = n % 100
+        return _D[n // 100] + "百" + ("" if r == 0 else ("零" + _D[r] if r < 10 else (_D[r // 10] + "十" + (_D[r % 10] if r % 10 else ""))))
+    r = n % 1000
+    return _D[n // 1000] + "千" + ("" if r == 0 else ("零" + _cn(r) if r < 100 else _cn(r)))
+
+
+def read_numbers(s):
+    """把阿拉伯数字换成念出来的汉字，回转比对用（ASR 会把念出的数写成汉字或阿拉伯数字）：
+    像年份的四位数（1000–2099）一个个念（一九五八），其余按数念（50 → 五十；原来一个个换成「五零」，「试了50次」怎么配都过不了）"""
+    import re as _re
+    return _re.sub(r"\d+", lambda m: "".join(_D[int(c)] for c in m[0]) if len(m[0]) == 4 and 1000 <= int(m[0]) <= 2099 or len(m[0]) > 4 or m[0].startswith("0") and len(m[0]) > 1
+                   else _cn(int(m[0])), s)
+
+
+SAID_PUNCT = r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]"
+
+
+def said_text(s):
+    """回转比对用的「念出来的字」：先按念法换数字，再去标点（顺序不能反：先去标点「1、1、0」会连成 110，念成「一百一十」；E02 v6 两次栽在这里）。
+    配音生成的逐句比对、整段比对和成片旁白检查都用它，口径只有一处"""
+    import re as _re
+    return _re.sub(SAID_PUNCT, "", read_numbers(str(s).lower()))
+
+
+def pitch_breaks(x, sr, min_st=14.0, merge=0.05):
+    """破音：浊音里相邻两帧（1ms）音高突然跳 min_st 半音以上、又不是正好一个或两个八度（八度跳多半是基频估错，不是声音坏了）。
+    用户听 E02 v3「好几处声音畸变」：E02 每分钟 1.9 处，E01 只有 0.3 处，原来没有一项检查管它。返回 [(时刻, 跳了几个半音)]"""
+    tr = f0_track(x, sr)
+    out, prev = [], None
+    for t, f in tr:
+        if f and prev and prev[1] and t - prev[0] < 0.012:
+            j = abs(12 * np.log2(f / prev[1]))
+            if j > min_st and abs(j - 12) > 1.5 and abs(j - 24) > 1.5 and (not out or t - out[-1][0] > merge):
+                out.append((round(float(t), 3), round(float(j), 1)))
+        prev = (t, f)
+    return out
+
+
+# ---------- 起音收音不硬切、语速一致（用户听 E02 v5：「1:20 有个突兀的声音」「有的地方突然加快语速」） ----------
+def hard_edges(x, sr, silent_db=-60.0, loud_db=-35.0, look=0.03):
+    """硬切：声音从纯静音一下子起来（前 look 秒都低于 silent_db，下一个 2ms 就到 loud_db 以上），或者说着说着一下子掉进纯静音。
+    正常的字头字尾要十几毫秒才起来、落下（「投」从 -56 到 -30 用了 16ms）；E02 v5「权重越大」的「权」2ms 里从静音跳到 -20dB，
+    是剪掉开头串进来的多余字时切在了发声处、又没淡入。返回 [(起/收, 时刻, 那 2ms 的峰值 dB)]"""
+    x = np.asarray(x, dtype=np.float64); x = x.mean(1) if x.ndim > 1 else x
+    w = max(1, int(0.002 * sr)); n = len(x) // w
+    if n < 3:
+        return []
+    db = 20 * np.log10(np.abs(x[: n * w]).reshape(n, w).max(1) + 1e-9)
+    k = max(1, int(look / 0.002)); out = []
+    for i in range(k, n - k):
+        if db[i] > loud_db and db[i - k:i].max() < silent_db:
+            out.append(("起", round(i * w / sr, 3), round(float(db[i]), 1)))
+        if db[i] > loud_db and db[i + 1:i + 1 + k].max() < silent_db:
+            out.append(("收", round((i + 1) * w / sr, 3), round(float(db[i]), 1)))
+    return out
+
+
+def soften_edges(x, sr, ms=10.0):
+    """两头各做 ms 毫秒的升余弦淡入淡出：一条配音不管在哪里被剪开，接进成片时都不会「咔」一声"""
+    x = np.array(x, dtype=np.float32, copy=True); n = min(len(x) // 4, int(ms / 1000 * sr))
+    if n > 1:
+        r = (0.5 - 0.5 * np.cos(np.linspace(0, np.pi, n))).astype(np.float32)
+        x[:n] *= r; x[-n:] *= r[::-1]
+    return x
+
+
+def art_rate(words, gap_cap=0.12):
+    """说话的语速（字/秒）：只算嘴在动的时间，字间停顿最多算 gap_cap 秒。逗号处的停顿不算进去，
+    长句、短句、带逗号和不带逗号的句子才能放在一起比（原来的「字数 / 首字到末字」把停顿算进去，带逗号的句子显得慢）"""
+    ws = [w for w in words if w.get("text")]
+    if not ws:
+        return 0.0
+    t = sum(w["end"] - w["start"] for w in ws) + sum(min(gap_cap, max(0.0, b["start"] - a["end"])) for a, b in zip(ws, ws[1:]))
+    return sum(len(w["text"]) for w in ws) / max(t, 0.3)

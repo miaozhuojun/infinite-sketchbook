@@ -38,5 +38,34 @@
  "maxLevelSpreadDb": 0,
  "takeMaxEcho": 0,
  "maxEcho": 0,
- "packNote": "声音包（VOICE_PIPELINE.md）：build_voice.py <目录> 从 real 里挑片段做主参考，calibrate_voice.py <目录> --apply 校准并写进 pack（baseF0、baseRate、ltas）。candidates>1 时每句按 tones 里的语气目标挑候选；sentenceLevelDb 统一每句基础响度，spectralMatchDb 让每句频谱向声音包轻轻对齐"
+ "packNote": "声音包（VOICE_PIPELINE.md）：build_voice.py <目录> 从 real 里挑片段做主参考，calibrate_voice.py <目录> --apply 校准并写进 pack（baseF0、baseRate、ltas）。candidates>1 时每句按 tones 里的语气目标挑候选；sentenceLevelDb 统一每句基础响度，spectralMatchDb 让每句频谱向声音包轻轻对齐",
+ "flow": {
+  "maxReset": 4.0,
+  "resetWeight": 1.0,
+  "rateTol": 0.12,
+  "rateWeight": 1.0
+ },
+ "flowNote": "连贯：每句候选打分加上和上一句接不接得上（句首比上一句句尾高出超过 maxReset 半音、语速离基准超过 rateTol 都罚）；成片旁白检查报连贯指标，和 flowBaseline（上一集）比",
+ "flowBaseline": {
+  "episode": "上一集",
+  "resetMedianSt": 6.0,
+  "resetP90St": 11.1,
+  "rateCv": 0.15,
+  "longPauses": 12,
+  "pauses": 45
+ },
+ "chunk": {
+  "maxSentences": 3,
+  "maxChars": 60
+ },
+ "chunkNote": "两三句同语气的话一起配，在句间停顿处切开：句首不用每句从头起调，接得更顺。切不开、对不上字的整段退回逐句配；成片检查点名的句子标 .nochunk 以后逐句配",
+ "takeNoBreaks": true,
+ "maxBreaks": 0,
+ "breaksNote": "破音：音高突然跳 14 半音以上又不是八度（voice.py 的 pitch_breaks）。takeNoBreaks 让生成时就挑掉有破音的候选；maxBreaks 是成片旁白检查的上限；成片拼好后还剩的破音、掉嗓子、回声句自动严格重配，最多 3 轮",
+ "rate": {
+  "target": 4.0,
+  "takeTol": 0.08,
+  "maxDev": 0.1
+ },
+ "rateNote": "语速一致：target 是这个声音说话的语速（字/秒，只算嘴在动的时间，voice.py 的 art_rate）；生成时候选离它超过 takeTol 不要，拼好后、成片旁白检查时每句离它超过 maxDev 的自动重配。语气只改音区和起伏，不改语速"
 }

@@ -47,6 +47,12 @@ const subTop = (tl) => tl.sub.top - (tl.style?.subtitle?.plate?.padY ?? 0);
 // 写字中的一帧（笔在纸上，不在抬笔移动里）：正中那一笔写到一半
 const writingFrame = (tl) => { const s = tl.strokes[Math.floor(tl.strokes.length / 2)]; return Math.round(((s.t0 + s.t1) / 2) * tl.fps); };
 // 停笔 1 秒，让笔身（不是笔尖）横在一块内容正中：笔尖放在中心沿笔的方向往回 0.45 个笔长的地方
+// 写完后这段时间里没有停够 0.5 秒的停笔的第一个整段文字：「写字时压字」那项检查跳过长停笔（归停笔那项管），
+// 注入要落在笔在写字或移动的时段里（原来取第一个文字，E02 v4 开场那句写完就停笔 5.5 秒，注入全落在停笔里，永远「漏掉」）
+function textFreeOfRest(tl, dur) {
+  const busy = (a, b) => tl.penTrack.some((s) => s.kind === 'rest' && s.t1 - s.t0 >= 0.5 && s.t0 < b && s.t1 > a);
+  return [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText) && !busy(q.at(-1).t1 + 0.05, q.at(-1).t1 + 0.05 + dur));
+}
 function restAcross(tl, pts, t0) {
   const P = tl.style.pencil, Lw = P.length * P.scale * (Math.min(tl.canvas.w, tl.canvas.h) / 1080), r = (P.base * Math.PI) / 180;
   const cx = mid(pts.map((q) => q[0])), cy = mid(pts.map((q) => q[1]));
@@ -94,18 +100,24 @@ expectFail('停笔 1 秒压在刚写完的字上（不在推近镜头里）', (t
 }, pencil, '[建议] 停笔不压正在讲的东西');
 expectFail('写字时笔身横在别的字上 1.5 秒（不是停笔）', (tl) => {
   // 找一个整段都是文字的动作，写完后插一段 1.5 秒的原地「移动」，笔身横在它正中（停够 0.5 秒的停笔归第 6 项管，这里要的是写字和移动时）
-  const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText));
+  const g = textFreeOfRest(tl, 1.5);
   const r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
   tl.penTrack.unshift({ kind: 'move', t0: r.t0, t1: r.t0 + 1.5, from: r.at, to: r.at });
 }, pencil, '[建议] 写字时笔身不长时间压住别的字');
 expectFail('一句话里笔身断续压字，累计超过上限（每段都不到 1 秒）', (tl) => {
   // 在一句旁白里插四段 0.7 秒的原地「移动」，笔身横在一段已写的文字上，中间隔 0.1 秒：连续的检查拦不住，累计的要拦住
-  const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText)), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
+  const g = textFreeOfRest(tl, 3.2), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
   for (let i = 3; i >= 0; i--) tl.penTrack.unshift({ kind: 'move', t0: r.t0 + i * 0.8, t1: r.t0 + i * 0.8 + 0.7, from: r.at, to: r.at });
   const p = tl.report.phrases.findLast((q) => q.at <= r.t0);
   p.at = Math.min(p.at, r.t0); // 这四段都算在同一句里
   (tl.report.phrases[tl.report.phrases.indexOf(p) + 1] ?? {}).at = Math.max(tl.report.phrases[tl.report.phrases.indexOf(p) + 1]?.at ?? 0, r.t0 + 3.3);
 }, pencil, '累计压字超过');
+expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (tl) => {
+  // 找平移最远的一次镜头移动，压到 0.8 秒走完（审片 E02 v4：一节以顿悟句开头时，换节按推近 1.3 秒走了约 2500px）
+  const far = (m) => Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) * Math.max(m.from.z, m.to.z);
+  const m = tl.camera.filter((x) => x.t1 > x.t0).sort((a, b) => far(b) - far(a))[0];
+  m.t1 = m.t0 + Math.max(0.05, far(m) / (2 * tl.style.motion.flightSpeed)); // 压到上限的 2 倍速（固定 0.8 秒时，演示片最远一次也才 600px，压完仍不超速）
+}, pencil, '[失败] 镜头不甩');
 expectFail('片尾铅笔停在画面中间', (tl) => {
   const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);
   last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中
@@ -232,6 +244,22 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 没有掉嗓子');
+speechCase('旁白里一小段突然破音（音高跳上去 16 个半音又跳回来，用户听 E02 v3「好几处声音畸变」）', (tl) => {
+  // 最后一段旁白开头 0.4 秒后取 0.08 秒浊音，音高抬 2.5 倍（16 个半音，不是八度）
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, json, numpy as np
+from scipy.signal import resample
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+a = int((c['at'] + 0.45) * sr); n = int(0.08 * sr)
+seg = x[a:a + n]; hi = resample(seg, int(n / 2.5)); hi = np.tile(hi, 3)[:n]
+x[a:a + n] = hi * (np.abs(seg).max() / (np.abs(hi).max() + 1e-9))
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.narration = 'audio/_selftest.narration.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 没有破音');
 speechCase('整条配音底下垫着嘶嘶的背景噪声（参考音带底噪时会这样；用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
   // 源配音整条叠上白噪声（比说话低 20dB）；背景干净看全片 9 秒窗 DNSMOS BAK 的中位数
   const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
@@ -426,7 +454,8 @@ expectBeats('两个图形的墨迹相切（关闭自动修复）', (b) => {
 }, compileNoFix(TGT), '墨迹只隔', { advice: true });
 expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => {
   // 写一段字、圈出来，再让一根箭头的尖正好落在圈上：圈是装饰，箭头尖碰到它不算「接上」
-  const p = b.phrases.filter((q) => q.actions?.length).at(-1), at = p.actions[0].at; // 最后几句可能不画（片尾全景），取最后一句有动作的
+  // 最后几句可能不画（片尾全景），取最后一句有动作的；回看句不算（镜头只框回看的那几样，新写的字在画外，报的是别的问题，E02 v5 起回顾句也描东西）
+  const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), at = p.actions[0].at;
   p.actions.push({ id: '_t', type: 'text', at, text: 'AB', x: 640, y: 1150, size: 72 });
   p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
   p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
@@ -469,7 +498,7 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
   fs.rmSync('data/_selftest.beats.json', { force: true }); fs.rmSync(prof, { force: true });
 }
 expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
-  const p = b.phrases.filter((q) => q.actions?.length).at(-1), a0 = p.actions[0];
+  const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), a0 = p.actions[0];
   p.actions.push({ id: '_late', type: 'text', at: a0.at, text: '这一行字太长了来不及跟上旁白', x: 490, y: 1300, size: 72 });
 }, compileNoFix(TGT), /说完后才起笔|和本句旁白重叠/, { advice: true });
 

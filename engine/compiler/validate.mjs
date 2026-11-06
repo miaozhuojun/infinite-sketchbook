@@ -206,6 +206,8 @@ export function validateBeats(beats, style, reg) {
     }
   });
 
+  // 剧集里接着上一集：第 2 集起要写明上一集结尾答应了什么（brief.fromPrev），这一集要接住（E02 v1–v3 把 E01 说好的灯泡换成了红绿灯）
+  if (beats.series?.serial && (beats.series.episode ?? 1) > 1 && !beats.brief?.fromPrev) E('brief.fromPrev', `剧集「${beats.series.serialTitle ?? beats.series.serial}」第 ${beats.series.episode} 集：写明上一集结尾答应了什么（照抄上一集 next 那几句），这一集要接住`);
   // 叙事结构（创意自由，但完整一集必须有这些骨架）
   const rules = style.narrative[beats.kind] || { requireRoles: [], minQuiz: 0 };
   const roles = beats.phrases.map((p) => p.role).filter(Boolean);

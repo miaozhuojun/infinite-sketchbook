@@ -21,7 +21,16 @@ if cmd == "pack":
     video, out = sys.argv[4], Path(sys.argv[5])
     (out / "frames").mkdir(parents=True, exist_ok=True)
     lines = []
-    subs = tl["subtitles"]
+    # 一句旁白的字幕可能在标点处拆成几段（maxLines），拆出来的后段带 join：先并回一句一条，再和分镜的句子一一对上。
+    # 原来直接按下标配对，拆过的片子句子和字幕错位，帧截错时刻，后面的句子（片尾回顾）整段丢掉
+    subs = []
+    for s in tl["subtitles"]:
+        if s.get("join") and subs:
+            subs[-1] = {**subs[-1], "text": subs[-1]["text"] + "，" + s["text"], "t1": s["t1"]}
+        else:
+            subs.append(dict(s))
+    if len(subs) != len(tl["report"]["phrases"]):
+        sys.exit(f"字幕并回后 {len(subs)} 条，分镜 {len(tl['report']['phrases'])} 句，对不上，理解度材料不可信")
     for i, (p, s) in enumerate(zip(tl["report"]["phrases"], subs)):
         # 这一句的事都发生完（画完、灯亮或灯灭的效果走完、铅笔让开）之后、下一句开始之前截一帧。
         # 只看画完会截早：理解度测试看到「灯就亮」那帧灯还没亮、「灯就不亮」那帧灯还亮着

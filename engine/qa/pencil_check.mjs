@@ -4,6 +4,7 @@
 //   3. 运笔流畅：笔尖在屏幕上每帧位移 ≤ 60px（60fps），每一笔至少 3 帧（否则像掉帧/瞬移）
 //   4. 笔身不出画：笔尖在画面里时，整支铅笔都要在画布内（审片发现方版铅笔被右边缘切掉）；从画外飞入、飞出画外的那两段移动不算
 //   5. 顿悟时镜头不拉远：role=aha 的句子说完后再停 aha.holdAfter 秒之前，镜头只能推近或保持（审片发现顿悟时反而拉远）
+//   5b. 镜头不甩：每次镜头移动的屏幕平均平移速度不超过 motion.flightSpeed（留 15%）
 // 笔身、影子、字幕框的几何和编译器的避让共用 src/timeline.ts 里的同一份定义。
 //   6. 停笔不压正在讲的东西：笔停够 0.5 秒时，笔身不压已写出的文字、刚画完的元素，推近镜头里还有焦点元素
 //   7. 写字时笔身不长时间压住别的字：写字、抬笔移动时，笔身连续压住别的元素已写出的文字不超过 pencil.maxCoverSec 秒，
@@ -87,6 +88,17 @@ phr.forEach((p, i) => {
   }
 });
 check('顿悟时镜头不拉远', !zoomOut.length, zoomOut.length ? zoomOut.join('；') : `${phr.filter((p) => p.role === 'aha').length} 个顿悟句（说完后再停 ${tl.style?.motion?.aha?.holdAfter ?? 0}s）期间镜头只推近或保持`, 'camera.ahaNoZoomOut');
+
+// 5b. 镜头不甩：每次镜头移动在屏幕上的平均平移速度不超过 motion.flightSpeed（留 15% 余量），按纸面距离 × 两头较大的放大倍数算，和编译器排飞行时同一个算法。
+//     审片 E02 v4：一节以顿悟句开头时，换节按推近走 1.3 秒，平移约 2500px（1940px/s），机器 0.4 秒就出画，之后对着空纸 1.6 秒
+const vMax = tl.style?.motion?.flightSpeed, fast = [];
+if (vMax) for (const m of tl.camera ?? []) {
+  const dur = m.t1 - m.t0;
+  if (dur <= 0) continue;
+  const v = (Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) * Math.max(m.from.z, m.to.z)) / dur;
+  if (v > vMax * 1.15) fast.push(`${m.t0.toFixed(2)}–${m.t1.toFixed(2)}s 平均 ${v.toFixed(0)}px/s${m.focus ? '（推近）' : ''}`);
+}
+check('镜头不甩', !fast.length, fast.length ? `${fast.length} 次镜头移动太快（上限 ${vMax}px/s）：` + fast.slice(0, 5).join('、') : vMax ? `每次镜头移动平均平移不超过 ${vMax}px/s` : '风格里没写 flightSpeed，不查', 'camera.flightSpeed');
 
 // 6. 停笔不压正在讲的东西：凡是停够 0.5 秒（写字、笔画之间的移动、等下一个词的短停都不算），
 //    笔身不能压在已经写出来的文字上、刚画完的那个元素上，推近镜头里还有焦点元素

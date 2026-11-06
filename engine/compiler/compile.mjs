@@ -450,7 +450,11 @@ function schedule(boost) {
     const toTL = (srcT) => T + (srcT - clipIn);
     audioClips.push({ phrase: p.text, at: r2(T), srcIn: clipIn, srcOut: clipOut });
     const audioStart = T, audioEnd = T + (clipOut - clipIn), phraseStartFree = penFree;
-    for (const a of p.actions) {
+    // 一支笔按提示词在旁白里出现的先后来写（同一个词上的按分镜里的顺序）：分镜里排反了，后说到的先写，先说到的要等它写完
+    // （E02 v5「就把权重，像拧旋钮一样」把旋钮排在「权重」标签前面，标签落后 3.3 秒）
+    const cueAt = (a) => fullText.indexOf(strip(a.at), p.i0);
+    const ordered = p.actions.map((a, k) => [a, k]).sort(([a, i], [b, j]) => (cueAt(a) - cueAt(b)) || i - j).map(([a]) => a);
+    for (const a of ordered) {
       const cueIdx = fullText.indexOf(strip(a.at), p.i0);
       if (cueIdx < 0 || cueIdx > p.i1) throw new Error(`${a.id} 的 cue「${a.at}」不在短语「${p.text}」里`);
       const cue = toTL(charTimes[cueIdx].s);
@@ -474,7 +478,7 @@ function schedule(boost) {
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
       // 回看之后：镜头停在前面某一节，铅笔还留在最后写字的地方（多半在这一镜画外）。按原处起飞，镜头和笔从不同的地方出发，
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
-      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === p.actions[0]) {
+      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered[0]) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
       }
@@ -493,7 +497,7 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
-      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === ordered.find((x) => x.type !== 'off' && x.type !== 'glow');
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
       const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
       // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
@@ -653,8 +657,15 @@ phrases.forEach((p, pi) => {
     const cue = cues.length ? Math.min(...cues) : report.phrases[pi].at;
     // 上一句还在写的时候不推近：一推，正在写的那行和铅笔会被推到画面边缘、压上字幕（实测 16:9 最后一次推近）
     const prevDraw = pi > 0 ? report.phrases[pi - 1].drawEnd : 0;
-    const t0 = Math.max(Math.min(cue - AHA.lead, first.t0) - AHA.moveDur, holdUntil, prevDraw);
-    pushMove(t0, t0 + AHA.moveDur, tc, [...new Set([...p.actions.map((a) => a.id), ...(p.focus || [])])]); // 推近镜头记下焦点元素（安全区检查用）
+    const focusIds = [...new Set([...p.actions.map((a) => a.id), ...(p.focus || [])])]; // 推近镜头记下焦点元素（安全区检查用）
+    // 一节以顿悟句开头（或回看之后接顿悟句）：镜头要飞到另一块纸面，和铅笔的换节飞行同起同落，直接落在推近的取景上。
+    // 按推近只走 AHA.moveDur 秒时，E02 v4 进第 5 节 1.3 秒平移约 2500px，机器 0.4 秒就出画，之后对着空纸等笔飞到 1.6 秒（审片）
+    const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
+    if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) { pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc, focusIds); newChapter.add(camera[camera.length - 1]); }
+    else {
+      const t0 = Math.max(Math.min(cue - AHA.lead, first.t0) - AHA.moveDur, holdUntil, prevDraw);
+      pushMove(t0, t0 + AHA.moveDur, tc, focusIds);
+    }
   } else {
     // 普通句：镜头在第一笔前 cameraMove[0] 秒起移、第一笔后 cameraMove[1] 秒到位（边写边稳住）。
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位

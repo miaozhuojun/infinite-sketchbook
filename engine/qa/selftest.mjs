@@ -120,7 +120,7 @@ expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (t
   // 找平移最远的一次镜头移动，压到 0.8 秒走完（审片 E02 v4：一节以顿悟句开头时，换节按推近 1.3 秒走了约 2500px）
   const far = (m) => Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) * Math.max(m.from.z, m.to.z);
   const m = tl.camera.filter((x) => x.t1 > x.t0).sort((a, b) => far(b) - far(a))[0];
-  m.t1 = m.t0 + Math.max(0.05, far(m) / (2 * tl.style.motion.flightSpeed)); // 压到上限的 2 倍速（固定 0.8 秒时，演示片最远一次也才 600px，压完仍不超速）
+  m.t1 = m.t0 + Math.max(0.05, far(m) / (2 * (tl.style.motion.flightSpeed ?? tl.style.motion.moveSpeed))); // 压到上限的 2 倍速（固定 0.8 秒时，演示片最远一次也才 600px，压完仍不超速）
 }, pencil, '[失败] 镜头不甩');
 expectFail('片尾铅笔停在画面中间', (tl) => {
   const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);

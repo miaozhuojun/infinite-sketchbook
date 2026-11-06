@@ -91,7 +91,7 @@ check('顿悟时镜头不拉远', !zoomOut.length, zoomOut.length ? zoomOut.join
 
 // 5b. 镜头不甩：每次镜头移动在屏幕上的平均平移速度不超过 motion.flightSpeed（留 15% 余量），按纸面距离 × 两头较大的放大倍数算，和编译器排飞行时同一个算法。
 //     审片 E02 v4：一节以顿悟句开头时，换节按推近走 1.3 秒，平移约 2500px（1940px/s），机器 0.4 秒就出画，之后对着空纸 1.6 秒
-const vMax = tl.style?.motion?.flightSpeed, fast = [];
+const vMax = tl.style?.motion?.flightSpeed ?? tl.style?.motion?.moveSpeed, fast = []; // 没写 flightSpeed 时编译按 moveSpeed 排飞行，这里同一个回落值（CI 用默认风格，原来整项跳过）
 if (vMax) for (const m of tl.camera ?? []) {
   const dur = m.t1 - m.t0;
   if (dur <= 0) continue;

@@ -51,6 +51,9 @@ check("音色一致性", sim >= voice["minSimilarity"], f"与真人录音相似�
 
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
 floor = voice.get("pitchFloorHz", 0)
+# 掉嗓子、破音落在的时刻：最后归到句子，写进 <时间线>.revoice.json，流水线据此给这几句自动换种子重配一轮（不用人手动 reseed）。
+# E02 v5：配音那边拼好后查过没问题，成片旁白（48k、插了停顿、片段两头 3ms 淡入淡出）上又查出一句掉嗓子
+revoice_at = []
 timing0 = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
 # 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾。
 # 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上）
@@ -69,6 +72,7 @@ if floor:
     # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
     ranges = [(a, b) for _, a, b in sentence_ranges()] or [(0.0, len(x0) / sr0)]  # 旧的 timing 没有 sentences：整段量
     drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
+    revoice_at.extend(a for a, _, _ in drops)
     def phrase_at(t):
         c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
         return f"「{c['phrase'][:10]}」" if c else ""
@@ -164,6 +168,8 @@ if "maxBreaks" in voice:
     xs5, ssr5 = mono(root / "public" / tl["narration"])
     bk5 = pitch_breaks(xs5, ssr5)
     near = lambda t: next((c["phrase"][:10] for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), "")
+    if len(bk5) > voice["maxBreaks"]:
+        revoice_at.extend(t for t, _ in bk5)
     check("没有破音", len(bk5) <= voice["maxBreaks"], f"{len(bk5)} 处（上限 {voice['maxBreaks']}）" + ("：" + "；".join(f"{t:.2f}s「{near(t)}」跳 {j:.0f} 半音" for t, j in bk5[:6]) if bk5 else ""))
 
 # 0i. 连贯（建议，不拦）：句与句之间音高重新起头多大、语速稳不稳、成片里句间长停顿有几处，和上一集（voice.json 的 flowBaseline）比。
@@ -284,5 +290,12 @@ if tl.get("audio"):
     cer = d[len(h)] / max(1, len(r))
     check("总混可懂度", cer <= 0.02, f"拼音错误率 {cer:.3f}" + ("" if cer <= 0.02 else f"，识别为：{hyp}"))
 
+rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
+rv = sorted({timing0["sentences"][k]["text"] for k, a, b in sentence_ranges() for t in revoice_at if a - 0.05 <= t <= b + 0.05}) if timing0.get("sentences") else []
+if rv:
+    rv_path.write_text(json.dumps(rv, ensure_ascii=False, indent=1))
+    print(f"要换种子重配的句子：{len(rv)} 句（{rv_path.name}）")
+elif rv_path.exists():
+    rv_path.unlink()
 print(f"\n旁白检查失败 {len(fails)} 项")
 sys.exit(1 if fails else 0)

@@ -25,7 +25,8 @@ const check = (name, ok, detail, gate) => {
   console.log(`[${ok ? '通过' : adv ? '建议' : '失败'}] ${name}：${detail}`);
   if (!ok) (adv ? advs : fails).push(name);
 };
-const zones = Object.entries(tl.platformUI || {}).flatMap(([pf, zs]) => (zs || []).map((z) => ({ ...z, pf })));
+const allZones = Object.entries(tl.platformUI || {}).flatMap(([pf, zs]) => (zs || []).map((z) => ({ ...z, pf })));
+const zones = allZones.filter((z) => !z.advice), feedZones = allZones.filter((z) => z.advice); // advice：竖握手机看横版这类只给建议的遮挡区
 const inZone = (x, y) => zones.find((z) => x > z.l && x < z.r && y > z.t && y < z.b);
 
 const subHits = [];
@@ -53,6 +54,22 @@ for (const s of tl.strokes) {
     }
     if (hit) { contentHits.push(`${s.id} 在 ${t.toFixed(2)}s 落进 ${hit.pf} 的${hit.name}`); break; }
   }
+}
+// 2b. 竖握手机看横版（抖音信息流）：镜头停稳时，文字有没有停在右下的按钮列下面。只给建议：全屏横看时没有这些按钮，
+//     硬拦会让所有画面都往左缩（审片 E02 v5：16:9 同时发抖音、小红书，原来的检查只管 YouTube、B 站）
+if (feedZones.length) {
+  const feedHits = [];
+  for (const s of tl.strokes) {
+    if (s.kind !== 'glyph' && s.kind !== 'line') continue;
+    const pr = new svgPathProperties(s.d), L = pr.getTotalLength();
+    for (const t of [s.t1, ...camEnds.filter((t) => t > s.t1)].slice(0, 3)) {
+      const c = cameraAt(tl.camera, t), q = pr.getPointAtLength(L / 2), x = (q.x - c.x) * c.z + tl.view.cx, y = (q.y - c.y) * c.z + tl.view.cy;
+      const z = feedZones.find((z) => x > z.l && x < z.r && y > z.t && y < z.b);
+      if (z) { feedHits.push(`${s.action} 在 ${t.toFixed(2)}s`); break; }
+    }
+  }
+  const uniq = [...new Set(feedHits.map((h) => h.split(' ')[0]))];
+  check('文字避开竖握手机看横版时的按钮列', !uniq.length, uniq.length ? `${uniq.length} 个文字元素停在 ${feedZones.map((z) => `${z.pf} 的${z.name}`).join('、')} 下面：` + feedHits.filter((h, i, a) => a.findIndex((x) => x.split(' ')[0] === h.split(' ')[0]) === i).slice(0, 6).join('、') : `文字都不在 ${feedZones.map((z) => z.pf).join('、')} 的按钮列下面`, 'safezone.feed');
 }
 // 每个元素已画部分的包围盒（第 3、4 项共用）
 const allBox = new Map();
@@ -132,8 +149,10 @@ for (const sp of wm?.spans ?? []) for (const t of [sp.t0, sp.t1].filter((x) => x
 check('水印换位避开顿悟句', !swapHits.length, swapHits.length ? [...new Set(swapHits)].slice(0, 5).join('；') : wm ? `${Math.max(0, wm.spans.length - 1)} 次换位都不在顿悟句里` : '没有水印，未查', 'watermark.ahaSwap');
 check('推近时焦点在画面中部', !offC.length, offC.length ? offC.join('；') : maxOff === undefined || !fr ? '风格规范没有 aha.maxOffCenter 或时间线没有取景框，未查' : `${tl.camera.filter((m) => m.focus && (m.to.push ?? 1) > 1.001).length} 次推近，焦点中心都在取景框中心 ${(maxOff * 100).toFixed(0)}% 以内`, 'camera.ahaCentered');
 check('镜头停稳时内容不进字幕区', !inSub.length, inSub.length ? `${inSub.length} 处：` + inSub.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，画出来的东西都在字幕上方`);
-check('镜头停稳时不切字', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，文字都整段在取景框里或整段在画外`);
-check('镜头停稳时图形不切半截', !shapeCuts.length, shapeCuts.length ? `${shapeCuts.length} 处：` + shapeCuts.slice(0, 5).join('；') : `${tl.camera.length} 个镜头位置上，图形都整段在取景框里或整段在画外（声明 bleed 的图形没有停在边距里）`, 'framing.shapeCut');
+// 只详列前 5 处，其余列出是哪几个元素：处数多时后面的元素原来完全看不到（自测注入的 _cut 被前 23 处挤掉，E02 v6 基线「漏掉」）
+const more = (xs) => (xs.length > 5 ? `；另有：${[...new Set(xs.slice(5).map((x) => x.split(' ')[0]))].join('、')}` : '');
+check('镜头停稳时不切字', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') + more(cuts) : `${tl.camera.length} 个镜头位置上，文字都整段在取景框里或整段在画外`);
+check('镜头停稳时图形不切半截', !shapeCuts.length, shapeCuts.length ? `${shapeCuts.length} 处：` + shapeCuts.slice(0, 5).join('；') + more(shapeCuts) : `${tl.camera.length} 个镜头位置上，图形都整段在取景框里或整段在画外（声明 bleed 的图形没有停在边距里）`, 'framing.shapeCut');
 check('内容避开平台界面', !contentHits.length, contentHits.length ? `${contentHits.length} 笔：` + contentHits.slice(0, 5).join('；') : `${tl.strokes.length} 笔在所有镜头位置上都不被平台界面遮挡`);
 console.log(`\n安全区检查失败 ${fails.length} 项${advs.length ? `（另有建议 ${advs.length} 项）` : ''}`);
 process.exit(fails.length ? 1 : 0);

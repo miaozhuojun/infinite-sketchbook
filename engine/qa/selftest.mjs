@@ -1,5 +1,5 @@
 // 检查器自测：对一份已通过的时间线/分镜注入已知缺陷，每一项检查都必须报出来；否则说明检查形同虚设。
-// 引擎、组件库、风格规范或检查器改动后先跑这个。用法：node qa/selftest.mjs build/<id>-9x16.timeline.json
+// 引擎、组件库、风格规范或检查器改动后先跑这个。用法：node qa/selftest.mjs build/<id>-<画幅>.timeline.json [--skip speech]（任何画幅都行：平台界面、版式类注入按这条基线的画幅和界面算；按改了什么跳过整组：--skip speech（没改配音和旁白检查）、--skip compile（没改编译器和分镜校验），可以写成 --skip speech,compile）
 // 注入目标按类型和时间挑（文字、图形、推近镜头……），不认某一期的元素名，演示分镜和每一期都能当基线；CI 跑的是演示分镜。
 // 旁白类注入要真人配音和本地配音环境：配音是合成提示音（演示分镜）或没有 PY_MLX 时整组跳过，结果里写明跳过了哪些、为什么。
 import fs from 'node:fs';
@@ -15,6 +15,7 @@ const speechBasePath = process.argv.includes('--speech-base') ? process.argv[pro
 const sbase = JSON.parse(fs.readFileSync(speechBasePath, 'utf8'));
 const sbeatsSrc = JSON.parse(fs.readFileSync(`data/${sbase.beatsId}.beats.json`, 'utf8'));
 const beatsSrc = JSON.parse(fs.readFileSync(`data/${base.beatsId}.beats.json`, 'utf8'));
+const TGT = base.target; // 分镜类注入按基线时间线的画幅编译（原来写死 9:16）
 const results = [], skipped = [];
 const record = (name, caught, out) => { results.push({ name, caught }); console.log(`${caught ? '✓ 抓到' : '✗ 漏掉'}  ${name}`); if (!caught) console.log(out.slice(-700)); };
 const skip = (name, why) => { skipped.push({ name, why }); console.log(`–  跳过  ${name}`); };
@@ -34,7 +35,11 @@ function expectFail(name, mutate, runner, mustSay, from = base) {
 const pencil = (p) => spawnSync('node', ['qa/pencil_check.mjs', p], { encoding: 'utf8' });
 const safezone = (p) => spawnSync('node', ['qa/safezone_check.mjs', p], { encoding: 'utf8' });
 const speech = (p) => spawnSync(PY_MLX, ['speech_check.py', p, path.resolve('.')], { encoding: 'utf8', cwd: '../tts' });
-const noSpeech = sbeatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
+// --skip speech,compile：按改了什么跳过整组。speech：没动 tts/ 和旁白检查时跳过旁白类注入；compile：没动编译器和分镜校验时跳过要重新编译的注入（大分镜每条要编译一分半钟）。
+// 旁白类注入这一组二十来条、每条都要重新加载识别模型，
+// 占自测八成的时间（一次二十多分钟）；改了配音或旁白检查才需要跑（用户 2026-11-06：流程太长）
+const SKIP = new Set(process.argv.includes('--skip') ? process.argv[process.argv.indexOf('--skip') + 1].split(',') : []);
+const noSpeech = SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : sbeatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
 const OTHER_VOICE = path.resolve('qa/fixtures/other-voice.mp3');
 const speechCase = (name, mutate, mustSay, why = noSpeech) => (why ? skip(name, why) : expectFail(name, mutate, speech, mustSay, sbase));
 
@@ -46,6 +51,12 @@ const subTop = (tl) => tl.sub.top - (tl.style?.subtitle?.plate?.padY ?? 0);
 // 写字中的一帧（笔在纸上，不在抬笔移动里）：正中那一笔写到一半
 const writingFrame = (tl) => { const s = tl.strokes[Math.floor(tl.strokes.length / 2)]; return Math.round(((s.t0 + s.t1) / 2) * tl.fps); };
 // 停笔 1 秒，让笔身（不是笔尖）横在一块内容正中：笔尖放在中心沿笔的方向往回 0.45 个笔长的地方
+// 写完后这段时间里没有停够 0.5 秒的停笔的第一个整段文字：「写字时压字」那项检查跳过长停笔（归停笔那项管），
+// 注入要落在笔在写字或移动的时段里（原来取第一个文字，E02 v4 开场那句写完就停笔 5.5 秒，注入全落在停笔里，永远「漏掉」）
+function textFreeOfRest(tl, dur) {
+  const busy = (a, b) => tl.penTrack.some((s) => s.kind === 'rest' && s.t1 - s.t0 >= 0.5 && s.t0 < b && s.t1 > a);
+  return [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText) && !busy(q.at(-1).t1 + 0.05, q.at(-1).t1 + 0.05 + dur));
+}
 function restAcross(tl, pts, t0) {
   const P = tl.style.pencil, Lw = P.length * P.scale * (Math.min(tl.canvas.w, tl.canvas.h) / 1080), r = (P.base * Math.PI) / 180;
   const cx = mid(pts.map((q) => q[0])), cy = mid(pts.map((q) => q[1]));
@@ -93,25 +104,53 @@ expectFail('停笔 1 秒压在刚写完的字上（不在推近镜头里）', (t
 }, pencil, '[建议] 停笔不压正在讲的东西');
 expectFail('写字时笔身横在别的字上 1.5 秒（不是停笔）', (tl) => {
   // 找一个整段都是文字的动作，写完后插一段 1.5 秒的原地「移动」，笔身横在它正中（停够 0.5 秒的停笔归第 6 项管，这里要的是写字和移动时）
-  const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText));
+  const g = textFreeOfRest(tl, 1.5);
   const r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
   tl.penTrack.unshift({ kind: 'move', t0: r.t0, t1: r.t0 + 1.5, from: r.at, to: r.at });
 }, pencil, '[建议] 写字时笔身不长时间压住别的字');
 expectFail('一句话里笔身断续压字，累计超过上限（每段都不到 1 秒）', (tl) => {
   // 在一句旁白里插四段 0.7 秒的原地「移动」，笔身横在一段已写的文字上，中间隔 0.1 秒：连续的检查拦不住，累计的要拦住
-  const g = [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText)), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
+  const g = textFreeOfRest(tl, 3.2), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
   for (let i = 3; i >= 0; i--) tl.penTrack.unshift({ kind: 'move', t0: r.t0 + i * 0.8, t1: r.t0 + i * 0.8 + 0.7, from: r.at, to: r.at });
   const p = tl.report.phrases.findLast((q) => q.at <= r.t0);
   p.at = Math.min(p.at, r.t0); // 这四段都算在同一句里
   (tl.report.phrases[tl.report.phrases.indexOf(p) + 1] ?? {}).at = Math.max(tl.report.phrases[tl.report.phrases.indexOf(p) + 1]?.at ?? 0, r.t0 + 3.3);
 }, pencil, '累计压字超过');
+expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (tl) => {
+  // 找平移最远的一次镜头移动，压到 0.8 秒走完（审片 E02 v4：一节以顿悟句开头时，换节按推近 1.3 秒走了约 2500px）
+  const far = (m) => Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) * Math.max(m.from.z, m.to.z);
+  const m = tl.camera.filter((x) => x.t1 > x.t0).sort((a, b) => far(b) - far(a))[0];
+  m.t1 = m.t0 + Math.max(0.05, far(m) / (2 * (tl.style.motion.flightSpeed ?? tl.style.motion.moveSpeed))); // 压到上限的 2 倍速（固定 0.8 秒时，演示片最远一次也才 600px，压完仍不超速）
+}, pencil, '[失败] 镜头不甩');
+expectFail('铅笔轨迹中间断了一截（笔在那段时间没有位置，渲染时会一帧闪出画外）', (tl) => {
+  // 删掉轨迹正中的一段：审片 E02 v9 发现的笔闪，原因是轨迹有空档
+  const i = Math.floor(tl.penTrack.length / 2);
+  tl.penTrack.sort((a, b) => a.t0 - b.t0).splice(i, 1);
+}, pencil, '[失败] 铅笔轨迹没有空档');
 expectFail('片尾铅笔停在画面中间', (tl) => {
   const c = cameraAt(tl.camera, tl.duration), last = tl.penTrack.at(-1);
   last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中
   tl.penTrack.at(-2).to = last.at;
 }, pencil, '[建议] 片尾不带笔');
-expectFail('字幕挪进 TikTok 底部信息栏', (tl) => { tl.sub.top = 1600; }, safezone, '[失败] 字幕避开平台界面');
-expectFail('内容整体右移 400px 进右侧按钮列', (tl) => { tl.view.cx += 400; }, safezone, '[失败] 内容避开平台界面');
+// 往平台界面里挪：按基线画幅实际有的界面区算位置（原来写死 9:16 的 TikTok 底栏和右侧按钮列，16:9 基线上这两条注入落不到任何界面里，永远「漏掉」）
+const uiZones = (tl) => tl.platforms.flatMap((pf) => (tl.platformUI?.[pf] ?? []).map((z) => ({ ...z, pf })));
+{
+  const W = base.canvas.w, H = base.canvas.h, zs = uiZones(base).filter((z) => !z.advice); // 只给建议的遮挡区另有用例
+  const bottom = zs.filter((z) => z.b >= H - 2 && z.r - z.l >= W / 2).sort((a, b) => a.t - b.t)[0];
+  if (bottom) expectFail(`字幕挪进 ${bottom.pf} 的${bottom.name}`, (tl) => { tl.sub.top = bottom.t + 10; }, safezone, '[失败] 字幕避开平台界面');
+  else skip('字幕挪进底部平台界面', '基线画幅的平台界面里没有底部横条');
+  // 内容挪进界面：右侧竖条往右挪，顶部横条往上挪，底部横条往下挪，挪到内容正好盖住这块界面
+  const side = zs.find((z) => z.l >= W / 2 && z.b - z.t >= H / 3), top = zs.find((z) => z.t <= 2 && z.r - z.l >= W / 2);
+  if (side) expectFail(`内容整体右移进 ${side.pf} 的${side.name}`, (tl) => { tl.view.cx += (side.l + side.r) / 2 - W / 2; }, safezone, '[失败] 内容避开平台界面'); // 画面中心挪到这条界面的正中
+  else if (top) expectFail(`内容整体上移进 ${top.pf} 的${top.name}`, (tl) => { tl.view.cy -= 380; }, safezone, '[失败] 内容避开平台界面');
+  else skip('内容整体挪进平台界面', '基线画幅没有侧边或顶部的平台界面');
+}
+// 竖握手机看横版（抖音信息流）的按钮列：基线画幅有这类只给建议的遮挡区时，把内容整体右移到按钮列底下，检查要给建议
+{
+  const feed = uiZones(base).find((z) => z.advice);
+  if (feed) expectFail(`文字整体右移进 ${feed.pf} 的${feed.name}`, (tl) => { tl.view.cx += (feed.l + feed.r) / 2 - base.canvas.w / 2; tl.view.cy += (feed.t + feed.b) / 2 - base.canvas.h / 2; }, safezone, '文字避开竖握手机看横版时的按钮列');
+  else skip('文字挪进竖握手机看横版时的按钮列', '基线画幅没有这类遮挡区');
+}
 expectFail('推近镜头把一段文字切成半截', (tl) => {
   // 找一个推近镜头和一段已写的文字，把镜头挪到让这段文字正好骑在画面左边缘上
   const m = tl.camera.find((x) => x.focus), st = tl.strokes.find((s) => isText(s) && s.t1 < m.t1);
@@ -154,7 +193,7 @@ expectFail('镜头停稳时一个图形被画布左边缘切掉一截、其余�
   const w = (sx, sy) => [(sx - tl.view.cx) / c.z + c.x, (sy - tl.view.cy) / c.z + c.y], y = (tl.frame.t + tl.frame.b) / 2;
   const [ax, ay] = w(-60, y), [bx, by] = w(tl.frame.l + 200, y);
   tl.strokes.push({ id: '_cut#0', action: '_cut', group: '_cut', kind: 'shape', color: 'ink', d: `M ${ax} ${ay} L ${bx} ${by}`, len: Math.hypot(bx - ax, by - ay), t0: Math.min(m.t1 + 0.1, tl.duration - 0.4), t1: Math.min(m.t1 + 0.3, tl.duration - 0.2), pts: [[ax, ay, 0.5], [bx, by, 0.5]] });
-}, safezone, '_cut 在 ');
+}, safezone, '_cut');
 expectFail('镜头停稳时一个字的最后一笔露在画面左缘几像素（路径在画外，笔宽伸进来）', (tl) => {
   // 最后一镜里加一笔「字」：路径中心线在画布左缘外 2px，笔宽 12px，墨迹伸进画面 4px。只看路径点、不算笔宽时会当成整段在画外
   const m = tl.camera.at(-1), c = m.to, y = (tl.frame.t + tl.frame.b) / 2;
@@ -164,9 +203,19 @@ expectFail('镜头停稳时一个字的最后一笔露在画面左缘几像素�
 }, safezone, '_edge 在 ');
 expectFail('推近把焦点挤到画面顶上（下面大半空着）', (tl) => {
   const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
-  m.to = { ...m.to, y: m.to.y + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z }; // 焦点中心往上挪 35% 个取景框高
+  // 把焦点中心放到取景框中心上方 35% 个取景框高（按焦点的实际位置算；原来只把镜头往下挪固定一段，焦点本来偏下的基线上挪完反而更居中，查不出来）
+  const pts = tl.strokes.filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts), fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
+  m.to = { ...m.to, y: fy + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z };
 }, safezone, '[建议] 推近时焦点在画面中部');
-expectFail('推近镜头把焦点内容推进 TikTok 顶部栏', (tl) => { const m = tl.camera.find((x) => x.focus); m.to = { ...m.to, y: m.to.y + 650 / m.to.z }; }, safezone, '[失败] 内容避开平台界面');
+{ // 推近镜头把焦点内容推进顶部平台界面：按基线画幅实际的顶部界面算（原来写死 TikTok 顶栏的 650px，16:9 上整段推出画外，查不出来）
+  const top = uiZones(base).find((z) => z.t <= 2 && z.r - z.l >= base.canvas.w / 2);
+  if (top) expectFail(`推近镜头把焦点内容推进 ${top.pf} 的${top.name}`, (tl) => {
+    const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
+    const pts = tl.strokes.filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts), fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
+    m.to = { ...m.to, y: fy - (top.b / 2 - tl.view.cy) / m.to.z }; // 焦点中心正好落在顶部界面中间
+  }, safezone, '[失败] 内容避开平台界面');
+  else skip('推近镜头把焦点内容推进顶部平台界面', '基线画幅的平台界面里没有顶部横条');
+}
 // 水印：没配置品牌的时间线（CI 跑的演示分镜）没有水印，就注入一段，检查照样要查
 const wmOf = (tl) => (tl.watermark ??= { text: '测试水印', size: 30, opacity: 0.42, fade: 0.8, margin: 10, spans: [] });
 expectFail('水印挪进 TikTok 右侧按钮列', (tl) => { wmOf(tl).spans = [{ t0: 0, t1: tl.duration, x: 980, y: 1000, anchor: 'l' }]; }, safezone, '[失败] 水印避开字幕、平台界面和内容');
@@ -210,6 +259,52 @@ sf.write(${JSON.stringify(dst)}, x, sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 没有掉嗓子');
+speechCase('旁白里一小段突然破音（音高跳上去 16 个半音又跳回来，用户听 E02 v3「好几处声音畸变」）', (tl) => {
+  // 最后一段旁白开头 0.4 秒后取 0.08 秒浊音，音高抬 2.5 倍（16 个半音，不是八度）
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, json, numpy as np
+from scipy.signal import resample
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+a = int((c['at'] + 0.45) * sr); n = int(0.08 * sr)
+seg = x[a:a + n]; hi = resample(seg, int(n / 2.5)); hi = np.tile(hi, 3)[:n]
+x[a:a + n] = hi * (np.abs(seg).max() / (np.abs(hi).max() + 1e-9))
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.narration = 'audio/_selftest.narration.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 没有破音');
+speechCase('旁白里一个字从纯静音硬起（剪开处没淡入，用户听 E02 v5「1:20 有个突兀的声音」）', (tl) => {
+  // 最后一段旁白开头 0.6 秒处，把前面 40ms 清成纯静音：声音从静音一下子跳回正在发声的地方
+  const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
+  spawnSync(PY_QA, ['-c', `
+import soundfile as sf, json, numpy as np
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float64')
+c = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips.at(-1)))})
+m = x if x.ndim == 1 else x[:, 0]
+a0 = int((c['at'] + 0.3) * sr); w = int(0.01 * sr)
+lv = [np.abs(m[i:i + w]).max() for i in range(a0, a0 + int(1.5 * sr), w)]
+a = a0 + int(np.argmax(lv)) * w  # 这段里最响的地方，一定在发声
+x[a - int(0.04 * sr):a] = 0
+sf.write(${JSON.stringify(dst)}, x, sr)`]);
+  tl.narration = 'audio/_selftest.narration.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+}, '[失败] 起音收音不硬切');
+speechCase('一句话突然说快了四成（用户听 E02 v5「有的地方突然加快语速」）', (tl) => {
+  // 逐字时间里最后一句的字都压短到 0.7 倍（字/秒 ×1.43），其余不动；旁白检查读的是分镜指向的逐字时间，所以另写一份分镜指过去
+  const bp = path.resolve('data', `${sbase.beatsId}.beats.json`), b = JSON.parse(fs.readFileSync(bp, 'utf8'));
+  const tp = path.resolve('data', b.narration.timing), tm = JSON.parse(fs.readFileSync(tp, 'utf8'));
+  const last = tm.sentences.at(-1);
+  const L = last.start, k = (t) => L + (t - L) * 0.7; // 整句往句首压：字和字间的停顿一起变短
+  for (const w of tm.words) if (w.start >= L - 0.01) { w.start = k(w.start); w.end = k(w.end); }
+  const tdst = path.resolve('../tts/out/_selftest.timing.json'), bdst = path.resolve('data/_selftest_rate.beats.json');
+  fs.writeFileSync(tdst, JSON.stringify(tm));
+  fs.writeFileSync(bdst, JSON.stringify({ ...b, id: '_selftest_rate', narration: { ...b.narration, timing: path.relative(path.resolve('data'), tdst) } }));
+  tl.beatsId = '_selftest_rate';
+  return { cleanup: [tdst, bdst] };
+}, '[失败] 语速一致');
 speechCase('整条配音底下垫着嘶嘶的背景噪声（参考音带底噪时会这样；用户听 E01 v7「说话时有明显背景噪音」）', (tl) => {
   // 源配音整条叠上白噪声（比说话低 20dB）；背景干净看全片 9 秒窗 DNSMOS BAK 的中位数
   const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
@@ -363,8 +458,15 @@ const firstText = (b) => acts(b).find((a) => a.type === 'text');
 const adviceOf = (out) => [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])].join('\n');
 // advice：要报成建议；any：报成建议或错误都算（注入的间距在不同基线上可能刚好压在一起，那就是错误）
 function expectBeats(name, mutate, cmd, mustMatch, { advice = false, any = false } = {}) {
+  if (SKIP.has('compile')) return skip(name, '这次没改编译器和分镜校验（--skip compile）');
   const b = structuredClone(beatsSrc);
   b.id = '_selftest';
+  // 注入改的是动作上的 x/y 这些字段；基线分镜给编译画幅写了 layout 覆盖时，先把覆盖并进动作本身，改的位置才真的生效
+  // （原来写死按 9:16 编译、改的是竖版坐标；只出横版的基线上，横版的 layout 覆盖把注入盖掉，几条「关闭自动修复」的注入永远漏掉）
+  for (const a of acts(b)) {
+    for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov);
+    delete a.layout;
+  }
   mutate(b);
   const p = 'data/_selftest.beats.json';
   fs.writeFileSync(p, JSON.stringify(b));
@@ -377,6 +479,7 @@ function expectBeats(name, mutate, cmd, mustMatch, { advice = false, any = false
 const validate = (p) => ['compiler/validate.mjs', p];
 const compileNoFix = (t) => (p) => ['compiler/compile.mjs', p, '--target', t, '--no-autofix'];
 
+
 expectBeats('用了不存在的组件', (b) => { acts(b).at(-1).type = 'bulbb'; }, validate, '未知组件「bulbb」');
 expectBeats('写了裸色值', (b) => { firstText(b).color = '#ff0000'; }, validate, '不是规范里的墨色');
 expectBeats('字号不在字号阶梯上', (b) => { firstText(b).size = 75; }, validate, '不在字号阶梯', { advice: true });
@@ -388,47 +491,48 @@ expectBeats('文字里有手写字体没有的字（全角逗号）', (b) => { c
 expectBeats('回看的句子指向还没画过的元素', (b) => { b.phrases[0].revisit = [b.phrases.at(-1).actions?.[0]?.id ?? 'nope']; b.phrases[0].actions = []; }, validate, 'revisit');
 expectBeats('提示词不在这句旁白里', (b) => { acts(b).at(-1).at = '这句旁白里没有的词'; }, validate, '不在这句旁白里');
 expectBeats('节名太长、章节不从第一句开始', (b) => { b.phrases.at(-1).chapter = '这是一个特别特别长的小节名字超过了十五个字'; }, validate, /节名要写，最多|从第一句开始/);
-expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; }, validate, '必须有 role=hook', { advice: true });
-expectBeats('字幕太长会折成三行', (b) => { b.phrases[0].caption = '这是一句特别特别长的字幕，长到在竖屏上要折成好几行，观众根本来不及看完，所以必须拆成短句再配画面'; }, validate, '请拆句');
-expectBeats('回描引用了还没画的元素', (b) => { b.phrases[0].actions.push({ id: '_rt', type: 'retrace', at: b.phrases[0].actions[0].at, target: b.phrases.at(-1).actions.at(-1).id }); }, validate, '不存在或还没画');
+expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; for (const q of b.phrases) if (['hook', 'recap'].includes(q.role)) q.role = 'setup'; }, validate, '必须有 role=hook', { advice: true }); // 基线本身是完整一集时，先把钩子和回收去掉
+expectBeats('字幕太长会折成三行（标点之间也拆不开）', (b) => { b.phrases[0].caption = '这是一句特别特别长而且中间一个标点也没有的字幕长到在哪个画幅上都要折成好几行观众根本来不及看完所以必须拆成短句再配画面'; }, validate, '请拆句');
+expectBeats('回描引用了还没画的元素', (b) => { b.phrases[0].actions.push({ id: '_rt', type: 'retrace', at: b.phrases[0].actions[0].at, target: b.phrases.filter((q) => q.actions?.length).at(-1).actions.at(-1).id }); }, validate, '不存在或还没画');
 expectBeats('两个图形的墨迹相切（关闭自动修复）', (b) => {
   const p = b.phrases.find((q) => q.actions.some((a) => a.type === 'circle')), c = p.actions.find((a) => a.type === 'circle');
   p.actions.push({ id: '_tan', type: 'circle', at: c.at, cx: c.cx + c.r * 2 + 3, cy: c.cy, r: c.r });
-}, compileNoFix('9x16'), '墨迹只隔', { advice: true });
+}, compileNoFix(TGT), '墨迹只隔', { advice: true });
 expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => {
   // 写一段字、圈出来，再让一根箭头的尖正好落在圈上：圈是装饰，箭头尖碰到它不算「接上」
-  const p = b.phrases.at(-1), at = p.actions[0].at;
+  // 最后几句可能不画（片尾全景），取最后一句有动作的；回看句不算（镜头只框回看的那几样，新写的字在画外，报的是别的问题，E02 v5 起回顾句也描东西）
+  const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), at = p.actions[0].at;
   p.actions.push({ id: '_t', type: 'text', at, text: 'AB', x: 640, y: 1150, size: 72 });
   p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
   p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
-}, compileNoFix('9x16'), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/, { advice: true });
+}, compileNoFix(TGT), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/, { advice: true });
 expectBeats('顿悟句推不近又没声明', (b) => {
   // 顿悟句的焦点圈住画面最上面的字和下面远处新写的一行：焦点装不下，推不近；分镜没写 noPush，编译要报
   const p = b.phrases.find((q) => q.role === 'aha'), top = acts(b).find((a) => a.type === 'text');
   p.actions.push({ id: '_far', type: 'text', at: p.actions[0].at, text: '1=1', x: top.x, y: top.y + 1000, size: 72 });
   p.focus = [top.id, '_far'];
-}, (p) => ['compiler/compile.mjs', p, '--target', '9x16'], /推不近.*noPush/, { advice: true });
+}, (p) => ['compiler/compile.mjs', p, '--target', TGT], /推不近.*noPush/, { advice: true });
 {
   // 分镜写了 noPush，这个画幅的顿悟句就不能推近（原来只是不报建议，镜头照样推近 1.5 倍）
   const b = structuredClone(beatsSrc); b.id = '_selftest';
-  const p = b.phrases.find((q) => q.role === 'aha'); p.noPush = ['9x16'];
+  const p = b.phrases.find((q) => q.role === 'aha'); p.noPush = [TGT];
   fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
-  const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', '9x16'], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
-  const tl = fs.existsSync('build/_selftest-9x16.timeline.json') ? JSON.parse(fs.readFileSync('build/_selftest-9x16.timeline.json', 'utf8')) : null;
+  const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+  const tlp = `build/_selftest-${TGT}.timeline.json`, tl = fs.existsSync(tlp) ? JSON.parse(fs.readFileSync(tlp, 'utf8')) : null;
   const ids = new Set(p.actions.map((a) => a.id)), pushed = tl?.camera.find((m) => m.focus && m.focus.some((id) => ids.has(id)) && (m.to.push ?? 1) > 1.001);
   record('分镜声明 noPush 的顿悟句真的不推近', !!tl && !pushed, out + (pushed ? `\n推近了：${JSON.stringify(pushed.to)}` : ''));
   fs.rmSync('data/_selftest.beats.json', { force: true });
   for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
 }
-expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix('9x16'), /离 .* 只有/, { advice: true });
+expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix(TGT), /离 .* 只有/, { advice: true });
 expectBeats('两段文字压在一起（关闭自动修复，仍判错误）', (b) => {
   const t = firstText(b);
   b.phrases[0].actions.push({ id: '_on', type: 'text', at: t.at, text: t.text, x: t.x, y: t.y, size: t.size });
-}, compileNoFix('9x16'), /「_on」|离 _on/);
+}, compileNoFix(TGT), /「_on」|离 _on/);
 expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) => {
   const t = firstText(b);
   b.phrases[0].actions.push({ id: '_row', type: 'text', at: t.at, text: '57', x: t.x + t.size * 1.6, y: t.y, size: 56 });
-}, compileNoFix('9x16'), /在同一行，横向只有/, { any: true });
+}, compileNoFix(TGT), /在同一行，横向只有/, { any: true });
 {
   // 私有创作配置把一项建议升成 hard：同样的缺陷就要判失败（用户可以把自己在意的取舍收紧）
   const prof = path.resolve('build/_selftest.profile.json');
@@ -439,10 +543,66 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
   record('私有创作配置把「字号阶梯」升成 hard 后判错误', r.status !== 0 && /\[错误\].*不在字号阶梯/.test(out), out);
   fs.rmSync('data/_selftest.beats.json', { force: true }); fs.rmSync(prof, { force: true });
 }
+// 写在画面上的字，旁白下一句才说到（用户看 E02 v5「开头有点音画不同步」：先写了「规则」，下一句「它不背规则」才说到）
+{
+  // 先在基线分镜里找注入点：一句 i 和它后面隔一句以上的 j，j 里有个连着的两字词，i 说完以前、以及 i 和 j 之间都没说过。
+  // 只从原句里真正连着的汉字里挑（去掉数字再拼会拼出旁白里没有的词，演示片「2加2等于4」拼成「加等」，注入落空）；挑不到就跳过
+  const cjkRuns = (t) => t.match(/[一-鿿]{2,}/g) ?? [];
+  const said = (a, z) => beatsSrc.phrases.slice(a, z).map((q) => q.text).join('|');
+  let at = null;
+  for (let i = 0; i < beatsSrc.phrases.length - 2 && !at; i++) {
+    const pi = beatsSrc.phrases[i];
+    if (!pi.actions?.length || pi.revisit?.length || pi.camera) continue;
+    for (let j = i + 2; j < beatsSrc.phrases.length && !at; j++) for (const run of cjkRuns(beatsSrc.phrases[j].text)) {
+      for (let k = 0; k + 2 <= run.length && !at; k++) { const w = run.slice(k, k + 2); if (!said(0, j).includes(w)) at = { i, w }; }
+    }
+  }
+  if (!at) skip('一个词先写在画面上，旁白隔一句才说到', '基线分镜太短，找不到隔一句才说到的词');
+  else expectBeats('一个词先写在画面上，旁白隔一句才说到', (b) => {
+    const a0 = b.phrases[at.i].actions[0];
+    b.phrases[at.i].actions.push({ id: '_ahead', type: 'text', at: a0.at, text: at.w, x: (a0.x ?? a0.cx ?? 400) + 40, y: (a0.y ?? a0.cy ?? 400) + 160, size: 72 });
+  }, (p) => ['compiler/compile.mjs', p, '--target', TGT], /才说到/, { any: true });
+}
+// 同一句里字比话早写（审片 E02 v6：在「美国科学家」上就写「罗森布拉特」，早 1.1 秒）：挑一句较长的话，在它第一个词上写它最后两个字
+{
+  // 先在基线分镜里找：一句话汉字够多（≥10 个），句首有个连着的两字词当提示词，句末那个连着的两字词这句之前没说过、在这句里只出现一次
+  const runs = (t) => t.match(/[一-鿿]{2,}/g) ?? [];
+  const before = (i) => beatsSrc.phrases.slice(0, i).map((q) => q.text).join('|');
+  const k = beatsSrc.phrases.findIndex((q, i) => {
+    const rs = runs(q.text), w = rs.at(-1)?.slice(-2);
+    return q.actions?.length && !q.revisit?.length && !q.camera && rs.join('').length >= 10 && rs.length && w && q.text.endsWith(w) && q.text.indexOf(w) === q.text.length - 2 && !before(i).includes(w);
+  });
+  if (k < 0) skip('同一句里，句末的词在句首就写出来', '基线分镜没有够长的句子');
+  else expectBeats('同一句里，句末的词在句首就写出来', (b) => {
+    const q = b.phrases[k], rs = runs(q.text), w = rs.at(-1).slice(-2), a0 = q.actions[0];
+    q.actions.push({ id: '_early', type: 'text', at: rs[0].slice(0, 2), text: w, x: (a0.x ?? a0.cx ?? 400) + 40, y: (a0.y ?? a0.cy ?? 400) + 160, size: 72 });
+  }, (p) => ['compiler/compile.mjs', p, '--target', TGT], /早写了/, { any: true });
+}
+// 多音字：结构助词「地」（用户听 E02 v5：「细细地讲」念成了 dì）
+expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，我们慢慢地看。');
+}, validate, /「慢慢地」.*念 de/, { any: true });
+// 自测题只考复述（用户：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来）
+if (!(beatsSrc.quiz ?? []).length) skip('自测题全是复述题，没有一道解释或迁移题', '基线分镜没有自测题（演示片段不要求）');
+else expectBeats('自测题全是复述题，没有一道解释或迁移题', (b) => {
+  b.brief = { ...(b.brief ?? {}), objectives: b.brief?.objectives?.length ? b.brief.objectives : ['能说出这一集讲的东西'] };
+  for (const q of b.quiz ?? []) { q.kind = 'recall'; q.objective = 0; }
+}, validate, /没有一道 explain 或 transfer 题/, { any: true });
+{
+  // 理解度打分：关键词全对，但测试者说有一处跟不上、视频也没说下一集讲——要判不过（悬念可以，一头雾水不行）
+  const bp = path.resolve('data', `${base.beatsId ?? base.id}.beats.json`), b = JSON.parse(fs.readFileSync(bp, 'utf8'));
+  if ((b.quiz ?? []).length) {
+    const f = path.resolve('build/_selftest.answers.json');
+    fs.writeFileSync(f, JSON.stringify({ answers: b.quiz.map((q, i) => ({ id: i + 1, a: q.keywords.map((g) => g[0]).join('，') })), unclear: [{ where: '第 3 节', what: '从上一个例子一下跳到这里，没交代，只能猜', later: false, state: '靠猜' }] }));
+    const r = spawnSync(PY_QA, ['qa/comprehension.py', 'score', bp, f], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+    record('理解度：题都答对，但有一处跟不上、又不是留给下一集的', r.status !== 0 && out.includes('[失败] 跟不上'), out);
+    fs.rmSync(f, { force: true });
+  } else skip('理解度：有一处跟不上', '基线分镜没有自测题');
+}
 expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
-  const p = b.phrases.at(-1), a0 = p.actions[0];
+  const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), a0 = p.actions[0];
   p.actions.push({ id: '_late', type: 'text', at: a0.at, text: '这一行字太长了来不及跟上旁白', x: 490, y: 1300, size: 72 });
-}, compileNoFix('9x16'), /说完后才起笔|和本句旁白重叠/, { advice: true });
+}, compileNoFix(TGT), /说完后才起笔|和本句旁白重叠/, { advice: true });
 
 // ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------
 {

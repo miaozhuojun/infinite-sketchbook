@@ -92,8 +92,42 @@ def x_card(frame):
     return card
 
 
+def phone_held(frame):
+    """竖握手机刷到横版（抖音信息流）：画面按屏宽缩小放在屏幕中间一条，右下是按钮列、底下是账号和文案。
+    屏幕按 390×844（iPhone 14 的逻辑像素）画，就是审片说的「390px 宽」：这时画面上的字有多大一眼就能看出来。"""
+    sw, sh = 390, 844
+    vid = frame.resize((sw, int(sw * H / W)))
+    scr = Image.new("RGB", (sw, sh), (12, 12, 14))
+    top = (sh - vid.height) // 2
+    scr.paste(vid, (0, top))
+    d = ImageDraw.Draw(scr)
+    # 遮挡区：和安全区检查同一份数据（视频坐标），换算到屏幕上
+    for pf, zones in (tl.get("platformUI") or {}).items():
+        for z in zones:
+            if not z.get("advice"):
+                continue
+            box = [z["l"] * sw / W, top + z["t"] * vid.height / H, z["r"] * sw / W, top + z["b"] * vid.height / H]
+            d.rectangle(box, fill=None, outline=(255, 255, 255))
+    for i in range(4):  # 按钮列示意（头像、点赞、评论、分享），在画面右边往下延伸
+        cy = int(sh * 0.40) + i * 62
+        d.ellipse([sw - 40, cy - 16, sw - 8, cy + 16], outline=(240, 240, 240), width=2)
+    d.text((14, sh - 120), BRAND if BRAND.startswith("@") else f"@{BRAND}", fill=(240, 240, 240), font=font(15))
+    d.text((14, sh - 96), (tl["subtitles"][0]["text"] if tl.get("subtitles") else "")[:18], fill=(220, 220, 220), font=font(13))
+    pad, r = 12, 40
+    body = Image.new("RGB", (sw + pad * 2, sh + pad * 2), (24, 24, 26))
+    body.paste(scr, (pad, pad))
+    mask = Image.new("L", body.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, *body.size], r, fill=255)
+    canvas = Image.new("RGB", body.size, (235, 235, 238))
+    canvas.paste(body, (0, 0), mask)
+    return canvas
+
+
 make = {"9x16": phone, "16x9": laptop, "1x1": x_card}[tl["target"]]
 shots = [make(grab(t)) for t in picks]
+# 16:9 也发抖音这类竖屏信息流时（时间线的平台里有 *-feed-16x9），加一格竖握手机看横版的样子（中段那一帧）
+if tl["target"] == "16x9" and any(pf.endswith("-feed-16x9") for pf in tl.get("platforms", [])):
+    shots.append(phone_held(grab(picks[len(picks) // 2])))
 gap = 30
 sheet = Image.new("RGB", (sum(s.width for s in shots) + gap * (len(shots) + 1), max(s.height for s in shots) + 90), (235, 235, 238))
 d = ImageDraw.Draw(sheet)

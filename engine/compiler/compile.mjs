@@ -179,6 +179,9 @@ function bboxOf(list) {
   return { x0, y0, x1, y1 };
 }
 const fitZ = (b, pad) => Math.min(VIEW.w / (b.x1 - b.x0 + 2 * pad), VIEW.h / (b.y1 - b.y0 + 2 * pad));
+// 整页全景缩得很小（0.3 倍）时，纸面上留的 70px 边在屏幕上只剩 20px，最上面的字贴着 YouTube 暂停时的标题栏（E02 v6 试编）：
+// 按屏幕留边算，至少 padPx 屏幕像素
+const fitZScreen = (b, padPx) => { let z = fitZ(b, 70); for (let k = 0; k < 4; k++) z = fitZ(b, Math.max(70, padPx / z)); return z; };
 // 全景取景：到这一句为止的全部内容
 // 每句的全景取景：框住这一节到这句为止画过的东西。分了章节时，换节就从新的一块纸开始框，镜头沿纸面移过去
 // （整集几分钟、好几节内容画在纸上不同的地方；一直框住全部，越往后字越小）
@@ -192,7 +195,7 @@ const computePhraseCam = () => {
       const all = [...geo.values()].flat();
       if (all.length) {
         const b = bboxOf(all);
-        out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(M.overviewZoomMin ?? 0.1, Math.min(ZMAX, fitZ(b, 70))), overview: true });
+        out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(M.overviewZoomMin ?? 0.1, Math.min(ZMAX, fitZScreen(b, 44))), overview: true });
       } else out.push(null);
       continue;
     }
@@ -204,6 +207,8 @@ const computePhraseCam = () => {
       continue;
     }
     for (const a of p.actions) if (geo.has(a.id)) acc.push(...geo.get(a.id));
+    // frame：这句的镜头还要把这些前面画过的元素整段框进来（同一张图分几节讲时，换节只框新画的东西，旁边的字会被切在画面边上；E02）
+    for (const id of p.frame ?? []) if (geo.has(id)) acc.push(...geo.get(id));
     if (!acc.length) { out.push(null); continue; }
     const b = bboxOf(acc);
     out.push({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, z: Math.max(ZMIN, Math.min(ZMAX, fitZ(b, 70))) });
@@ -257,6 +262,11 @@ const related = (a, b) => {
   if (a.type === 'text' && b.type === 'text') return false;
   // 同一个门槛量表的几部分（底线和门槛虚线、数值柱）本来就画在一起：base 相同就是同一个量表
   if (a.type === 'meter' && b.type === 'meter' && a.base === b.base) return true;
+  // 同一个旋钮先画本体、再画「拧过」（part=turn）：圆心和半径相同就是同一个旋钮
+  if (a.type === 'knob' && b.type === 'knob' && a.cx === b.cx && a.cy === b.cy && a.r === b.r) return true;
+  // on 可以一层层挂：「拧过」挂在旋钮上、旋钮挂在线上，「拧过」和线也算贴着画的
+  const onChain = (x) => { const c = []; for (let y = actionsById.get(x.on); y && c.length < 4; y = actionsById.get(y.on)) c.push(y.id); return c; };
+  if (onChain(a).includes(b.id) || onChain(b).includes(a.id)) return true;
   return a.on === b.id || b.on === a.id || (a.on && a.on === b.on);
 };
 const strokeSamples = new WeakMap();
@@ -361,7 +371,7 @@ const textInk = new Map([...geo].map(([id, l]) => [id, l.filter((s) => s.kind ==
 // 比检查更严：算"在画外"要整段越过画布边再留 6px；算"在画面里"要离画布边至少 24px（理解度测试说算式开头的 1 贴着左边缘）
 // 字幕衬底也算画面边：文字整段在字幕上方才算「在画面里」（审片：推近把 x₃ 推到字幕衬底下面，只露半截）
 const SUB_TOP = TGT.sub.top - style.subtitle.plate.padY;
-const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []);
+const UI_ZONES = TGT.platforms.flatMap((pf) => style.platformUI[pf] || []).filter((z) => !z.advice); // advice 的遮挡区只在检查里给建议，不左右镜头
 // 元素包围盒缓存（取景搜索要试上千个位置，每次重新采样路径太慢）；元素被重画后自动失效
 const boxCache = new Map();
 // 和安全区检查同一份几何：路径范围再向外扩半个笔宽（检查按实际墨迹算，取景只看路径中心线时会差几像素，推近停在字的边上）
@@ -448,7 +458,11 @@ function schedule(boost) {
     const toTL = (srcT) => T + (srcT - clipIn);
     audioClips.push({ phrase: p.text, at: r2(T), srcIn: clipIn, srcOut: clipOut });
     const audioStart = T, audioEnd = T + (clipOut - clipIn), phraseStartFree = penFree;
-    for (const a of p.actions) {
+    // 一支笔按提示词在旁白里出现的先后来写（同一个词上的按分镜里的顺序）：分镜里排反了，后说到的先写，先说到的要等它写完
+    // （E02 v5「就把权重，像拧旋钮一样」把旋钮排在「权重」标签前面，标签落后 3.3 秒）
+    const cueAt = (a) => fullText.indexOf(strip(a.at), p.i0);
+    const ordered = p.actions.map((a, k) => [a, k]).sort(([a, i], [b, j]) => (cueAt(a) - cueAt(b)) || i - j).map(([a]) => a);
+    for (const a of ordered) {
       const cueIdx = fullText.indexOf(strip(a.at), p.i0);
       if (cueIdx < 0 || cueIdx > p.i1) throw new Error(`${a.id} 的 cue「${a.at}」不在短语「${p.text}」里`);
       const cue = toTL(charTimes[cueIdx].s);
@@ -472,7 +486,7 @@ function schedule(boost) {
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
       // 回看之后：镜头停在前面某一节，铅笔还留在最后写字的地方（多半在这一镜画外）。按原处起飞，镜头和笔从不同的地方出发，
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
-      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === p.actions[0]) {
+      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered[0]) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
       }
@@ -491,7 +505,7 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
-      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === p.actions.find((x) => x.type !== 'off' && x.type !== 'glow');
+      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === ordered.find((x) => x.type !== 'off' && x.type !== 'glow');
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
       const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
       // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
@@ -623,10 +637,49 @@ for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)}
 const { strokes, penTrack, effects, audioClips, report } = sched;
 let { penFree, penPos } = sched;
 const problems = [...layoutProblems], advice = [...layoutAdvice], flag = flagTo(problems, advice);
+// 写出来的字，旁白要在同一句里说到：写在别的句子里、要过一秒多才说到的，就是音画不同步（用户看 E02 v5「开头有点音画不同步」：
+// 「上一集说好了……」时先写了「规则」、还划掉了，旁白下一句「它不背规则」才说到）。有意先写的（比如先抛个词再解释），动作上写 ahead: true
+{
+  const cjkOf = (t) => String(t ?? '').replace(/[^\u4e00-\u9fff]/g, '');
+  for (const a of sched.report.actions) {
+    const act = actionsById.get(a.id), p = phrases[a.phrase];
+    if (!act || act.type !== 'text' || act.ahead || !p) continue;
+    // 只查整段都是汉字的字（「天黑×4」这种带符号的标注是回指前面说过的东西）；写的时候（这句说完前）已经说过的也不算先写
+    const w = cjkOf(act.text);
+    if (w.length < 2 || w.length !== String(act.text).replace(/[\s，。、？！?!]/g, '').length) continue;
+    // 同一句里写得比说早：「1958年，美国科学家罗森布拉特」在「美国科学家」上就写「罗森布拉特」，比说到早 1.1 秒（审片 E02 v6）
+    const own = fullText.indexOf(w, p.i0);
+    if (own >= 0 && own <= p.i1 && !fullText.slice(0, p.i0).includes(w)) {
+      const saidOwn = sched.report.phrases[a.phrase].at + (charTimes[own].s - p.cutIn);
+      if (saidOwn - a.start > 0.8) flag('sync.early', `「${act.text}」(${a.id}) 比旁白说到它早写了 ${r2(saidOwn - a.start)}s：提示词改成「${w}」或它前面紧挨的词；有意先写就在这个动作上写 ahead: true`);
+      continue;
+    }
+    if (fullText.slice(0, p.i1 + 1).includes(w)) continue;
+    const idx = fullText.indexOf(w, p.i1 + 1), k = idx < 0 ? -1 : phrases.findIndex((q) => q.i0 <= idx && idx <= q.i1);
+    if (k < 0) continue;
+    const said = sched.report.phrases[k].at + (charTimes[idx].s - phrases[k].cutIn);
+    if (said - a.start > 1.0) flag('sync.ahead', `「${act.text}」(${a.id}) 在「${p.text.slice(0, 12)}」这句就写了，旁白到「${phrases[k].text.slice(0, 12)}」才说到（早 ${r2(said - a.start)}s）：挪到说到它的那句的词上；有意先写就在这个动作上写 ahead: true`);
+  }
+}
 for (const x of trailOf(sched)) flag('sync.trail', `「${actionsById.get(x.id).text ?? actionsById.get(x.id).label}」(${x.id}) ${x.late ? `在这句旁白说完后才起笔（${x.start}s，句末 ${x.audioEnd}s）` : `书写只有 ${Math.round(x.share * 100)}% 和本句旁白重叠（要求 ≥${M.textOverlapMin * 100}%）`}，需要把它提到更早的词上或拆句`);
 
 // ---------- 压力采样：渲染端用 perfect-freehand 生成变宽笔迹，笔尖位置也取自同一组点（见 library/kit.mjs） ----------
 for (const s of strokes) s.pts = samplePts(s);
+// 轨迹空档补齐：排程偶尔在两段之间留下空档（回看、只说不画的句子前后），笔在那段时间没有位置，渲染端会让它一帧闪出画外
+// （审片 E02 v9：全片 4 处）。按时间排好，空档里补一段停笔，停在上一段的终点
+{
+  penTrack.sort((a, b) => a.t0 - b.t0);
+  const endOf = (sg) => (sg.kind === 'move' ? sg.to : sg.kind === 'rest' ? sg.at : strokes[sg.stroke].pts.at(-1).slice(0, 2));
+  for (let i = penTrack.length - 1; i > 0; i--) {
+    const prevEnd = Math.max(...penTrack.slice(0, i).map((x) => x.t1)), gap = penTrack[i].t0 - prevEnd;
+    if (gap > 1e-3) {
+      // 空档里让笔滑到下一段的起点，不停在原处（停在原处常常压着刚画的东西，审片 E02 v11：3 处压了 1.5 秒）；起点就是原处时才原地停
+      const last = penTrack.slice(0, i).reduce((m, x) => (x.t1 > m.t1 ? x : m)), nx = penTrack[i];
+      const from = endOf(last), to = nx.kind === 'move' ? nx.from : nx.kind === 'rest' ? nx.at : strokes[nx.stroke].pts[0].slice(0, 2);
+      penTrack.splice(i, 0, Math.hypot(to[0] - from[0], to[1] - from[1]) > 2 ? { kind: 'move', t0: prevEnd, t1: nx.t0, from, to } : { kind: 'rest', t0: prevEnd, t1: nx.t0, at: from });
+    }
+  }
+}
 
 // ---------- 镜头关键帧：普通句在第一笔前移到全景；顿悟句在提示词前 lead 秒推近到位，停留 ≥hold 秒；结尾回到全景 ----------
 const camera = [], newChapter = new Set(); // newChapter：换节的那次镜头移动，不和前一次合并
@@ -651,8 +704,15 @@ phrases.forEach((p, pi) => {
     const cue = cues.length ? Math.min(...cues) : report.phrases[pi].at;
     // 上一句还在写的时候不推近：一推，正在写的那行和铅笔会被推到画面边缘、压上字幕（实测 16:9 最后一次推近）
     const prevDraw = pi > 0 ? report.phrases[pi - 1].drawEnd : 0;
-    const t0 = Math.max(Math.min(cue - AHA.lead, first.t0) - AHA.moveDur, holdUntil, prevDraw);
-    pushMove(t0, t0 + AHA.moveDur, tc, [...new Set([...p.actions.map((a) => a.id), ...(p.focus || [])])]); // 推近镜头记下焦点元素（安全区检查用）
+    const focusIds = [...new Set([...p.actions.map((a) => a.id), ...(p.focus || [])])]; // 推近镜头记下焦点元素（安全区检查用）
+    // 一节以顿悟句开头（或回看之后接顿悟句）：镜头要飞到另一块纸面，和铅笔的换节飞行同起同落，直接落在推近的取景上。
+    // 按推近只走 AHA.moveDur 秒时，E02 v4 进第 5 节 1.3 秒平移约 2500px，机器 0.4 秒就出画，之后对着空纸等笔飞到 1.6 秒（审片）
+    const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
+    if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) { pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc, focusIds); newChapter.add(camera[camera.length - 1]); }
+    else {
+      const t0 = Math.max(Math.min(cue - AHA.lead, first.t0) - AHA.moveDur, holdUntil, prevDraw);
+      pushMove(t0, t0 + AHA.moveDur, tc, focusIds);
+    }
   } else {
     // 普通句：镜头在第一笔前 cameraMove[0] 秒起移、第一笔后 cameraMove[1] 秒到位（边写边稳住）。
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位

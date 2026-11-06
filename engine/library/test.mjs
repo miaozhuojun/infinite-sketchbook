@@ -80,7 +80,10 @@ for (const [name, c] of lib) {
     }
   }
   // 一支笔：同一个组件画出来的每一笔线宽都一样（审片 v9：带权连线描三遍，看起来是粗、中、细三根）
-  { const ws = new Set(s1.map((s) => s.width)); if (ws.size > 1) F(name, `线宽不统一：${[...ws].join('、')}（一支笔，所有笔画同一线宽）`); }
+  // 图形笔画之间、文字笔画之间各自同一线宽；风格写了 ink.textWidthBySize 时小字下笔轻一点，文字可以比图形细（审片 E02 v5）
+  for (const group of [s1.filter((s) => s.kind === 'shape'), s1.filter((s) => s.kind !== 'shape')]) {
+    const ws = new Set(group.map((s) => s.width)); if (ws.size > 1) F(name, `线宽不统一：${[...ws].join('、')}（一支笔，所有笔画同一线宽）`);
+  }
   // 预览：4 列网格，每格 440×330，组件画在格子中上，下方写组件中文名（已经报错的组件不画，免得坏数据让整个测试崩掉、报不出错）
   if (fails.some((f) => f.startsWith(`${name}：`))) { cell++; continue; }
   const col = cell % 4, row = Math.floor(cell / 4), cx = 240 + col * 440, cy = 190 + row * 330;

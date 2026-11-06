@@ -54,7 +54,10 @@ export function wobble(pts, amp, rnd, step = 18) {
 export function makeKit(a, style, library) {
   const rnd = mulberry32(hashStr(a.id));
   const color = style.palette[a.color || 'ink'];
-  const width = a.width ?? style.ink.penWidth;
+  // 小字写轻一点（风格 ink.textWidthBySize：{ref, min, exp}，没写就不变）：同一支笔、同样的笔宽，小号字的笔画挤在一起显得又黑又重、笔画多的字会糊
+  // （审片 E02 v5：旋钮下的「权重」、「罗森布拉特」比「感知机」「50次」重）。只对没写 width 的文字，按字号比 ref 小多少减细，最多减到 min 倍
+  const tw = style.ink.textWidthBySize, light = a.type === 'text' && a.width == null && tw && a.size ? Math.max(tw.min ?? 0.8, Math.min(1, (a.size / (tw.ref ?? 96)) ** (tw.exp ?? 0.5))) : 1;
+  const width = a.width ?? style.ink.penWidth * light;
   const S = (pts, smooth = true) => ({ kind: 'shape', color, width, d: smooth ? smoothPath(pts) : polyPath(pts) });
   let n = 0;
   const text = (p) => {

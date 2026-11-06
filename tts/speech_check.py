@@ -157,6 +157,31 @@ if max_echo or max_spread:
         sp = lv[-1][0] - lv[0][0]
         check("每句基础音量一致", sp <= max_spread, f"{len(lv)} 句基础响度最响和最轻差 {sp:.1f}dB（上限 {max_spread}dB）：最轻「{lv[0][1][:8]}」{lv[0][0]:.1f}dB，最响「{lv[-1][1][:8]}」{lv[-1][0]:.1f}dB")
 
+# 0i. 连贯（建议，不拦）：句与句之间音高重新起头多大、语速稳不稳、成片里句间长停顿有几处，和上一集（voice.json 的 flowBaseline）比。
+#     用户 2026-11-06：E02 要比 E01 更连贯流畅自然，要有一套一集比一集好的机制（VOICE_PIPELINE.md「连贯」）
+if voice.get("flowBaseline"):
+    from voice import prosody
+    xs4, ssr4 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    spans4 = timing0.get("sentences") or []
+    pr4 = []
+    for s4 in spans4:
+        ws4 = [dict(w, start=w["start"] - s4["start"], end=w["end"] - s4["start"]) for w in timing0["words"] if s4["start"] - 1e-3 <= w["start"] and w["end"] <= s4["end"] + 1e-3]
+        if ws4:
+            pr4.append(prosody(xs4[int(s4["start"] * ssr4):int(s4["end"] * ssr4)], ssr4, ws4))
+    resets = [abs(12 * np.log2(b["start"] / a["endf0"])) for a, b in zip(pr4, pr4[1:]) if a["endf0"] and b["start"]]
+    rates = np.array([q["rate"] for q in pr4])
+    cl = tl["audioClips"]
+    gaps = [cl[i + 1]["at"] - (cl[i]["at"] + cl[i]["srcOut"] - cl[i]["srcIn"]) for i in range(len(cl) - 1)]
+    longp = sum(g > 1.5 for g in gaps)
+    bl = voice["flowBaseline"]
+    cmp = lambda now, before, fmt: f"{fmt.format(now)}（{bl['episode']} {fmt.format(before)}，{'好些' if now < before else '没变好'}）"
+    if resets and len(rates):
+        print("  [建议] 说话连贯：" + "；".join([
+            f"句首比上一句句尾高出的音高中位 {cmp(float(np.median(resets)), bl['resetMedianSt'], '{:.1f}')} 半音",
+            f"90% 分位 {cmp(float(np.percentile(resets, 90)), bl['resetP90St'], '{:.1f}')}",
+            f"语速波动 {cmp(float(rates.std() / rates.mean()), bl['rateCv'], '{:.2f}')}",
+            f"句间停顿超过 1.5 秒 {cmp(longp, bl['longPauses'], '{}')} 处（共 {len(gaps)} 处）"]))
+
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
 w = int(0.01 * ssr)
@@ -239,8 +264,9 @@ if tl.get("audio"):
     hyp = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", asr.generate(str(root / "public" / tl["audio"]), language="Chinese").text)
     from pypinyin import lazy_pinyin  # 按拼音比：同音字不算错（成/乘），读错的音仍算错
     DIG = str.maketrans("0123456789", "零一二三四五六七八九")
-    r = lazy_pinyin(script.lower().translate(DIG), errors=lambda x: list(x))
-    h = lazy_pinyin(hyp.lower().translate(DIG), errors=lambda x: list(x))
+    from voice import read_numbers
+    r = lazy_pinyin(read_numbers(script.lower()), errors=lambda x: list(x))
+    h = lazy_pinyin(read_numbers(hyp.lower()), errors=lambda x: list(x))
     d = list(range(len(h) + 1))
     for i in range(1, len(r) + 1):
         prev, d[0] = d[0], i

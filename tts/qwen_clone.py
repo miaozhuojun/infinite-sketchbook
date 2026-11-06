@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, active_level_db, spectral_match, ltas
+from voice import read_numbers, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -59,6 +59,9 @@ CANDS = max(1, int(voice.get("candidates", 1)))
 TONES = voice.get("tones", {})
 PACK = voice.get("pack", {})
 BASE_F0, BASE_RATE = PACK.get("baseF0", 0), PACK.get("baseRate", 0)
+# 连贯（VOICE_PIPELINE.md「连贯」）：候选打分时加上「和上一句接不接得上」，PREV 是上一句选定那条的句尾音高和语速
+FLOW = voice.get("flow") if CANDS > 1 else None
+PREV = {}
 if GEN_BAK:
     from dnsmos import score as dnsmos_score
     bak_of = lambda a, r: dnsmos_score(a, r)[0][1]
@@ -135,7 +138,7 @@ from pypinyin import lazy_pinyin
 
 def syl(s):
     """逐字转拼音（不带声调），拉丁字母原样：同音字（成/乘）算一致，读错的音（拧 ning / 零 ling）仍算错。"""
-    return lazy_pinyin(s.lower().translate(DIG), errors=lambda x: list(x))
+    return lazy_pinyin(read_numbers(s.lower()), errors=lambda x: list(x))
 
 
 def cer(r, h):
@@ -184,7 +187,7 @@ def align(audio, sr, text):
 
 # 对齐出来不到 50ms 的单字：要么真吞了，要么对齐器没对上；两种都换种子（成片旁白检查的「没有吞字」靠这份逐字时间）
 squashed = lambda rel: [w["text"] for w in rel if len(w["text"]) == 1 and w["end"] - w["start"] < 0.05]
-asr_text = lambda path: re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower().translate(DIG)
+asr_text = lambda path: read_numbers(re.sub(PUNCT, "", asr.generate(path, language="Chinese").text).lower())
 
 
 # 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
@@ -197,7 +200,7 @@ def synth_sentence(text, seed0, R, strict=False):
     凑够 CANDS 条（或试满 max_tries 次）后，按语气目标和音色接近度打分挑一条（VOICE_PIPELINE.md 第三步）。
     strict：重配已有的一句时（吞字、音色一致），只收全部关卡都过的候选，不退而求其次——
     E01 v17 音色一致重配收了一条沙沙声 0.116 的「这就叫机器学习。」，下次跑缓存检查又把它扔掉重配，每次多花三分钟"""
-    ref = re.sub(PUNCT, "", text).lower().translate(DIG)
+    ref = read_numbers(re.sub(PUNCT, "", text).lower())
     tmp = args.out + ".sent.wav"
     best = None  # 只差背景分的候选里最干净的一条
     best_flat = None  # 只差沙沙声的候选里最干净的一条
@@ -262,7 +265,7 @@ def synth_sentence(text, seed0, R, strict=False):
         # 打分：离语气目标多远 + 和声音包音色差多少（同一段参考音挑出来的，语气有变化、音色不变）
         pr = prosody(audio, sr, rel)
         e = embedding(tts, audio, sr)
-        score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB))
+        score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, BASE_RATE, target.get("rate"))
         cands.append((score, (audio, sr, seed, note, rel, bk), pr))
     if cands:
         cands.sort(key=lambda q: q[0])
@@ -329,7 +332,8 @@ reseed = {k.strip(): int(v) for k, v in (r.rsplit("=", 1) for r in args.reseed)}
 seed_of = lambda sent: args.seed + reseed.get(sent.strip(), 0) * args.max_tries  # 偏移按「整轮重试」跳，不和原来那轮的种子重叠
 # 候选 1 条时缓存键和原来一样（老缓存照用）；多条时还要看语气、语气目标和声音包的基准，任何一样变了都重挑
 cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_for(sent)["sig"], ref_for(sent)["text"], TTS_MODEL, args.temperature, seed_of(sent), args.max_tries]
-                                                 + ([CANDS, tone_of(sent), TONES.get(tone_of(sent), {}), BASE_F0, BASE_RATE, MAX_ECHO] if CANDS > 1 else []), ensure_ascii=False).encode()).hexdigest()
+                                                 + ([CANDS, tone_of(sent), TONES.get(tone_of(sent), {}), BASE_F0, BASE_RATE, MAX_ECHO] if CANDS > 1 else [])
+                                                 + ([FLOW] if FLOW else []), ensure_ascii=False).encode()).hexdigest()  # 加了连贯打分以后旧缓存不再算数
 stray = [t for t in mood_of if t not in {x.strip() for x in sents}]
 if stray:
     raise SystemExit("--mood 里这些不是旁白稿里的一整句：" + "；".join(stray))
@@ -387,6 +391,8 @@ for i, sent in enumerate(sents):
         json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
                    **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     takes.append([audio, sr, seed, note, rel])
+    if FLOW:  # 下一句挑候选时要和这一句接得上
+        PREV = prosody(audio, sr, rel)
     mood = mood_of.get(sent.strip())
     print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
 
@@ -486,7 +492,7 @@ print(f"  {len(sents)} 句里 {n_cached} 句用了缓存，{len(sents) - n_cache
 sf.write(args.out + ".wav", full, sr)
 
 # 整段再回转核对一遍
-c_all = cer(syl(clean.lower().translate(DIG)), syl(asr_text(args.out + ".wav")))
+c_all = cer(syl(read_numbers(clean.lower())), syl(asr_text(args.out + ".wav")))
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 # 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡

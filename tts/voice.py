@@ -214,7 +214,25 @@ def prosody(x, sr, words):
     chars = sum(len(w["text"]) for w in words); span = (words[-1]["end"] - words[0]["start"]) if words else 1.0
     tail = [(t, 12 * np.log2(f / med)) for t, f in tr if words and t >= words[-1]["end"] - 0.4] if med else []
     slope = float(np.polyfit([t for t, _ in tail], [s for _, s in tail], 1)[0]) if len(tail) > 20 else 0.0
-    return {"f0": med, "range": rng, "rate": chars / max(span, 0.3), "end": slope}
+    # 句首、句尾 0.3 秒浊音的中位基频：量句与句之间的音高「重新起头」有多大（E01 句首比上一句句尾平均高 6 个半音，听着像一句一句分开说）
+    start = float(np.median([f for t, f in tr if t < tr[0][0] + 0.3])) if tr else 0.0
+    endf0 = float(np.median([f for t, f in tr if t > tr[-1][0] - 0.3])) if tr else 0.0
+    return {"f0": med, "range": rng, "rate": chars / max(span, 0.3), "end": slope, "start": start, "endf0": endf0}
+
+
+def flow_cost(p, prev, flow, base_rate, tone_rate=None):
+    """和上一句接不接得上（越小越好）：句首比上一句句尾高出多少半音（超过 maxReset 才罚），
+    语速离这一集的基准多远（语气目标里没写语速的句子，超过 rateTol 才罚）。flow 是 voice.json 的 flow"""
+    if not flow:
+        return 0.0
+    c = 0.0
+    if prev and prev.get("endf0") and p.get("start"):
+        reset = abs(12 * np.log2(p["start"] / prev["endf0"]))
+        c += flow.get("resetWeight", 1.0) * (max(0.0, reset - flow.get("maxReset", 4.0)) / 2.0) ** 2
+    if base_rate and tone_rate is None and p.get("rate"):
+        dev = abs(p["rate"] / base_rate - 1)
+        c += flow.get("rateWeight", 1.0) * (max(0.0, dev - flow.get("rateTol", 0.12)) / 0.1) ** 2
+    return float(c)
 
 
 def tone_cost(p, target, base_f0, base_rate):
@@ -231,3 +249,29 @@ def tone_cost(p, target, base_f0, base_rate):
     if target.get("end") == "fall":
         c += (max(0.0, p["end"] + 1.0) / 2.0) ** 2
     return float(c)
+
+
+_D = "零一二三四五六七八九"
+
+
+def _cn(n):
+    """0–9999 的中文读法（五十、一百零三、一千二百）"""
+    if n < 10:
+        return _D[n]
+    if n < 20:
+        return "十" + (_D[n % 10] if n % 10 else "")
+    if n < 100:
+        return _D[n // 10] + "十" + (_D[n % 10] if n % 10 else "")
+    if n < 1000:
+        r = n % 100
+        return _D[n // 100] + "百" + ("" if r == 0 else ("零" + _D[r] if r < 10 else (_D[r // 10] + "十" + (_D[r % 10] if r % 10 else ""))))
+    r = n % 1000
+    return _D[n // 1000] + "千" + ("" if r == 0 else ("零" + _cn(r) if r < 100 else _cn(r)))
+
+
+def read_numbers(s):
+    """把阿拉伯数字换成念出来的汉字，回转比对用（ASR 会把念出的数写成汉字或阿拉伯数字）：
+    像年份的四位数（1000–2099）一个个念（一九五八），其余按数念（50 → 五十；原来一个个换成「五零」，「试了50次」怎么配都过不了）"""
+    import re as _re
+    return _re.sub(r"\d+", lambda m: "".join(_D[int(c)] for c in m[0]) if len(m[0]) == 4 and 1000 <= int(m[0]) <= 2099 or len(m[0]) > 4 or m[0].startswith("0") and len(m[0]) > 1
+                   else _cn(int(m[0])), s)

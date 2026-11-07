@@ -67,5 +67,18 @@
   "takeTol": 0.08,
   "maxDev": 0.1
  },
- "rateNote": "语速一致：target 是这个声音说话的语速（字/秒，只算嘴在动的时间，voice.py 的 art_rate）；生成时候选离它超过 takeTol 不要，拼好后、成片旁白检查时每句离它超过 maxDev 的自动重配。语气只改音区和起伏，不改语速"
+ "rateNote": "语速一致：target 是这个声音说话的语速（字/秒，只算嘴在动的时间，voice.py 的 art_rate）；生成时候选离它超过 takeTol 不要，拼好后、成片旁白检查时每句离它超过 maxDev 的自动重配。语气只改音区和起伏，不改语速",
+ "sameSpeaker": {
+  "minIdentity": 0.5,
+  "minSec": 1.5,
+  "maxMedianTimbre": 0.3,
+  "maxPairTimbre": 0.45,
+  "maxPairLu": 1.5,
+  "maxPairRate": 0.25,
+  "maxDriftSt": 1.5,
+  "maxDriftLu": 1.0,
+  "maxDriftRate": 0.06,
+  "maxDriftTimbre": 0.05
+ },
+ "sameSpeakerNote": "像同一个人（VOICE_PIPELINE.md「像同一个人」），音色用 CAM++（campplus.py）量。minIdentity 是关卡：整集各句 CAM++ 嵌入的平均对声音包不低于它（示例数取自作者一集：用户盲听选的配法 0.58，没选的 0.42）。其余只给建议：相邻两句的 CAM++ 距离中位 maxMedianTimbre、单对 maxPairTimbre、响度差 maxPairLu（LU）、语速差 maxPairRate；后三分之一对前三分之一的音区 maxDriftSt（半音）、响度 maxDriftLu、语速 maxDriftRate、音色 maxDriftTimbre。短于 minSec 秒的句子不比音色。阈值按你自己一集的数标定：上限放在那一集的数上面一点"
 }

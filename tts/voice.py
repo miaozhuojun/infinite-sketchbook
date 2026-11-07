@@ -337,3 +337,33 @@ def art_rate(words, gap_cap=0.12):
         return 0.0
     t = sum(w["end"] - w["start"] for w in ws) + sum(min(gap_cap, max(0.0, b["start"] - a["end"])) for a, b in zip(ws, ws[1:]))
     return sum(len(w["text"]) for w in ws) / max(t, 0.3)
+
+
+# ---------- 变速不变调（旁白检查自测的注入用它造「换了个嗓子」的声音；VOICE_PIPELINE.md「像同一个人」） ----------
+def stretch(x, rate, sr, frame=0.03, tol=0.012):
+    """WSOLA 变速不变调：rate > 1 变快（时长 ÷ rate），< 1 变慢。frame 秒汉宁窗、半帧重叠，每帧在 ±tol 秒里找和上一帧接得最顺的位置。
+    试过拿它把每句语速拉齐（±12% 以内 DNSMOS 和沙沙声都不变差），但盲听输给了原样，配音流程里不用；现在只给自测注入用"""
+    x = np.asarray(x, dtype=np.float64)
+    if abs(rate - 1) < 1e-3 or len(x) < int(0.2 * sr):
+        return x.astype(np.float32)
+    N = int(frame * sr) // 2 * 2; Hs = N // 2; Ha = Hs * rate; T = int(tol * sr)
+    win = np.hanning(N)
+    y = np.zeros(int(len(x) / rate) + 2 * N); wsum = np.zeros_like(y)
+    xp = np.pad(x, (T, N + T + int(Ha) + 2))
+    prev, k = 0, 0
+    while True:
+        out_pos, nominal = k * Hs, int(round(k * Ha))
+        if nominal + N > len(x) + N // 2 or out_pos + N > len(y):
+            break
+        best = 0
+        if k:
+            nat = xp[T + prev + Hs:T + prev + Hs + N]  # 上一帧顺着往后走半帧的那段（自然延续）
+            seg = xp[nominal:nominal + 2 * T + N]
+            if len(seg) < N + 2 * T or len(nat) < N:
+                break
+            c = np.correlate(seg, nat, mode="valid") / (np.sqrt(np.convolve(seg ** 2, np.ones(N), "valid")) + 1e-9)
+            best = int(np.argmax(c)) - T
+        start = nominal + best
+        y[out_pos:out_pos + N] += xp[T + start:T + start + N] * win; wsum[out_pos:out_pos + N] += win
+        prev = start; k += 1
+    return (y / np.maximum(wsum, 1e-3))[:int(len(x) / rate)].astype(np.float32)

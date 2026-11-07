@@ -387,6 +387,41 @@ sf.write(${JSON.stringify(dst)}, np.clip(x, -1, 1), sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 每句基础音量一致');
+// 像同一个人（VOICE_PIPELINE.md「像同一个人」；用户听 E02 v13「每句话的声音都存在微小差异（包括音色、快慢、音量）」）：
+// 「像这个孩子」是关卡；「相邻两句接得上」「整集不越说越偏」只给建议（这几项变好的配法盲听没赢过 v13）。改的是源配音，挑的是基线中间够长的句子
+const sameSpeakerSrc = (pyBody) => (tl) => {
+  const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
+  const tm = JSON.parse(fs.readFileSync(path.resolve('data', sbeatsSrc.narration.timing), 'utf8'));
+  const r = spawnSync(PY_MLX, ['-c', `
+import sys, json; sys.path.insert(0, '.')
+import soundfile as sf, numpy as np
+from scipy.signal import resample
+from voice import stretch
+x, sr = sf.read(${JSON.stringify(src)}, dtype='float32')
+m = (x if x.ndim == 1 else x[:, 0]).astype(np.float64)
+sp = json.loads(${JSON.stringify(JSON.stringify(tm.sentences))})
+long = [s for s in sp if s['end'] - s['start'] >= 2.5]
+def shift(a, b, f):
+    # 音高和共振峰一起乘 f（重采样），再变速回原长：像换了个嗓子大一点或小一点的孩子，快慢不变
+    b = min(b, len(m)); seg = m[a:b].copy(); y = stretch(resample(seg, int(len(seg) / f)), 1 / f, sr)
+    y = np.pad(y, (0, max(0, len(seg) - len(y))))[: len(seg)]
+    m[a:b] = y * (np.sqrt((seg ** 2).mean()) / (np.sqrt((y ** 2).mean()) + 1e-12))
+${pyBody}
+sf.write(${JSON.stringify(dst)}, (m if x.ndim == 1 else np.repeat(m[:, None], x.shape[1], 1)).astype(np.float32), sr)`], { encoding: 'utf8', cwd: '../tts' });
+  if (r.status !== 0) console.log((r.stderr || '').slice(-400));
+  tl.source = 'audio/_selftest.source.wav';
+  delete tl.audio;
+  return { cleanup: [dst] };
+};
+// 只给建议的几条：基线自己就报了这条建议时，注入看不出抓没抓到，跳过并写明
+const speechAdvice = (name, mutate, mustSay) => (noSpeech ? skip(name, noSpeech) : !b2 || b2.status !== 0 ? skip(name, '旁白基线没通过')
+  : ((b2.stdout || '') + (b2.stderr || '')).includes(mustSay) ? skip(name, `基线自己就报了「${mustSay}」`) : expectFail(name, mutate, speech, mustSay, sbase));
+speechCase('整集的嗓子都低了 12%（像换了个大一点的孩子；Qwen3 的「音色一致性」看不出来）', sameSpeakerSrc(`
+for s in sp: shift(int(s['start'] * sr), int(s['end'] * sr), 0.88)`), '[失败] 像这个孩子');
+speechAdvice('有一句的嗓子像换了个孩子（音高和共振峰一起抬 15%；原来的「每句都是同一个人」看不出来）', sameSpeakerSrc(`
+s = long[len(long) // 2]; shift(int(s['start'] * sr), int(s['end'] * sr), 1.15)`), '[建议] 相邻两句接得上');
+speechAdvice('越说越低（后三分之一每句都低 2 个半音，一次配长段时就是这样）', sameSpeakerSrc(`
+for s in sp[len(sp) - len(sp) // 3:]: shift(int(s['start'] * sr), int(s['end'] * sr), 2 ** (-2 / 12))`), '[建议] 整集不越说越偏');
 speechCase('旁白里一个字的开头被抹掉 80ms', (tl) => {
   const src = path.resolve('public', sbase.narration), dst = path.resolve('public/audio/_selftest.narration.wav');
   spawnSync(PY_QA, ['-c', `

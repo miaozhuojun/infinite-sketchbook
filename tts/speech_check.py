@@ -318,6 +318,71 @@ if RATE.get("target") and timing0.get("sentences"):
     check("语速一致", not off, (f"{len(off)} 句离 {RATE['target']} 字/秒超过 {RATE.get('maxDev', 0.10):.0%}：" + "；".join(f"「{sp['text'][:10]}」{r:.2f}" for _, r, sp in off[:6]) + "；")
           * bool(off) + f"全片每句 {min(rs):.2f}–{max(rs):.2f} 字/秒，波动 {np.std(rs) / np.mean(rs):.2f}")
 
+# 0m. 像同一个人在自然地说话（VOICE_PIPELINE.md「像同一个人」）。用户听 E02 v13：「每句话的声音都存在微小差异（包括音色、快慢、音量），
+#     给人一种不是同一个人在自然的说话的感觉」。音色用 CAM++（campplus.py）量：0f 用的 Qwen3 嵌入在同一个声音和别人的声音之间只差 0.987 对 0.932，
+#     又是生成时挑候选的那把尺子；CAM++ 是 0.78 对 0.16。
+#     - 像这个孩子（关卡）：整集各句 CAM++ 嵌入的平均和声音包比。两轮盲听用户都选了 E02 v13（0.60），没选「只用说话人嵌入」的新配法（0.42）。
+#     - 相邻两句接得上、整集不越说越偏（建议）：相邻两句的音色、响度、语速差，后三分之一对前三分之一的漂移。这几项变好的配法（新配法相邻音色差
+#       0.10、v13 0.20；v13 只加语速拉齐和响度统一）盲听都没赢过 v13，所以只报数、不拦，留着看下一集比上一集。
+SS = voice.get("sameSpeaker") or {}
+if SS and timing0.get("sentences"):
+    import campplus
+    from consistency import lufs as _lufs
+    if not campplus.MODEL.exists():
+        check("像这个孩子", False, f"缺 CAM++ 模型 {campplus.MODEL}（tts/fetch_models.sh 会下载）")
+    else:
+        xs6, ssr6 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+        sp6 = timing0["sentences"]
+        segs6 = [xs6[int(s["start"] * ssr6):int(s["end"] * ssr6)] for s in sp6]
+        ws6 = [[w for w in timing0["words"] if s["start"] - 0.01 <= w["start"] < s["end"] + 0.01] for s in sp6]
+        min_sec = SS.get("minSec", 1.5)  # 太短的句子（「它看三件事。」1.4 秒）说话人嵌入本来就抖，不拿来比音色
+        cam = [campplus.embedding(g, ssr6) if len(g) >= min_sec * ssr6 else None for g in segs6]
+        ok_c = [c for c in cam if c is not None]
+        nm = lambda v: v / np.linalg.norm(v)
+        if SS.get("minIdentity") and ok_c:
+            P6 = campplus.embedding(*sf.read(voice["ref"], dtype="float32"))
+            ident6 = float(nm(np.mean(ok_c, 0)) @ P6)
+            per6 = sorted((float(c @ P6), sp6[k]["text"]) for k, c in enumerate(cam) if c is not None)
+            check("像这个孩子", ident6 >= SS["minIdentity"], f"整集 CAM++ 平均对声音包 {ident6:.3f}（下限 {SS['minIdentity']}；E02 v13 0.58）；最不像的："
+                  + "、".join(f"「{t[:8]}」{v:.2f}" for v, t in per6[:3]))
+        L6 = [_lufs(g, ssr6) for g in segs6]
+        R6 = [art_rate(w) if w else 0.0 for w in ws6]
+        bad6, pairs = [], []
+        for k in range(len(sp6) - 1):
+            msg = []
+            if cam[k] is not None and cam[k + 1] is not None:
+                d = 1 - float(cam[k] @ cam[k + 1]); pairs.append(d)
+                if d > SS.get("maxPairTimbre", 9):
+                    msg.append(f"音色差 {d:.2f}（上限 {SS['maxPairTimbre']}）")
+            if abs(L6[k] - L6[k + 1]) > SS.get("maxPairLu", 99):
+                msg.append(f"响度差 {abs(L6[k] - L6[k + 1]):.1f} LU（上限 {SS['maxPairLu']}）")
+            if R6[k] and R6[k + 1] and abs(R6[k] / R6[k + 1] - 1) > SS.get("maxPairRate", 9):
+                msg.append(f"语速差 {abs(R6[k] / R6[k + 1] - 1):.0%}（上限 {SS['maxPairRate']:.0%}）")
+            if msg:
+                bad6.append((k, msg))
+        med6 = float(np.median(pairs)) if pairs else 0.0
+        ok6 = not bad6 and med6 <= SS.get("maxMedianTimbre", 9)
+        print(f"[{'通过' if ok6 else '建议'}] 相邻两句接得上：" + (f"{len(bad6)} 处接不上：" + "；".join(f"「{sp6[k]['text'][:8]}」→「{sp6[k + 1]['text'][:8]}」" + "、".join(m) for k, m in bad6[:5]) + "；") * bool(bad6)
+              + f"相邻两句 CAM++ 音色距离中位 {med6:.3f}（上限 {SS.get('maxMedianTimbre', '—')}；E02 v13 0.24）、90% 分位 {np.percentile(pairs, 90) if pairs else 0:.3f}，"
+              f"响度相邻差最大 {max(abs(a - b) for a, b in zip(L6, L6[1:])):.1f} LU，语速相邻差最大 {max((abs(a / b - 1) for a, b in zip(R6, R6[1:]) if a and b), default=0):.0%}")
+        # 整集不越说越偏：后三分之一和前三分之一比（一次配长段时越说越低、越说越快、越说越响就是它）
+        n6 = len(sp6); t6 = max(1, n6 // 3)
+        f06 = [pitch_median_hz(g, ssr6) or 0 for g in segs6]
+        reg = lambda ks: float(np.mean([12 * np.log2(f06[k]) for k in ks if f06[k]])) if any(f06[k] for k in ks) else 0.0
+        first, last = range(t6), range(n6 - t6, n6)
+        dr_st = reg(last) - reg(first)
+        dr_lu = float(np.mean([L6[k] for k in last]) - np.mean([L6[k] for k in first]))
+        rr = lambda ks: float(np.mean([R6[k] for k in ks if R6[k]] or [1.0]))
+        dr_rate = rr(last) / rr(first) - 1
+        cf = [cam[k] for k in first if cam[k] is not None]; cl = [cam[k] for k in last if cam[k] is not None]
+        dr_cam = 1 - float(nm(np.mean(cf, 0)) @ nm(np.mean(cl, 0))) if cf and cl else 0.0
+        drift_bad = [m for m, bad in [(f"音区 {dr_st:+.1f} 半音（上限 ±{SS.get('maxDriftSt')}）", abs(dr_st) > SS.get("maxDriftSt", 99)),
+                                      (f"响度 {dr_lu:+.1f} LU（上限 ±{SS.get('maxDriftLu')}）", abs(dr_lu) > SS.get("maxDriftLu", 99)),
+                                      (f"语速 {dr_rate:+.0%}（上限 ±{SS.get('maxDriftRate', 9):.0%}）", abs(dr_rate) > SS.get("maxDriftRate", 9)),
+                                      (f"音色 {dr_cam:.3f}（上限 {SS.get('maxDriftTimbre')}）", dr_cam > SS.get("maxDriftTimbre", 9))] if bad]
+        print(f"[{'通过' if not drift_bad else '建议'}] 整集不越说越偏：后三分之一比前三分之一：" + ("；".join(drift_bad) if drift_bad else
+              f"音区 {dr_st:+.1f} 半音、响度 {dr_lu:+.1f} LU、语速 {dr_rate:+.0%}、音色（CAM++ 平均）{dr_cam:.3f}"))
+
 rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
 rv = sorted({timing0["sentences"][k]["text"] for k, a, b in sentence_ranges() for t in revoice_at if a - 0.05 <= t <= b + 0.05}) if timing0.get("sentences") else []
 if rv:

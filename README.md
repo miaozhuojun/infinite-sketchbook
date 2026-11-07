@@ -53,7 +53,7 @@ node pipeline.mjs data/demo.beats.json
 
 ## 用自己的声音配音
 
-1. 在 `tts/` 下安装依赖：`python -m pip install -r requirements.txt`。然后用 `fetch_models.sh` 从 ModelScope 下载三个模型，约 6.3GB。
+1. 在 `tts/` 下安装依赖：`python -m pip install -r requirements.txt`。然后用 `fetch_models.sh` 下载三个模型（ModelScope，约 6.3GB）和量音色用的 CAM++（GitHub，28MB）。
 2. 把参考录音放进 `tts/ref/`，复制 `voice.example.json` 为 `voice.json` 并填写。这些都不会进仓库。
 3. 在分镜的 `narration` 里写 `script`，流水线会自动生成配音、对齐，并跑各项检查。
 

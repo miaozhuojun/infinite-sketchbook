@@ -18,6 +18,8 @@ Copyright 2026 miaozhuojun
 
 配音、对齐与检查（本地运行）
 - Qwen3-TTS-12Hz-1.7B-Base、Qwen3-ForcedAligner-0.6B、Qwen3-ASR-0.6B：Apache-2.0，由 tts/fetch_models.sh 从 ModelScope 官方仓库下载
+- CAM++ 说话人确认模型 speech_campplus_sv_zh-cn_16k-common（3D-Speaker）：Apache-2.0；用的是 sherpa-onnx（Apache-2.0）转的 ONNX，由 tts/fetch_models.sh 从 k2-fsa/sherpa-onnx 的发布页下载
+- onnxruntime 1.31.1：MIT
 - mlx-audio 0.6.0、mlx 0.32.4：MIT
 - pypinyin 0.55.0：MIT
 - pyloudnorm 0.2.0：MIT

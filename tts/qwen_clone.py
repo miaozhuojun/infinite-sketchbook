@@ -547,10 +547,46 @@ def finish(audio, sr_):
     return np.clip(y, -0.99, 0.99).astype(np.float32)
 
 
+# 停顿上限（音色配置的 maxPause、maxJoinPause，秒；不写就不动）：字与字之间超过 maxPause 的静音从正中剪短到 maxPause，
+# 一段一起配、首尾相接的两句之间的静音最多留 maxJoinPause。只剪静音，逐字时间跟着前移；拼接时做，缓存里的声音不动。
+# 用户听 E02 父子对话样片：爸爸一句话里断句的间隔有点长（Breeze 在逗号处停 1 秒左右，「哦。」到「比我还重一点。」停 1.9 秒；孩子句内停顿中位 0.24 秒）
+MAX_PAUSE, JOIN_PAUSE = voice.get("maxPause"), voice.get("maxJoinPause")
+def cap_pauses(audio, sr_, rel, lead=None, tail=None):
+    h = int(0.01 * sr_)
+    lv = np.sqrt(np.convolve(audio.astype(np.float64) ** 2, np.ones(h) / h, "same")) if len(audio) > h else np.abs(audio)
+    loud = lv.max() if len(lv) else 0.0
+    quiet = lambda a, b: b <= a or lv[a:b].max() <= loud * 10 ** (-30 / 20)  # 要剪的那段比这句最响处低 30dB 以上才剪
+    cuts = []
+    if MAX_PAUSE:
+        for x, y in zip(rel, rel[1:]):
+            g = y["start"] - x["end"]
+            if g > MAX_PAUSE:
+                mid, half = (x["end"] + y["start"]) / 2, (g - MAX_PAUSE) / 2
+                a, b = int((mid - half) * sr_), int((mid + half) * sr_)
+                if quiet(a, b):
+                    cuts.append((a, b))
+    if lead is not None and rel and rel[0]["start"] > lead and quiet(0, int((rel[0]["start"] - lead) * sr_)):
+        cuts.append((0, int((rel[0]["start"] - lead) * sr_)))
+    if tail is not None and rel and len(audio) / sr_ - rel[-1]["end"] > tail and quiet(int((rel[-1]["end"] + tail) * sr_), len(audio)):
+        cuts.append((int((rel[-1]["end"] + tail) * sr_), len(audio)))
+    if not cuts:
+        return audio, rel
+    cuts.sort()
+    keep, pos = [], 0
+    for a, b in cuts:
+        keep.append(audio[pos:a]); pos = b
+    keep.append(audio[pos:])
+    shift = lambda t: t - sum(b - a for a, b in cuts if b <= int(t * sr_) + 1) / sr_
+    return np.concatenate(keep), [dict(w, start=round(shift(w["start"]), 3), end=round(shift(w["end"]), 3)) for w in rel]
+
+
 def assemble():
     """各句之间留 gap 秒拼成整段；返回整段、逐字时间、每句起止"""
     pieces, words, spans, t = [], [], [], 0.0
     for i, (sent, (audio, sr_, _, _, rel)) in enumerate(zip(sents, takes)):
+        if MAX_PAUSE or JOIN_PAUSE:
+            audio, rel = cap_pauses(audio, sr_, rel, lead=JOIN_PAUSE / 2 if JOIN_PAUSE and (i - 1) in joined else None,
+                                    tail=JOIN_PAUSE / 2 if JOIN_PAUSE and i in joined else None)
         spans.append({"text": sent, "start": round(t, 3), "end": round(t + len(audio) / sr_, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和逐句自检用同一段声音
         words.extend({"text": w["text"], "start": round(w["start"] + t, 3), "end": round(w["end"] + t, 3), "sent": i} for w in rel)
         gap = np.zeros(int(args.gap * sr_) if i < len(sents) - 1 and i not in joined else 0, dtype=np.float32)  # 同一段一起配的句子之间，停顿已经在声音里

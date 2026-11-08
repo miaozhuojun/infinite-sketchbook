@@ -14,11 +14,11 @@ export type PenSeg =
   | { kind: 'down'; t0: number; t1: number; stroke: number };
 export type Effect = { id: string; type: 'glow'; cx: number; cy: number; r: number; color: string; t0: number; t1: number; t2?: number; t3?: number; rays?: number[] };
 export type Cam = { x: number; y: number; z: number };
-export type CamMove = { t0: number; t1: number; from: Cam; to: Cam; focus?: string[]; curve?: 'glide' }; // focus：推近镜头的焦点元素；curve：glide 是片尾长镜头的匀速曲线
+export type CamMove = { t0: number; t1: number; from: Cam; to: Cam; focus?: string[]; curve?: 'glide'; accel?: number }; // focus：推近镜头的焦点元素；curve：glide 是片尾长镜头的匀速曲线；accel：加速段占几成（style.motion.easeAccel）
 export type Timeline = {
   id: string; canvas: { w: number; h: number; fps: number }; fps: number; durationInFrames: number; duration: number;
   narration: string; audio?: string; strokes: Stroke[]; penTrack: PenSeg[]; effects: Effect[];
-  subtitles: { text: string; lines: string[]; t0: number; t1: number; join?: boolean; joinNext?: boolean }[]; // join/joinNext：同一句拆出的几张，换卡时不淡出淡入
+  subtitles: { text: string; lines: string[]; t0: number; t1: number; join?: boolean; joinNext?: boolean; speaker?: string; label?: string; color?: string }[]; // join/joinNext：同一句拆出的几张，换卡时不淡出淡入；speaker/label/color：对话里不是主讲说的句子（compiler/speakers.mjs）
   style: Style; platforms: string[];
   camera: CamMove[]; view: { cx: number; cy: number };
   pencil?: { sway: number[]; lift: number[]; edge?: number[] }; // 编译器预算并平滑好的铅笔姿态曲线（逐帧）；edge = 避开边缘/字幕的转角
@@ -30,15 +30,21 @@ export type InkMode = 'mono' | 'kai';
 // 时间线里带的风格规范子集（来自 style/style.json），渲染只读它
 export type Style = {
   name: string; version: string; palette: Record<string, string>;
-  paper: { gridSize: number; gridOpacity: number; fiberOpacity: number; lampOpacity: number; vignetteOpacity: number };
+  paper: { gridSize: number; gridOpacity: number; fiberOpacity: number; lampOpacity: number; vignetteOpacity: number;
+    grain?: { opacity: number; size: number; tiles: number; blend?: string }; // 会动的颗粒（屏幕层，按帧号换，逐帧确定）
+    relief?: { opacity: number; scale: number; tile: number; azimuth: number; elevation: number; mottle: number; seed: number }; // 纸面起伏（世界层，受光）
+    lampDrift?: { period: number; amount: number; shift: number } }; // 光极慢地变：强度 ±amount、中心 ±shift（画面比例），一个周期 period 秒
+  grade?: { contrast: number; saturate: number }; // 全局调色
   ink: { opacity: number; layerBlend?: string; layerBy?: 'color' | 'element'; freehand: { sizeScale: number; thinning: number; smoothing: number }; grain: { displace: number; frequency: number; alphaGain: number; alphaBias: number } };
-  subtitle: { font: string; fontFamily: string; weight: number; lineHeight: number; maxLines: number; plate: { opacity: number; padX: number; padY: number; radius: number } };
+  subtitle: { font: string; fontFamily: string; weight: number; lineHeight: number; maxLines: number; plate: { opacity: number; padX: number; padY: number; radius: number; shadow?: boolean }; glow?: number[] }; // glow：纸色柔光（text-shadow 半径，像素）
   pencil: { base: number; swing: number; length: number; halfWidth: number; scale: number; followZoom?: boolean };
 };
 
 export const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 export const progress = (t: number, t0: number, t1: number) => clamp01((t - t0) / Math.max(1e-6, t1 - t0));
-const ease = (x: number) => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
+// 缓入缓出：速度从 0 匀加速到峰值、再匀减速到 0，加速段占 a（0.5 是对称的二次缓动，原来一直用它）。
+// a 小于 0.5：起步快、刹车长，像人推镜头，不像机器插值（风格 0.7.0；峰值速度和对称时一样，都是平均速度的 2 倍）
+export const ease = (x: number, a = 0.5) => (x < a ? (x * x) / a : 1 - ((1 - x) * (1 - x)) / (1 - a));
 
 const propsCache = new Map<string, InstanceType<typeof svgPathProperties>>();
 const pathProps = (d: string) => {
@@ -113,7 +119,7 @@ export function glideAt(from: Cam, to: Cam, e: number): Cam {
 export function camLerp(m: CamMove, t: number): Cam {
   const u = progress(t, m.t0, m.t1);
   if (m.curve === 'glide') return glideAt(m.from, m.to, glideEase(u, m.t1 - m.t0));
-  const e = ease(u);
+  const e = ease(u, m.accel);
   return { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e };
 }
 export function cameraAt(moves: CamMove[], t: number): Cam {

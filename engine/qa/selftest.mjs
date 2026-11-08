@@ -523,6 +523,14 @@ expectBeats('旁白里数字后面跟冒号（会读成「比」）', (b) => { b
 expectBeats('旁白里的数字没有出处', (b) => { b.facts = []; }, validate, '没有出处');
 expectBeats('按句选情绪写的不是旁白稿里的一整句', (b) => { b.narration.mood = { '旁白稿里没有这句。': '好奇' }; }, validate, 'narration.mood');
 expectBeats('文字里有手写字体没有的字（全角逗号）', (b) => { const t = b.phrases.flatMap((p) => p.actions).find((x) => x.type === 'text'); t.text += '，'; }, validate, '画不出来');
+// 对话（compiler/speakers.mjs）：说话的人要登记；配音按句生成，换人只能在句末
+expectBeats('对话：句子的说话人没在 narration.voices 里登记', (b) => { b.phrases[1].speaker = 'dad'; }, validate, '没在 narration.voices 里登记');
+expectBeats('对话：一句话里换了说话的人', (b) => {
+  b.narration.voices = { dad: { voice: 'voice.example.json', label: '爸爸' } };
+  b.narration.script = b.narration.script.replace(/。/, '，'); // 头两句并成一句，第二句却是爸爸说的
+  b.phrases[1].speaker = 'dad';
+}, validate, '一句话里换了说话的人');
+expectBeats('对话：字幕颜色不是调色板里的名字', (b) => { b.narration.voices = { dad: { voice: 'voice.example.json', caption: '#2b5f80' } }; }, validate, '不是规范调色板里的颜色名');
 expectBeats('回看的句子指向还没画过的元素', (b) => { b.phrases[0].revisit = [b.phrases.at(-1).actions?.[0]?.id ?? 'nope']; b.phrases[0].actions = []; }, validate, 'revisit');
 expectBeats('提示词不在这句旁白里', (b) => { acts(b).at(-1).at = '这句旁白里没有的词'; }, validate, '不在这句旁白里');
 expectBeats('节名太长、章节不从第一句开始', (b) => { b.phrases.at(-1).chapter = '这是一个特别特别长的小节名字超过了十五个字'; }, validate, /节名要写，最多|从第一句开始/);

@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
 import { GL } from './qa/gl.mjs';
 import { loadStyle } from './compiler/validate.mjs';
+import { isDialogue, sentenceSpeakers, turnStarts, voicesOf } from './compiler/speakers.mjs';
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
@@ -78,13 +79,39 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
   // 自动换种子（见文末）：成片旁白检查点名的句子，偏移记在配音目录的 <id>.autoreseed.json，比分镜里手写的 reseed 优先，以后每次都用
   const autoReseed = fs.existsSync(base + '.autoreseed.json') ? JSON.parse(fs.readFileSync(base + '.autoreseed.json', 'utf8')) : {};
-  const voiceArgs = ['qwen_clone.py', beats.narration.script, base, ...Object.entries({ ...(beats.narration.reseed ?? {}), ...autoReseed }).flatMap(([t, k]) => ['--reseed', `${t}=${k}`]), ...Object.entries(beats.narration.mood ?? {}).flatMap(([t, m]) => ['--mood', `${t}=${m}`]), ...Object.entries(beats.narration.tone ?? {}).flatMap(([t, m]) => ['--tone', `${t}=${m}`])];
+  // 对话（compiler/speakers.mjs）：每个说话的人只拿自己说的句子、用自己的音色配置去配（narration.voices），再按旁白稿的顺序拼回一条（tts/dialogue.py）。
+  // 换种子、语气、情绪也只交给说这句的人；一段话的开头（上一句是别人说的）不和上一句凑成一段配。
+  // 原来整条旁白都交给主讲的声音配：E02 父子对话样稿里，旁白检查点名爸爸的句子后，流水线用孩子的声音把它们重配了两轮
+  const dialogue = isDialogue(beats), sents = dialogue ? sentenceSpeakers(beats).sentences : [];
+  const speakers = dialogue ? ['', ...Object.keys(voicesOf(beats))].filter((sp) => sents.some((s) => s.speaker === sp)) : [''];
+  const partOf = (sp) => (dialogue ? `${base}.${sp || 'main'}` : base);
+  const whoSays = (sp) => (sp ? voicesOf(beats)[sp].label ?? sp : '主讲');
+  const argsOf = (sp) => {
+    const keep = (t) => !dialogue || sents.some((s) => s.speaker === sp && s.text === t);
+    const pick = (o, flag) => Object.entries(o ?? {}).filter(([t]) => keep(t)).flatMap(([t, k]) => [flag, `${t}=${k}`]);
+    return ['qwen_clone.py', dialogue ? sents.filter((s) => s.speaker === sp).map((s) => s.text).join('') : beats.narration.script, partOf(sp),
+      ...(sp ? ['--voice', voicesOf(beats)[sp].voice] : []),
+      ...pick({ ...(beats.narration.reseed ?? {}), ...autoReseed }, '--reseed'), ...pick(beats.narration.mood, '--mood'), ...pick(beats.narration.tone, '--tone'),
+      ...(dialogue ? turnStarts(sents).filter(keep).flatMap((t) => ['--turn', t]) : [])];
+  };
+  const voiceArgs = dialogue ? speakers.map(argsOf) : argsOf('');
   // 配音没变就不重跑（用户 2026-11-06：E02 做了快十个小时）：旁白稿、语气、换种子、配音配置和配音程序都和上次配成功时一样，
   // 音频和逐字时间也都在，就直接用上次的。全走缓存时配音这一步也要 3–10 分钟（逐句复查缓存、整段回转识别、拼好后的复查），改版面的那几轮白等
-  const voiceKey = createHash('sha1').update(JSON.stringify([voiceArgs, ...['voice.json', 'qwen_clone.py', 'voice.py'].map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
+  const keyFiles = ['voice.json', 'qwen_clone.py', 'voice.py', ...(dialogue ? ['dialogue.py', ...speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice)] : [])];
+  const voiceKey = createHash('sha1').update(JSON.stringify([voiceArgs, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
   const keyFile = base + '.voicekey', sameVoice = fs.existsSync(keyFile) && fs.readFileSync(keyFile, 'utf8') === voiceKey && fs.existsSync(base + '.wav') && fs.existsSync(base + '.timing.json');
-  if (PY_MLX && sameVoice) { skip('配音生成', '旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的配音'); fs.copyFileSync(base + '.wav', audioPath); }
-  else if (PY_MLX) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, voiceArgs, { cwd: '../tts' })) { fs.copyFileSync(base + '.wav', audioPath); fs.writeFileSync(keyFile, voiceKey); } }
+  const missing = dialogue ? speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice).filter((f) => !fs.existsSync(path.resolve('../tts', f))) : [];
+  if (PY_MLX && missing.length) { voiceOk = false; stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '', problems: [`没有音色配置 ${missing.join('、')}（narration.voices 里写的，相对 tts/）`] }); }
+  else if (PY_MLX && sameVoice) { skip('配音生成', '旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的配音'); fs.copyFileSync(base + '.wav', audioPath); }
+  else if (PY_MLX && !dialogue) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, voiceArgs, { cwd: '../tts' })) { fs.copyFileSync(base + '.wav', audioPath); fs.writeFileSync(keyFile, voiceKey); } }
+  else if (PY_MLX) {
+    voiceOk = speakers.every((sp) => run(`配音生成（${whoSays(sp)}，按句缓存）`, PY_MLX, argsOf(sp), { cwd: '../tts' }));
+    if (voiceOk) {
+      fs.writeFileSync(base + '.order.json', JSON.stringify(sents, null, 1));
+      voiceOk = run('对话拼接（按旁白稿顺序）', PY_MLX, ['dialogue.py', base, base + '.order.json', ...speakers.flatMap((sp) => ['--part', `${sp}=${partOf(sp)}`])], { cwd: '../tts' });
+    }
+    if (voiceOk) { fs.copyFileSync(base + '.wav', audioPath); fs.writeFileSync(keyFile, voiceKey); }
+  }
   else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
   else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
     problems: [`没有音频 ${audioPath}，也没有本地配音环境（PY_MLX）：在 tts/ 装好配音环境，或把音频放到这个位置`] });

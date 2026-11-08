@@ -4,6 +4,7 @@
 // 用法：node compiler/validate.mjs data/<id>.beats.json
 import { polyphoneIssues } from './polyphones.mjs';
 import { scriptIssues } from './script_checks.mjs';
+import { isDialogue, sentenceSpeakers, voicesOf } from './speakers.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -121,6 +122,23 @@ export function validateBeats(beats, style, reg) {
   for (const m of (beats.narration?.script ?? '').matchAll(/\d[：:]/g)) E('narration.script', `「${beats.narration.script.slice(Math.max(0, m.index - 4), m.index + 4)}」数字后面的冒号会被配音读成「比」，改成逗号`);
   for (const t of beats.targets ?? []) if (!style.targets[t]) E('targets', `未知画幅「${t}」，可用：${Object.keys(style.targets).join('、')}`);
   if (!Array.isArray(beats.phrases) || !beats.phrases.length) { E('phrases', '不能为空'); return { errors, warnings }; }
+
+  // 对话（compiler/speakers.mjs）：说话的人要登记，换人要在句末
+  const voices = voicesOf(beats);
+  if (!isObj(voices)) E('narration.voices', '要写成 { 说话人: { voice, label, caption } }');
+  else for (const [sp, v] of Object.entries(voices)) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(sp)) E(`narration.voices.${sp}`, '说话人的名字用小写英文字母开头（如 dad），中文名写在 label');
+    if (typeof v?.voice !== 'string' || !v.voice.endsWith('.json')) E(`narration.voices.${sp}.voice`, '要写这个人的音色配置文件（相对 tts/ 的路径，如 ref/dad/voice.dad.json）');
+    if (v?.label !== undefined && (typeof v.label !== 'string' || !v.label.trim())) E(`narration.voices.${sp}.label`, '要写这个人的称呼（如「爸爸」），理解度材料和审稿材料里用');
+    if (v?.caption !== undefined && !style.palette?.[v.caption]) E(`narration.voices.${sp}.caption`, `「${v.caption}」不是规范调色板里的颜色名，可用：${Object.keys(style.palette ?? {}).join('、')}`);
+  }
+  beats.phrases.forEach((p, i) => {
+    if (p.speaker !== undefined && !(isObj(voices) && voices[p.speaker])) E(`phrases[${i}]「${(p.text || '').slice(0, 8)}」.speaker`, `「${p.speaker}」没在 narration.voices 里登记（登记音色配置、称呼和字幕颜色）`);
+  });
+  if (isDialogue(beats)) {
+    if (!beats.narration?.script) E('narration.script', '对话要写旁白稿：配音按人分开配，要从旁白稿里分出每句是谁说的');
+    else for (const msg of sentenceSpeakers(beats).problems) E('narration.script', msg);
+  }
 
   // 章节：要么不分，要么从第一句开始分，节数在各平台都能用的范围里
   const chapterAt = beats.phrases.map((p, i) => (p.chapter ? i : -1)).filter((i) => i >= 0);
@@ -293,5 +311,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 }
 
 // 时间线里带给渲染器和混音的风格子集（编译器、组件预览共用）
-export const styleSubset = (style) => ({ name: style.name, version: style.version, gates: style.gates, palette: style.palette, paper: style.paper, ink: style.ink, subtitle: style.subtitle, pencil: style.pencil, audio: style.audio, motion: style.motion });
+export const styleSubset = (style) => ({ name: style.name, version: style.version, gates: style.gates, palette: style.palette, paper: style.paper, ink: style.ink, subtitle: style.subtitle, pencil: style.pencil, audio: style.audio, motion: style.motion, ...(style.grade ? { grade: style.grade } : {}) });
 export { checkType };

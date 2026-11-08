@@ -93,7 +93,12 @@ const merged = [];
 for (const p of phrases) {
   const prev = merged[merged.length - 1];
   if (prev) {
-    const cut = quietCut(prev.srcEnd - 0.12, p.srcStart + 0.12);
+    let cut = quietCut(prev.srcEnd - 0.12, p.srcStart + 0.12);
+    // 换了说话的人不能并成一句（字幕要按人换颜色）：配音拼接时人与人之间留了停顿，切不开说明对齐偏了，就切在两句正中
+    if (cut === null && (prev.speaker ?? '') !== (p.speaker ?? '')) {
+      cut = (prev.srcEnd + p.srcStart) / 2;
+      console.log(`  切点：「${prev.text}」|「${p.text}」换了说话的人，之间没找到静音，切在正中 ${r2(cut)}s`);
+    }
     if (cut === null) {
       console.log(`  切点：「${prev.text}」|「${p.text}」之间没有静音，合并为一句（中间不插停顿）`);
       prev.text += p.text; prev.caption = (prev.caption || prev.text) + '，' + (p.caption || p.text);
@@ -688,7 +693,7 @@ const pushMove = (t0, t1, to, focus) => {
   const from = prev ? prev.to : to;
   if (prev && Math.abs(from.z - to.z) < 0.01 && Math.hypot(from.x - to.x, from.y - to.y) < 8) return;
   if (prev && t0 < prev.t1) { const d = prev.t1 - t0; t0 += d; t1 += d; } // 不和上一段镜头移动重叠
-  camera.push({ t0: r2(t0), t1: r2(t1), from, to, ...(focus ? { focus } : {}) });
+  camera.push({ t0: r2(t0), t1: r2(t1), from, to, ...(focus ? { focus } : {}), ...(style.motion.easeAccel && style.motion.easeAccel !== 0.5 ? { accel: style.motion.easeAccel } : {}) }); // 缓动形状：style.motion.easeAccel（风格 0.7.0）
 };
 phrases.forEach((p, pi) => {
   const tc = targetCam[pi];
@@ -842,8 +847,11 @@ const subtitles = phrases.flatMap((p, i) => {
   let done = 0;
   const starts = parts.map((x) => { const at = t0 + (charTimes[p.i0 + Math.min(m - 1, Math.round((done / n) * m))].s - p.cutIn); done += strip(x).length; return Math.max(t0, at); });
   // 同一句拆出的几张首尾相接、换卡时不淡出淡入（join：接着上一张；joinNext：下一张接着它）。审片 E01 v20：淡出淡入让一句话中间字幕闪一下
+  // 对话：不是主讲说的句子，字幕带上说话的人（称呼给审稿和理解度材料用，颜色给渲染用；compiler/speakers.mjs）
+  const v = p.speaker ? beats.narration.voices?.[p.speaker] : null;
+  const who = v ? { speaker: p.speaker, ...(v.label ? { label: v.label } : {}), ...(v.caption ? { color: style.palette[v.caption] } : {}) } : {};
   return parts.map((x, k) => ({ text: x.replace(/[，、；：,;:]$/, ''), lines: breakLines(x.replace(/[，、；：,;:]$/, ''), TGT.sub.size, TGT.sub.width), t0: r2(k ? starts[k] : t0), t1: k + 1 < parts.length ? r2(starts[k + 1]) : t1,
-    ...(k ? { join: true } : {}), ...(k + 1 < parts.length ? { joinNext: true } : {}) }));
+    ...(k ? { join: true } : {}), ...(k + 1 < parts.length ? { joinNext: true } : {}), ...who }));
 });
 
 // narration：每个画幅插的停顿不同，拼好的旁白也各存一份

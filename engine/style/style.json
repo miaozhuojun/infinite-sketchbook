@@ -1,7 +1,7 @@
 {
  "name": "无限草稿本",
- "version": "0.6.0",
- "note": "默认风格（无限草稿本）。实际生效的是三层叠加：这份默认 < 本机私有创作配置 profile.local.json（不进仓库）< 每期分镜里的 style。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。0.4.2：水印换位避开顿悟句、尽量落在停顿里（watermark.swapWindow）；YouTube Shorts 补上顶部图标的遮挡区；铅笔角度避开已写的字（pencil.coverCost），离场走压内容最少的方向、片尾整支笔出画；图形元素之间留空（type.shapeGapPen）；镜头停稳时每个元素整段在取景框里或整段在画外。同色墨迹合成一层、不同墨色正常叠放（ink.layerBlend），交叠处不再发黑。0.4.3：书写声和音乐用真实的 CC0 录音（audio.pencilSamples、audio.music.track），没有文件时退回合成。0.5.0：章节（chapters，分镜写节名，发布清单按平台给章节；镜头只框当前这一节）；发布清单加上抖音和哔哩哔哩。0.5.1：通行绿 go（只给本来就是绿色的东西用，比如绿灯；红灯发红光、绿灯发绿光）；换节镜头至少移 motion.chapterMoveMin 秒；图形也要整段在取景框里或整段出画，长路线箭头这类元素在分镜里写 bleed 放行。0.6.0：引擎只管机械正确性，创作取舍只给建议（gates）；私有创作配置 profile.local.json 叠在这份上面，每期分镜可用 style 加颜色、字号等（不能改关卡级别、画幅、平台界面和章节规格）。",
+ "version": "0.7.0",
+ "note": "默认风格（无限草稿本）。实际生效的是三层叠加：这份默认 < 本机私有创作配置 profile.local.json（不进仓库）< 每期分镜里的 style。编译器、渲染器、混音、检查都只从这里取值；分镜只能引用这里的名字（颜色名、字号阶梯），不能写裸值。改风格=改这里+跑全量检查。0.3.0：一支笔（统一线宽）、铅笔随镜头缩放、顿悟推近、横/方版取景下扩、字幕霞鹜文楷+纸色衬底、同行标签与画面拖尾规则。0.3.1：顿悟推近单独上限 aha.zoomMax（全局 zoomMax 让横/方版只能推近 1.12 倍）；顿悟句说完后至少停 aha.holdAfter 秒再拉远；推近最少 1.1 倍（9:16 画面里文字多、上有平台顶栏下有字幕，1.15 倍放不下时退到 1.1）；人声轻压缩+真峰值限幅；手写汉字字号下限 type.minCjkSize。0.4.0：可见水印 watermark（品牌名小字，在几个角之间轮换，避开字幕、平台界面和内容）。0.4.2：水印换位避开顿悟句、尽量落在停顿里（watermark.swapWindow）；YouTube Shorts 补上顶部图标的遮挡区；铅笔角度避开已写的字（pencil.coverCost），离场走压内容最少的方向、片尾整支笔出画；图形元素之间留空（type.shapeGapPen）；镜头停稳时每个元素整段在取景框里或整段在画外。同色墨迹合成一层、不同墨色正常叠放（ink.layerBlend），交叠处不再发黑。0.4.3：书写声和音乐用真实的 CC0 录音（audio.pencilSamples、audio.music.track），没有文件时退回合成。0.5.0：章节（chapters，分镜写节名，发布清单按平台给章节；镜头只框当前这一节）；发布清单加上抖音和哔哩哔哩。0.5.1：通行绿 go（只给本来就是绿色的东西用，比如绿灯；红灯发红光、绿灯发绿光）；换节镜头至少移 motion.chapterMoveMin 秒；图形也要整段在取景框里或整段出画，长路线箭头这类元素在分镜里写 bleed 放行。0.6.0：引擎只管机械正确性，创作取舍只给建议（gates）；私有创作配置 profile.local.json 叠在这份上面，每期分镜可用 style 加颜色、字号等（不能改关卡级别、画幅、平台界面和章节规格）。0.7.0：「拍下来的纸」（对照 Claude Opus 5.5 官方宣传片列出的差距）：会动的颗粒 paper.grain（按帧号换，逐帧确定）、纸面起伏和斑驳受光 paper.relief、光极慢地变 paper.lampDrift、轻度调色 grade、镜头缓动起步快刹车长 motion.easeAccel、字幕去底板降一档字重改用纸色柔光 subtitle.glow；纹理都是程序生成的，线条不加抖动（真铅笔不抖）。对话字幕色 subtitleAlt（一集里不止一个人说话时，不是主讲的人的字幕换这个颜色，分镜 narration.voices 的 caption 指定）。",
 
  "gates": {
   "note": "关卡分两级。hard：机械上坏了（字被切、压字幕、进平台界面、出镜头、两处同时落笔、铅笔出画或瞬移、字幕折行超限、事实没出处、平台章节规格），流水线判失败。advice：创作上的取舍（叙事结构、节奏、镜头、留白、字号），只写进报告的「建议」，不拦截。这里只列 advice 级的关卡，没列的都是 hard。私有创作配置 profile.local.json 可以把任何一项改成 hard；每期分镜不能改关卡级别。",
@@ -22,6 +22,7 @@
   "go": "#5f8f5a",
   "highlight": "#f3c64a",
   "subtitle": "#3b3027",
+  "subtitleAlt": "#2b5f80",
   "plate": "#f8f2e4",
   "lamp": "#fff6dc",
   "shade": "#3c2a12"
@@ -29,7 +30,12 @@
  "inkColors": ["ink", "accent", "go"],
  "effectColors": ["highlight", "accent", "go"],
 
- "paper": { "gridSize": 48, "gridOpacity": 0.3, "fiberOpacity": 0.5, "lampOpacity": 0.62, "vignetteOpacity": 0.22 },
+ "paper": { "gridSize": 48, "gridOpacity": 0.3, "fiberOpacity": 0.5, "lampOpacity": 0.62, "vignetteOpacity": 0.22,
+  "grain": { "opacity": 0.25, "size": 1, "tiles": 6, "blend": "overlay" },
+  "relief": { "opacity": 0.45, "scale": 10, "tile": 2200, "azimuth": 225, "elevation": 55, "mottle": 0.03, "seed": 23 },
+  "lampDrift": { "period": 29, "amount": 0.06, "shift": 0.02 },
+  "textureNote": "0.7.0：grain 是屏幕层的颗粒（overlay 叠在铅笔和墨迹上、字幕下面），每帧换一张、错位，画面停着时也不是一张截图；relief 是纸面起伏（周期性值噪声当高度，按 azimuth/elevation 方向的光算明暗）加斑驳 mottle，按世界坐标铺、跟着纸走，soft-light 叠；lampDrift 让暖光一个周期 period 秒、强度 ±amount、中心 ±shift（画面比例）地变，幅度远低于能察觉「在动」的程度（用户 2026-11-04：镜头要克制）。都是程序生成、逐帧确定，没有下载素材" },
+ "grade": { "contrast": 1.04, "saturate": 1.05, "note": "0.7.0：全画面轻度调色，只调反差和饱和，不走暗色（儿童科普）" },
 
  "ink": {
   "note": "一支铅笔：所有笔画同一线宽（世界坐标），轻重只靠压力起伏。同一种墨色的笔画先合成到一层、再整体上透明度，所以不同元素交叉、回描处也不叠黑；按 layerBy 分层（color：同色一层；element：每个元素一层，是 v9 以前的做法），层与层之间按 layerBlend 叠放，墨色 ink 在最下，其余按第一次出现的先后往上叠（红笔盖住灰笔，不相乘）。审片：v7–v9 交叠处亮度只有正常笔芯的两到三成，红描灰成了暗褐",
@@ -78,6 +84,7 @@
   "finalOverviewHold": 1.4,
   "overviewMaxSec": null, "overviewNote": "片尾全景（camera=overview）从近景拉到整张纸最多走多少秒，落在这段时间里最后一句说完的地方，之后停在整张纸上；null＝一直拉到最后一句说完",
   "minCameraGap": 1.2,
+  "easeAccel": 0.35, "easeNote": "0.7.0：镜头移动的缓动，加速段占 easeAccel（0.5 是原来对称的二次缓动）；0.35 起步快、刹车长，像人推镜头。峰值速度和对称时一样，都是平均速度的 2 倍",
   "chapterMoveMin": 1.8, "chapterMoveNote": "换节时镜头沿纸面移过去至少这么久（秒），前一句太短时让第一笔晚一点落；审片 E01 v1：一次换节只用 1.05 秒，像甩镜头"
  },
 
@@ -90,9 +97,11 @@
  },
 
  "subtitle": {
-  "font": "\"LXGW WenKai\", \"PingFang SC\", sans-serif", "fontFamily": "LXGW WenKai", "weight": 700,
+  "font": "\"LXGW WenKai\", \"PingFang SC\", sans-serif", "fontFamily": "LXGW WenKai", "weight": 400,
   "lineHeight": 1.3, "maxLines": 2, "holdWhileDrawing": true,
-  "plate": { "opacity": 0.86, "padX": 18, "padY": 6, "radius": 10 }
+  "plate": { "opacity": 0, "padX": 18, "padY": 6, "radius": 10 },
+  "glow": [2, 6, 14],
+  "glowNote": "0.7.0：去掉圆角底板（0.6 是 0.86 的米色底板，像界面上的标签，出了纸面世界），字重降一档（霞鹜文楷 Regular，原来 Bold），改用纸色柔光衬字（text-shadow 各半径，像素）。字号、位置、折行不变；plate 的 padX/padY 照旧留着，检查按它算字幕区"
  },
 
  "watermark": {

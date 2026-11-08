@@ -56,7 +56,7 @@ def frame_times(tl):
             t = fly["t1"] + 0.02
         elif fly and fly["t0"] + 0.02 >= max([s["t0"] + 0.3, *effects]):
             t = fly["t0"] + 0.02
-        out.append((i, t, s["text"]))
+        out.append((i, t, (f"{s['label']}：" if s.get("label") else "") + s["text"]))  # 对话：不是主讲说的句子前面写上是谁说的
     return out
 
 

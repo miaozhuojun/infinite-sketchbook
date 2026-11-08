@@ -440,12 +440,17 @@ if CHUNK.get("maxSentences", 1) > 1:
             a_, s_ = sf.read(ckey + ".wav", dtype="float32"); m_ = json.load(open(ckey + ".json", encoding="utf-8"))
             if not (NO_BREAKS and pitch_breaks(a_, s_)):
                 res = (a_, s_, m_["seed"], "缓存", m_["words"])
+        # 一段配不过的记下来（.fail），以后直接逐句配：种子是确定的，再试也是同样几条都不过。
+        # 原来每次跑都把配不过的段从头试满 10 个种子再退回逐句，句子全走缓存时主讲配音也要 11 分钟（E02 父子对话样稿，正常几十秒）
+        if res is None and not args.no_cache and os.path.exists(ckey + ".fail"):
+            continue
         if res is None:
             print(f"  {len(g)} 句一起配：{text}")
             try:
                 r = synth_sentence(text, seed_of(sents[g[0]]), ref_for(sents[g[0]]), strict=True, tone=tone_of(sents[g[0]]))
             except SystemExit:
                 print("    这一段一起配不过，退回逐句配")
+                open(ckey + ".fail", "w").write(text)
                 continue
             res = r[:5]
             sf.write(ckey + ".wav", r[0], r[1])
@@ -599,16 +604,24 @@ def assembled_defects(full, spans, words):
                 bad.setdefault(k, []).append(f"回声 {ec:.0f}ms")
     return bad
 if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
+    # 换种子也配不出来的句子记下来（.postfail，连同当时那条的种子），以后留原来那条、不再重试：种子是确定的，再试也是同样几十条都不过。
+    # 原来每跑一次都对它试满几十个种子，一轮里三轮还各试一遍（E02 父子对话样稿「一开始，旋钮是随便拧的。」，主讲配音每次多花几分钟）
+    post_key = lambda i: os.path.join(CACHE, cache_key(sents[i])) + ".postfail"
+    gave_up = {i for i in range(len(sents)) if os.path.exists(post_key(i)) and json.load(open(post_key(i), encoding="utf-8")).get("seed") == takes[i][2]}
     for rnd in range(3):
         full, words, spans = assemble()
         defects = assembled_defects(full, spans, words)
-        bad = sorted(defects)
+        for i in sorted(set(defects) & gave_up):
+            print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}：以前换种子试满都没配出来，留原来那条（{sents[i]}）")
+        bad = sorted(set(defects) - gave_up)
         if not bad:
             break
         for i in bad:
             print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}，单独换种子重配：{sents[i]}")
             res = make_take(sents[i], takes[i][2] + 1, strict=True)
             if not res:
+                gave_up.add(i)
+                json.dump({"seed": takes[i][2], "defects": defects[i]}, open(post_key(i), "w", encoding="utf-8"), ensure_ascii=False)
                 print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res
             takes[i] = [audio, sr, seed, note, rel]

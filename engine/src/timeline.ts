@@ -31,12 +31,12 @@ export type InkMode = 'mono' | 'kai';
 export type Style = {
   name: string; version: string; palette: Record<string, string>;
   paper: { gridSize: number; gridOpacity: number; fiberOpacity: number; lampOpacity: number; vignetteOpacity: number;
-    grain?: { opacity: number; size: number; tiles: number; blend?: string }; // 会动的颗粒（屏幕层，按帧号换，逐帧确定）
+    grain?: { opacity: number; size: number; tiles: number; blend?: string; every?: number }; // 会动的颗粒（屏幕层，按帧号换，逐帧确定）
     relief?: { opacity: number; scale: number; tile: number; azimuth: number; elevation: number; mottle: number; seed: number }; // 纸面起伏（世界层，受光）
     lampDrift?: { period: number; amount: number; shift: number } }; // 光极慢地变：强度 ±amount、中心 ±shift（画面比例），一个周期 period 秒
   grade?: { contrast: number; saturate: number }; // 全局调色
   ink: { opacity: number; layerBlend?: string; layerBy?: 'color' | 'element'; freehand: { sizeScale: number; thinning: number; smoothing: number }; grain: { displace: number; frequency: number; alphaGain: number; alphaBias: number } };
-  subtitle: { font: string; fontFamily: string; weight: number; lineHeight: number; maxLines: number; plate: { opacity: number; padX: number; padY: number; radius: number; shadow?: boolean }; glow?: number[] }; // glow：纸色柔光（text-shadow 半径，像素）
+  subtitle: { font: string; fontFamily: string; weight: number; lineHeight: number; maxLines: number; plate: { opacity: number; padX: number; padY: number; radius: number; shadow?: boolean; feather?: number }; glow?: number[] }; // glow：纸色柔光（text-shadow 半径，像素）
   pencil: { base: number; swing: number; length: number; halfWidth: number; scale: number; followZoom?: boolean };
 };
 

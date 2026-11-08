@@ -836,6 +836,7 @@ const splitCaption = (text) => {
   const mid = [...text].length / 2, k = cuts.reduce((a, c) => (Math.abs(c - mid) < Math.abs(a - mid) ? c : a));
   return [...splitCaption(text.slice(0, k)), ...splitCaption(text.slice(k))];
 };
+const introduced = new Set(); // 对话：已经开过口、字幕写过称呼的说话人
 const subtitles = phrases.flatMap((p, i) => {
   const t0 = audioClips[i].at, spoken = t0 + (p.srcEnd - p.cutIn) + 0.35;
   const hold = style.subtitle.holdWhileDrawing ? report.phrases[i].drawEnd + 0.3 : spoken;
@@ -847,10 +848,13 @@ const subtitles = phrases.flatMap((p, i) => {
   let done = 0;
   const starts = parts.map((x) => { const at = t0 + (charTimes[p.i0 + Math.min(m - 1, Math.round((done / n) * m))].s - p.cutIn); done += strip(x).length; return Math.max(t0, at); });
   // 同一句拆出的几张首尾相接、换卡时不淡出淡入（join：接着上一张；joinNext：下一张接着它）。审片 E01 v20：淡出淡入让一句话中间字幕闪一下
-  // 对话：不是主讲说的句子，字幕带上说话的人（称呼给审稿和理解度材料用，颜色给渲染用；compiler/speakers.mjs）
+  // 对话：不是主讲说的句子，字幕带上说话的人（称呼给审稿和理解度材料用，颜色给渲染用；compiler/speakers.mjs）。
+  // 这个人第一次开口的那张字幕前面写上称呼（「爸爸：」），静音刷到的人也知道换了人（独立审片：只有一种没解释过的蓝色字幕）；labelFirst: false 关掉
   const v = p.speaker ? beats.narration.voices?.[p.speaker] : null;
   const who = v ? { speaker: p.speaker, ...(v.label ? { label: v.label } : {}), ...(v.caption ? { color: style.palette[v.caption] } : {}) } : {};
-  return parts.map((x, k) => ({ text: x.replace(/[，、；：,;:]$/, ''), lines: breakLines(x.replace(/[，、；：,;:]$/, ''), TGT.sub.size, TGT.sub.width), t0: r2(k ? starts[k] : t0), t1: k + 1 < parts.length ? r2(starts[k + 1]) : t1,
+  const intro = v?.label && v.labelFirst !== false && !introduced.has(p.speaker) ? `${v.label}：` : '';
+  if (p.speaker) introduced.add(p.speaker);
+  return parts.map((x, k) => ({ text: (k ? '' : intro) + x.replace(/[，、；：,;:]$/, ''), lines: breakLines((k ? '' : intro) + x.replace(/[，、；：,;:]$/, ''), TGT.sub.size, TGT.sub.width), t0: r2(k ? starts[k] : t0), t1: k + 1 < parts.length ? r2(starts[k + 1]) : t1,
     ...(k ? { join: true } : {}), ...(k + 1 < parts.length ? { joinNext: true } : {}), ...who }));
 });
 

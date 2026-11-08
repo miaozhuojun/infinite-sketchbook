@@ -31,10 +31,10 @@
  "effectColors": ["highlight", "accent", "go"],
 
  "paper": { "gridSize": 48, "gridOpacity": 0.3, "fiberOpacity": 0.5, "lampOpacity": 0.62, "vignetteOpacity": 0.22,
-  "grain": { "opacity": 0.25, "size": 1, "tiles": 6, "blend": "overlay" },
-  "relief": { "opacity": 0.45, "scale": 10, "tile": 2200, "azimuth": 225, "elevation": 55, "mottle": 0.03, "seed": 23 },
+  "grain": { "opacity": 0, "size": 2, "tiles": 6, "blend": "overlay", "every": 1 },
+  "relief": { "opacity": 0.3, "scale": 10, "tile": 2200, "azimuth": 225, "elevation": 55, "mottle": 0.02, "seed": 23 },
   "lampDrift": { "period": 29, "amount": 0.06, "shift": 0.02 },
-  "textureNote": "0.7.0：grain 是屏幕层的颗粒（overlay 叠在铅笔和墨迹上、字幕下面），每帧换一张、错位，画面停着时也不是一张截图；relief 是纸面起伏（周期性值噪声当高度，按 azimuth/elevation 方向的光算明暗）加斑驳 mottle，按世界坐标铺、跟着纸走，soft-light 叠；lampDrift 让暖光一个周期 period 秒、强度 ±amount、中心 ±shift（画面比例）地变，幅度远低于能察觉「在动」的程度（用户 2026-11-04：镜头要克制）。都是程序生成、逐帧确定，没有下载素材" },
+  "grainNote": "0.7.0：会动的颗粒默认关（opacity 0）。E02 一段 20 秒实测：每帧换颗粒码率 +66%（11.5→19.1MB），每 3 帧换（every 3）反而 21.7MB，关掉颗粒只 +8%（12.4MB）；独立审片看成片说压缩后颗粒几乎看不出来。要开就把 opacity 调到 0.2 左右", "textureNote": "0.7.0：grain 是屏幕层的颗粒（overlay 叠在铅笔和墨迹上、字幕下面），每帧换一张、错位，画面停着时也不是一张截图；relief 是纸面起伏（周期性值噪声当高度，按 azimuth/elevation 方向的光算明暗）加斑驳 mottle，按世界坐标铺、跟着纸走，soft-light 叠；lampDrift 让暖光一个周期 period 秒、强度 ±amount、中心 ±shift（画面比例）地变，幅度远低于能察觉「在动」的程度（用户 2026-11-04：镜头要克制）。都是程序生成、逐帧确定，没有下载素材" },
  "grade": { "contrast": 1.04, "saturate": 1.05, "note": "0.7.0：全画面轻度调色，只调反差和饱和，不走暗色（儿童科普）" },
 
  "ink": {
@@ -99,9 +99,9 @@
  "subtitle": {
   "font": "\"LXGW WenKai\", \"PingFang SC\", sans-serif", "fontFamily": "LXGW WenKai", "weight": 400,
   "lineHeight": 1.3, "maxLines": 2, "holdWhileDrawing": true,
-  "plate": { "opacity": 0, "padX": 18, "padY": 6, "radius": 10 },
+  "plate": { "opacity": 0.72, "padX": 18, "padY": 6, "radius": 24, "feather": 22 },
   "glow": [2, 6, 14],
-  "glowNote": "0.7.0：去掉圆角底板（0.6 是 0.86 的米色底板，像界面上的标签，出了纸面世界），字重降一档（霞鹜文楷 Regular，原来 Bold），改用纸色柔光衬字（text-shadow 各半径，像素）。字号、位置、折行不变；plate 的 padX/padY 照旧留着，检查按它算字幕区"
+  "glowNote": "0.7.0：圆角底板（0.6 是 0.86 的米色底板，像界面上的标签，出了纸面世界）换成无边的纸色柔光（plate.feather：底色向四周晕开；完全不衬时，镜头大幅移动途中画好的字会从字幕后面滑过、和字幕叠在一起），字重降一档（霞鹜文楷 Regular，原来 Bold），改用纸色柔光衬字（text-shadow 各半径，像素）。字号、位置、折行不变；plate 的 padX/padY 照旧留着，检查按它算字幕区"
  },
 
  "watermark": {

@@ -111,7 +111,8 @@ const Lamp: React.FC<{ w: number; h: number; st: Style; t: number }> = ({ w, h, 
 const Grain: React.FC<{ w: number; h: number; st: Style; frame: number }> = ({ w, h, st, frame }) => {
   const g = st.paper.grain;
   if (!g || !g.opacity) return null;
-  const k = (frame * 7919) % g.tiles, ox = (frame * 7907) % 256, oy = (frame * 4271) % 256, px = 256 * g.size;
+  // every：每几帧换一次颗粒（胶片约每秒 24 格；60 帧的片子每帧都换，码率翻一倍，压缩后又几乎看不出来——独立审片）
+  const f = Math.floor(frame / (g.every ?? 1)), k = (f * 7919) % g.tiles, ox = (f * 7907) % 256, oy = (f * 4271) % 256, px = 256 * g.size;
   return <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${grainTile(k)})`, backgroundSize: `${px}px ${px}px`, backgroundPosition: `${ox * g.size}px ${oy * g.size}px`,
     imageRendering: 'pixelated', opacity: g.opacity, mixBlendMode: (g.blend ?? 'overlay') as React.CSSProperties['mixBlendMode'], pointerEvents: 'none' }} />;
 };
@@ -326,7 +327,9 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
           <div style={{
             // 底板的透明度只给底色（原来给整个元素，字也跟着淡）；风格 0.7.0 去掉底板（opacity 0），改用纸色柔光 glow 把字从方格和墨迹上托出来
             background: plateFill(st.palette.plate, st.subtitle.plate.opacity), borderRadius: st.subtitle.plate.radius,
-            padding: `${st.subtitle.plate.padY}px ${st.subtitle.plate.padX}px`, boxShadow: st.subtitle.plate.shadow === false || !st.subtitle.plate.opacity ? 'none' : '0 2px 8px rgba(60,42,18,0.10)',
+            // feather：底色向四周晕开、没有边（风格 0.7.0）。完全不衬时，镜头大幅移动途中画好的字会从字幕后面滑过、和字幕叠在一起（独立审片 E02 父子对话样片 333s、346s）
+            padding: `${st.subtitle.plate.padY}px ${st.subtitle.plate.padX}px`,
+            boxShadow: st.subtitle.plate.feather ? `0 0 ${st.subtitle.plate.feather}px ${st.subtitle.plate.feather * 0.6}px ${plateFill(st.palette.plate, st.subtitle.plate.opacity)}` : st.subtitle.plate.shadow === false || !st.subtitle.plate.opacity ? 'none' : '0 2px 8px rgba(60,42,18,0.10)',
             textShadow: (st.subtitle.glow ?? []).map((r) => `0 0 ${r}px ${paper}`).join(', ') || undefined,
             font: `${st.subtitle.weight} ${tl.sub.size}px ${st.subtitle.font}`, lineHeight: st.subtitle.lineHeight, color: sub.color ?? st.palette.subtitle, // 对话：按说话的人换字幕颜色
             letterSpacing: 1, textAlign: 'center', whiteSpace: 'nowrap',

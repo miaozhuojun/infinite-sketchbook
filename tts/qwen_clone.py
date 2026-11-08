@@ -29,12 +29,13 @@ ap.add_argument("--seed", type=int, default=2)
 ap.add_argument("--voice", default=None, help="音色配置，默认 voice.json")
 ap.add_argument("--ref", default=None, help="临时换参考音做试验（正式出片用 voice.json 里的）")
 ap.add_argument("--ref-text", default=None)
-ap.add_argument("--temperature", type=float, default=0.7)
+ap.add_argument("--temperature", type=float, default=None, help="默认取音色配置的 temperature，没写是 0.7")
 ap.add_argument("--max-tries", type=int, default=None, help="自检不过时自动换种子重生成的最多次数（每句单独计）；默认取 voice.json 的 maxTries，没写是 5")
 ap.add_argument("--gap", type=float, default=0.4, help="句与句之间的停顿秒数")
 ap.add_argument("--no-cache", action="store_true", help="不用已缓存的句子，全部重新生成")
 ap.add_argument("--reseed", action="append", default=[], help="「句子=偏移」：这一句换个种子重新生成（听出畸变、怪腔调时用；可重复）")
 ap.add_argument("--tone", action="append", default=[], help="「句子=语气」：这一句按哪种语气挑候选（语气名在 voice.json 的 tones 里）")
+ap.add_argument("--turn", action="append", default=[], help="对话里一段话的开头（上一句是别人说的，engine/compiler/speakers.mjs）：不和上一句凑成一段配、挑候选时不和上一句比接不接得上")
 ap.add_argument("--mood", action="append", default=[], help="「句子=情绪」：这一句用 voice.json 的 moods 里那段情绪参考音克隆（语气跟着内容变；可重复）")
 args = ap.parse_args()
 
@@ -58,6 +59,8 @@ NO_BREAKS = voice.get("takeNoBreaks", False)
 # rate.target 是这个声音说话的语速（字/秒，只算嘴在动的时间，见 voice.py 的 art_rate），生成时候选离它超过 takeTol 不要，
 # 拼好后每句离它超过 maxDev 的单独重配。情绪、音调照旧随语气变，语速不跟着变
 RATE = voice.get("rate") or {}
+# 一两个字的句子（对话里的「哦。」「对！」）量不出语速：只有一个字，拖长一点就差一倍，语速的筛选和检查都跳过它
+RATE_MIN = RATE.get("minChars", 3)
 # 回声：停顿处衰减 20dB 的时间（毫秒）高于 takeMaxEcho 就换种子（参考音录在有回声的房间时，每句学到的回声多少不一）
 MAX_ECHO = voice.get("takeMaxEcho", 0)
 # 每句候选几条、按语气挑（VOICE_PIPELINE.md 第三步）；--tone「句子=语气」覆盖自动判断（问句→好奇、感叹→兴奋、其余→认真讲）
@@ -121,10 +124,17 @@ def trim_leaked_prefix(audio, sr, prefix, text):
 
 
 # 2. 克隆合成（按句）：每句生成后立刻做回转识别和掉音检查，不过就换种子重来（自修复）
-TTS_MODEL = "models/Qwen3-TTS-12Hz-1.7B-Base"
+# 生成用哪个模型：音色配置的 model，默认 Qwen3。量音色（说话人嵌入：挑候选、每句一致、和真人录音比）一直用 Qwen3，尺子不跟着换。
+# 对话里的爸爸用 Breeze TTS 2 克隆（他的声音就是 Breeze 按描述设计的）：Qwen3 克隆他每秒 5.4–6.9 字，比原片 4.3 快一截，憨憨慢吞吞的劲儿没了；
+# Breeze 克隆 3.3–5.4 字/秒，像原片的程度和 Qwen3 差不多（CAM++ 0.71–0.91 对 0.73–0.93）。两个模型都是每秒 12.5 帧，下面的长度上限通用
+QWEN = "models/Qwen3-TTS-12Hz-1.7B-Base"
+TTS_MODEL = voice.get("model", QWEN)
+if args.temperature is None:
+    args.temperature = voice.get("temperature", 0.7)
 tts = load_model(TTS_MODEL)
+spk = tts if TTS_MODEL == QWEN else load_model(QWEN)  # 量音色用
 # 声音包的音色（主参考音的说话人嵌入）：候选打分时和它比，整集都向同一个音色靠
-PACK_EMB = embedding(tts, *sf.read(REF["path"], dtype="float32"))
+PACK_EMB = embedding(spk, *sf.read(REF["path"], dtype="float32"))
 tone_arg = {k.strip(): v.strip() for k, v in (t.rsplit("=", 1) for t in args.tone)}
 for t in tone_arg.values():
     if TONES and t not in TONES:
@@ -231,7 +241,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             continue
         # 语速粗筛：识别、对齐要好几秒，先按「有声音的时长」粗估语速，差得太远的直接换种子（E02 v6 加语速关卡后配音慢了一倍）。
         # 粗估和逐字对齐量出来的语速差不多，留 12% 余量，只筛掉明显不行的
-        if RATE.get("target"):
+        if RATE.get("target") and n_chars >= RATE_MIN:
             h10 = int(0.01 * sr); lv10 = 20 * np.log10(np.sqrt(np.convolve(audio.astype(np.float64) ** 2, np.ones(h10) / h10, "valid")[::h10]) + 1e-9)
             est = n_chars / max(0.3, (lv10 > lv10.max() - 35).sum() * 0.01) / 1.05  # 粗估比逐字对齐平均快 5%（323 条缓存标定：误筛 3/189，提前筛掉 28/134）
             if abs(est / RATE["target"] - 1) > RATE.get("takeTol", 0.08) + 0.12:
@@ -283,12 +293,12 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             continue
         # 打分：离语气目标多远 + 和声音包音色差多少（同一段参考音挑出来的，语气有变化、音色不变）
         pr = prosody(audio, sr, rel)
-        if RATE.get("target") and abs(pr["artRate"] / RATE["target"] - 1) > RATE.get("takeTol", 0.08):
+        if RATE.get("target") and len(re.sub(PUNCT, "", text)) >= RATE_MIN and abs(pr["artRate"] / RATE["target"] - 1) > RATE.get("takeTol", 0.08):
             print(f"    种子 {seed}：语速 {pr['artRate']:.2f} 字/秒，离这个声音的 {RATE['target']} 超过 {RATE.get('takeTol', 0.08):.0%}，换种子重来")
             if not best_rate or abs(pr["artRate"] / RATE["target"] - 1) < best_rate[0]:
                 best_rate = (abs(pr["artRate"] / RATE["target"] - 1), (audio, sr, seed, note, rel, bk))
             continue
-        e = embedding(tts, audio, sr)
+        e = embedding(spk, audio, sr)
         # 配了语速目标时，连贯打分不再拿声音包的基准语速比（量法不同：声音包按「首字到末字」量，逗号停顿算进去，每句都显得慢，候选就偏向快的那条）
         score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, None if RATE.get("target") else BASE_RATE, target.get("rate"))
         cands.append((score, (audio, sr, seed, note, rel, bk), pr))
@@ -357,6 +367,7 @@ CACHE = os.path.join(os.path.dirname(os.path.abspath(args.out)), "cache")
 os.makedirs(CACHE, exist_ok=True)
 # 换种子：程序听不出的畸变（自检都过、人耳听着怪）就给那一句换个起始种子，只重配这一句
 reseed = {k.strip(): int(v) for k, v in (r.rsplit("=", 1) for r in args.reseed)}
+TURN = {t.strip() for t in args.turn}  # 对话：这几句是一段话的开头，前面是别人在说
 seed_of = lambda sent: args.seed + reseed.get(sent.strip(), 0) * args.max_tries  # 偏移按「整轮重试」跳，不和原来那轮的种子重叠
 # 候选 1 条时缓存键和原来一样（老缓存照用）；多条时还要看语气、语气目标和声音包的基准，任何一样变了都重挑
 cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_for(sent)["sig"], ref_for(sent)["text"], TTS_MODEL, args.temperature, seed_of(sent), args.max_tries]
@@ -412,7 +423,8 @@ if CHUNK.get("maxSentences", 1) > 1:
     clean_len = lambda t: len(re.sub(PUNCT, "", t))
     for i, sent in enumerate(sents):
         brk = cur and (len(cur) >= CHUNK["maxSentences"] or sum(clean_len(sents[k]) for k in cur) + clean_len(sent) > CHUNK.get("maxChars", 60)
-                       or tone_of(sent) != tone_of(sents[cur[0]]) or sent.strip() in reseed or sents[cur[0]].strip() in reseed or sent.strip() in mood_of)
+                       or tone_of(sent) != tone_of(sents[cur[0]]) or sent.strip() in reseed or sents[cur[0]].strip() in reseed or sent.strip() in mood_of
+                       or sent.strip() in TURN)
         if brk:
             groups.append(cur); cur = []
         cur.append(i)
@@ -428,12 +440,17 @@ if CHUNK.get("maxSentences", 1) > 1:
             a_, s_ = sf.read(ckey + ".wav", dtype="float32"); m_ = json.load(open(ckey + ".json", encoding="utf-8"))
             if not (NO_BREAKS and pitch_breaks(a_, s_)):
                 res = (a_, s_, m_["seed"], "缓存", m_["words"])
+        # 一段配不过的记下来（.fail），以后直接逐句配：种子是确定的，再试也是同样几条都不过。
+        # 原来每次跑都把配不过的段从头试满 10 个种子再退回逐句，句子全走缓存时主讲配音也要 11 分钟（E02 父子对话样稿，正常几十秒）
+        if res is None and not args.no_cache and os.path.exists(ckey + ".fail"):
+            continue
         if res is None:
             print(f"  {len(g)} 句一起配：{text}")
             try:
                 r = synth_sentence(text, seed_of(sents[g[0]]), ref_for(sents[g[0]]), strict=True, tone=tone_of(sents[g[0]]))
             except SystemExit:
                 print("    这一段一起配不过，退回逐句配")
+                open(ckey + ".fail", "w").write(text)
                 continue
             res = r[:5]
             sf.write(ckey + ".wav", r[0], r[1])
@@ -450,6 +467,8 @@ if CHUNK.get("maxSentences", 1) > 1:
 
 for i, sent in enumerate(sents):
     t0 = time.time()
+    if FLOW and sent.strip() in TURN:
+        PREV = {}  # 对话：上一句是别人说的，这一句重新起头，不按「和上一句接得上」挑
     if i in pre:  # 整段一起配好的，直接用
         audio, sr, seed, note, rel = pre[i]
         takes.append([audio, sr, seed, note, rel])
@@ -528,10 +547,46 @@ def finish(audio, sr_):
     return np.clip(y, -0.99, 0.99).astype(np.float32)
 
 
+# 停顿上限（音色配置的 maxPause、maxJoinPause，秒；不写就不动）：字与字之间超过 maxPause 的静音从正中剪短到 maxPause，
+# 一段一起配、首尾相接的两句之间的静音最多留 maxJoinPause。只剪静音，逐字时间跟着前移；拼接时做，缓存里的声音不动。
+# 用户听 E02 父子对话样片：爸爸一句话里断句的间隔有点长（Breeze 在逗号处停 1 秒左右，「哦。」到「比我还重一点。」停 1.9 秒；孩子句内停顿中位 0.24 秒）
+MAX_PAUSE, JOIN_PAUSE = voice.get("maxPause"), voice.get("maxJoinPause")
+def cap_pauses(audio, sr_, rel, lead=None, tail=None):
+    h = int(0.01 * sr_)
+    lv = np.sqrt(np.convolve(audio.astype(np.float64) ** 2, np.ones(h) / h, "same")) if len(audio) > h else np.abs(audio)
+    loud = lv.max() if len(lv) else 0.0
+    quiet = lambda a, b: b <= a or lv[a:b].max() <= loud * 10 ** (-30 / 20)  # 要剪的那段比这句最响处低 30dB 以上才剪
+    cuts = []
+    if MAX_PAUSE:
+        for x, y in zip(rel, rel[1:]):
+            g = y["start"] - x["end"]
+            if g > MAX_PAUSE:
+                mid, half = (x["end"] + y["start"]) / 2, (g - MAX_PAUSE) / 2
+                a, b = int((mid - half) * sr_), int((mid + half) * sr_)
+                if quiet(a, b):
+                    cuts.append((a, b))
+    if lead is not None and rel and rel[0]["start"] > lead and quiet(0, int((rel[0]["start"] - lead) * sr_)):
+        cuts.append((0, int((rel[0]["start"] - lead) * sr_)))
+    if tail is not None and rel and len(audio) / sr_ - rel[-1]["end"] > tail and quiet(int((rel[-1]["end"] + tail) * sr_), len(audio)):
+        cuts.append((int((rel[-1]["end"] + tail) * sr_), len(audio)))
+    if not cuts:
+        return audio, rel
+    cuts.sort()
+    keep, pos = [], 0
+    for a, b in cuts:
+        keep.append(audio[pos:a]); pos = b
+    keep.append(audio[pos:])
+    shift = lambda t: t - sum(b - a for a, b in cuts if b <= int(t * sr_) + 1) / sr_
+    return np.concatenate(keep), [dict(w, start=round(shift(w["start"]), 3), end=round(shift(w["end"]), 3)) for w in rel]
+
+
 def assemble():
     """各句之间留 gap 秒拼成整段；返回整段、逐字时间、每句起止"""
     pieces, words, spans, t = [], [], [], 0.0
     for i, (sent, (audio, sr_, _, _, rel)) in enumerate(zip(sents, takes)):
+        if MAX_PAUSE or JOIN_PAUSE:
+            audio, rel = cap_pauses(audio, sr_, rel, lead=JOIN_PAUSE / 2 if JOIN_PAUSE and (i - 1) in joined else None,
+                                    tail=JOIN_PAUSE / 2 if JOIN_PAUSE and i in joined else None)
         spans.append({"text": sent, "start": round(t, 3), "end": round(t + len(audio) / sr_, 3)})  # 这一句配音在整段里的起止：旁白检查按句量掉嗓子，和逐句自检用同一段声音
         words.extend({"text": w["text"], "start": round(w["start"] + t, 3), "end": round(w["end"] + t, 3), "sent": i} for w in rel)
         gap = np.zeros(int(args.gap * sr_) if i < len(sents) - 1 and i not in joined else 0, dtype=np.float32)  # 同一段一起配的句子之间，停顿已经在声音里
@@ -577,7 +632,7 @@ def assembled_defects(full, spans, words):
         ws_k = [w for w in words if w["sent"] == k]
         if (he := hard_edges(seg, sr)):
             bad.setdefault(k, []).append("硬切 " + "、".join(f"{a}{t:.2f}s" for a, t, _ in he))
-        if RATE.get("target") and ws_k and abs(art_rate(ws_k) / RATE["target"] - 1) > RATE.get("maxDev", 0.10):
+        if RATE.get("target") and sum(len(w["text"]) for w in ws_k) >= RATE_MIN and abs(art_rate(ws_k) / RATE["target"] - 1) > RATE.get("maxDev", 0.10):
             bad.setdefault(k, []).append(f"语速 {art_rate(ws_k):.2f} 字/秒（目标 {RATE['target']}，最多差 {RATE.get('maxDev', 0.10):.0%}）")
         if FINAL_ECHO:
             ws = [dict(w, start=w["start"] - sp["start"], end=w["end"] - sp["start"]) for w in words if w["sent"] == k]
@@ -585,16 +640,24 @@ def assembled_defects(full, spans, words):
                 bad.setdefault(k, []).append(f"回声 {ec:.0f}ms")
     return bad
 if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
+    # 换种子也配不出来的句子记下来（.postfail，连同当时那条的种子），以后留原来那条、不再重试：种子是确定的，再试也是同样几十条都不过。
+    # 原来每跑一次都对它试满几十个种子，一轮里三轮还各试一遍（E02 父子对话样稿「一开始，旋钮是随便拧的。」，主讲配音每次多花几分钟）
+    post_key = lambda i: os.path.join(CACHE, cache_key(sents[i])) + ".postfail"
+    gave_up = {i for i in range(len(sents)) if os.path.exists(post_key(i)) and json.load(open(post_key(i), encoding="utf-8")).get("seed") == takes[i][2]}
     for rnd in range(3):
         full, words, spans = assemble()
         defects = assembled_defects(full, spans, words)
-        bad = sorted(defects)
+        for i in sorted(set(defects) & gave_up):
+            print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}：以前换种子试满都没配出来，留原来那条（{sents[i]}）")
+        bad = sorted(set(defects) - gave_up)
         if not bad:
             break
         for i in bad:
             print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}，单独换种子重配：{sents[i]}")
             res = make_take(sents[i], takes[i][2] + 1, strict=True)
             if not res:
+                gave_up.add(i)
+                json.dump({"seed": takes[i][2], "defects": defects[i]}, open(post_key(i), "w", encoding="utf-8"), ensure_ascii=False)
                 print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res
             takes[i] = [audio, sr, seed, note, rel]
@@ -618,7 +681,7 @@ if MIN_CONS:
     for rnd in range(4):
         for i, tk in enumerate(takes):
             if embs[i] is None:
-                e = embedding(tts, tk[0], tk[1]); embs[i] = e / np.linalg.norm(e)
+                e = embedding(spk, tk[0], tk[1]); embs[i] = e / np.linalg.norm(e)
         cen = np.mean(embs, 0); cen /= np.linalg.norm(cen)
         cos = [float(e @ cen) for e in embs]
         for i, c in enumerate(cos):
@@ -668,7 +731,7 @@ json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + 
 if c_all > 0.005:
     raise SystemExit(f"整段回转拼音错误率 {c_all:.3f}（逐句都通过，但拼起来后识别有出入），需要人工检查")
 # 音色一致性：和真人录音质心比，防止参考音或模型改动让音色悄悄漂移
-sim = similarity(tts, full, sr, voice)
+sim = similarity(spk, full, sr, voice)
 ok = sim >= voice["minSimilarity"]
 print(f"[{'通过' if ok else '失败'}] 音色一致性：与真人录音相似度 {sim:.3f}（下限 {voice['minSimilarity']}）")
 if not ok:

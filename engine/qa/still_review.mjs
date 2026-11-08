@@ -96,7 +96,8 @@ try {
         const vis = x.pen ? shown(x.id, end.t) : null;
         return { id: x.id, type: x.type, text: src.text ?? src.label ?? null, at: src.at ?? null, cue: x.cue, start: x.start, end: x.end, pen: x.pen, ahead: !!src.ahead, visible: vis === null ? null : +vis.toFixed(2) };
       });
-      return { i, text: subs[i]?.text ?? bp.caption ?? bp.text, role: bp.role ?? '', chapter: bp.chapter ?? null, camera: bp.camera ?? (bp.revisit ? 'revisit' : null), at: a, audioEnd: rp.audioEnd, drawEnd: rp.drawEnd, insertedPause: rp.insertedPause, endT: end.t, png, strip, actions: acts };
+      return { i, text: (subs[i]?.label ? `${subs[i].label}：` : '') + (subs[i]?.text ?? bp.caption ?? bp.text), // 对话：写上是谁说的
+       role: bp.role ?? '', chapter: bp.chapter ?? null, camera: bp.camera ?? (bp.revisit ? 'revisit' : null), at: a, audioEnd: rp.audioEnd, drawEnd: rp.drawEnd, insertedPause: rp.insertedPause, endT: end.t, png, strip, actions: acts };
     });
     // 全片最后一帧（整张纸）：看全局版式、片尾停在哪
     const lastPng = path.join(dir, 'last.png');

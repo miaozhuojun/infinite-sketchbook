@@ -2,6 +2,7 @@ import React from 'react';
 import { getStroke } from 'perfect-freehand';
 import { AbsoluteFill, Html5Audio, cancelRender, continueRender, delayRender, staticFile, useCurrentFrame } from 'remotion';
 import 'lxgw-wenkai-webfont/lxgwwenkai-bold.css';
+import 'lxgw-wenkai-webfont/lxgwwenkai-regular.css'; // 风格 0.7.0 起字幕降一档字重
 import { Cam, cameraAt, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke } from './timeline';
 
 // 所有颜色、纸面、墨迹、字幕参数都来自时间线里带的风格规范（style/style.json），这里不写裸值
@@ -14,6 +15,45 @@ const World: React.FC<{ cam: Cam; view: { cx: number; cy: number }; children: Re
     {children}
   </AbsoluteFill>
 );
+
+// ---------- 程序生成的纹理（风格 0.7.0）：固定种子的伪随机数，在浏览器里画一次、缓存成图片，逐帧确定（同一帧两次渲染像素一样） ----------
+// 不用全画面的 SVG 滤镜（feTurbulence、feDiffuseLighting）逐帧现算：一帧 1920×1080 要几十毫秒，整片渲染慢几倍
+const mulberry32 = (a: number) => () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+const texCache = new Map<string, string>();
+const makeTex = (key: string, n: number, fill: (img: Uint8ClampedArray) => void) => {
+  if (!texCache.has(key)) {
+    const c = document.createElement('canvas'); c.width = n; c.height = n;
+    const ctx = c.getContext('2d')!, img = ctx.createImageData(n, n);
+    fill(img.data); ctx.putImageData(img, 0, 0); texCache.set(key, c.toDataURL('image/png'));
+  }
+  return texCache.get(key)!;
+};
+// 颗粒：每张 256×256 的灰噪声（近似高斯），几张轮着用、每帧换位置
+const grainTile = (k: number) => makeTex(`grain-${k}`, 256, (d) => {
+  const r = mulberry32(1013 + k * 7919);
+  for (let i = 0; i < d.length; i += 4) { const g = 128 + 42 * (r() + r() + r() - 1.5) * 1.41; d[i] = d[i + 1] = d[i + 2] = g; d[i + 3] = 255; }
+});
+// 纸面起伏：周期性值噪声做高度（四边能无缝拼接），按光的方向算明暗（朗伯），再叠一层更低频的斑驳；中性灰 128 表示不变
+const reliefTile = (p: NonNullable<Style['paper']['relief']>) => makeTex(`relief-${JSON.stringify(p)}`, 256, (d) => {
+  const n = 256, r = mulberry32(p.seed);
+  const field = (cells: number) => { const g = Array.from({ length: cells * cells }, () => r()); return (x: number, y: number) => {
+    const fx = (x / n) * cells, fy = (y / n) * cells, x0 = Math.floor(fx), y0 = Math.floor(fy), sx = fx - x0, sy = fy - y0;
+    const at = (i: number, j: number) => g[((j % cells) + cells) % cells * cells + ((i % cells) + cells) % cells];
+    const s = (u: number) => u * u * (3 - 2 * u), a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * s(sx), b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * s(sx);
+    return a + (b - a) * s(sy); }; };
+  const oct = [field(4), field(8), field(16), field(32)], mot = [field(2), field(3)];
+  const H = new Float32Array(n * n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) H[y * n + x] = oct[0](x, y) + 0.5 * oct[1](x, y) + 0.25 * oct[2](x, y) + 0.12 * oct[3](x, y);
+  const az = (p.azimuth * Math.PI) / 180, el = (p.elevation * Math.PI) / 180, L = [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const h = (i: number, j: number) => H[((j + n) % n) * n + ((i + n) % n)];
+    const nx = -(h(x + 1, y) - h(x - 1, y)) * p.scale, ny = -(h(x, y + 1) - h(x, y - 1)) * p.scale, len = Math.hypot(nx, ny, 1);
+    const shade = (nx * L[0] + ny * L[1] + L[2]) / len - L[2]; // 平的地方是 0
+    const m = (mot[0](x, y) + 0.6 * mot[1](x, y) - 0.8) * p.mottle;
+    const v = 128 + 255 * (shade + m), i = (y * n + x) * 4;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+});
 
 // ---------- 纸（世界层：底色、方格、纤维） ----------
 // 纸只铺在这一帧镜头看得到的那块世界坐标上（再多留一圈）：分章节时各节画在纸面上相隔很远的地方，
@@ -36,23 +76,46 @@ const PaperWorld: React.FC<{ st: Style; cam: Cam; view: { cx: number; cy: number
     <rect x={x} y={y} width={w} height={h} fill={st.palette.paper} />
     <rect x={x} y={y} width={w} height={h} fill="url(#grid)" />
     <rect x={x} y={y} width={w} height={h} filter="url(#fiber)" opacity={st.paper.fiberOpacity} />
+    {st.paper.relief && (<>
+      <defs>
+        <pattern id="relief" width={st.paper.relief.tile} height={st.paper.relief.tile} patternUnits="userSpaceOnUse">
+          <image href={reliefTile(st.paper.relief)} width={st.paper.relief.tile} height={st.paper.relief.tile} preserveAspectRatio="none" />
+        </pattern>
+      </defs>
+      {/* 纸面起伏和斑驳：按世界坐标铺，镜头动时跟着纸走 */}
+      <rect x={x} y={y} width={w} height={h} fill="url(#relief)" opacity={st.paper.relief.opacity} style={{ mixBlendMode: 'soft-light' }} />
+    </>)}
   </svg>
   );
 };
 
 // ---------- 光（屏幕层）：暖光只照纸、压在墨迹下面，墨色不被洗淡；暗角在最上层 ----------
-const Lamp: React.FC<{ w: number; h: number; st: Style }> = ({ w, h, st }) => (
+// 风格 0.7.0：光极慢地变（paper.lampDrift），幅度远低于能察觉「在动」的程度；两个方向用不同周期，不走成一个圈
+const Lamp: React.FC<{ w: number; h: number; st: Style; t: number }> = ({ w, h, st, t }) => {
+  const d = st.paper.lampDrift, ph = d ? (2 * Math.PI * t) / d.period : 0;
+  const cx = 0.22 + (d ? d.shift * Math.sin(ph) : 0), cy = 0.06 + (d ? d.shift * Math.cos(ph * 0.77) : 0), op = st.paper.lampOpacity * (1 + (d ? d.amount * Math.sin(ph * 1.31 + 1) : 0));
+  return (
   <svg width={w} height={h} style={{ position: 'absolute', inset: 0 }}>
     <defs>
-      <radialGradient id="lamp" cx="0.22" cy="0.06" r="0.95">
-        <stop offset="0" stopColor={st.palette.lamp} stopOpacity={st.paper.lampOpacity} />
-        <stop offset="0.55" stopColor={st.palette.lamp} stopOpacity={st.paper.lampOpacity * 0.11} />
+      <radialGradient id="lamp" cx={cx} cy={cy} r="0.95">
+        <stop offset="0" stopColor={st.palette.lamp} stopOpacity={op} />
+        <stop offset="0.55" stopColor={st.palette.lamp} stopOpacity={op * 0.11} />
         <stop offset="1" stopColor={st.palette.lamp} stopOpacity={0} />
       </radialGradient>
     </defs>
     <rect width={w} height={h} fill="url(#lamp)" />
   </svg>
-);
+  );
+};
+// 风格 0.7.0：会动的颗粒（屏幕层）。几张噪声图按帧号轮换、错位，逐帧确定；画面停着的时候也不是一张截图
+const Grain: React.FC<{ w: number; h: number; st: Style; frame: number }> = ({ w, h, st, frame }) => {
+  const g = st.paper.grain;
+  if (!g || !g.opacity) return null;
+  // every：每几帧换一次颗粒（胶片约每秒 24 格；60 帧的片子每帧都换，码率翻一倍，压缩后又几乎看不出来——独立审片）
+  const f = Math.floor(frame / (g.every ?? 1)), k = (f * 7919) % g.tiles, ox = (f * 7907) % 256, oy = (f * 4271) % 256, px = 256 * g.size;
+  return <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${grainTile(k)})`, backgroundSize: `${px}px ${px}px`, backgroundPosition: `${ox * g.size}px ${oy * g.size}px`,
+    imageRendering: 'pixelated', opacity: g.opacity, mixBlendMode: (g.blend ?? 'overlay') as React.CSSProperties['mixBlendMode'], pointerEvents: 'none' }} />;
+};
 const Vignette: React.FC<{ w: number; h: number; st: Style }> = ({ w, h, st }) => (
   <svg width={w} height={h} style={{ position: 'absolute', inset: 0 }}>
     <defs>
@@ -180,6 +243,8 @@ const leadAt = (tl: Timeline, t: number): [string, string] => {
   return [dark, c];
 };
 
+const plateFill = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
+
 // ---------- 主画面 ----------
 export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolean }> = ({ tl, inkMode, showPen = true }) => {
   const frame = useCurrentFrame();
@@ -206,10 +271,10 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
     }).catch((e) => cancelRender(e));
   }, [fontHandle]);
   return (
-    <AbsoluteFill style={{ backgroundColor: paper, overflow: 'hidden' }}>
+    <AbsoluteFill style={{ backgroundColor: paper, overflow: 'hidden', ...(st.grade ? { filter: `contrast(${st.grade.contrast}) saturate(${st.grade.saturate})` } : {}) }}>
       {(tl.audio || tl.narration) && <Html5Audio src={staticFile(tl.audio ?? tl.narration)} />}
       <World cam={cam} view={tl.view}><PaperWorld st={st} cam={cam} view={tl.view} canvas={tl.canvas} /></World>
-      <Lamp w={w} h={h} st={st} />
+      <Lamp w={w} h={h} st={st} t={t} />
       <World cam={cam} view={tl.view}>
         <svg {...worldSvg}>
           <defs>
@@ -253,15 +318,20 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
       </World>
       <Vignette w={w} h={h} st={st} />
       {showPen && <Pencil pose={pencilPose(tl, t, inkMode)} lead={leadAt(tl, t)} />}
+      <Grain w={w} h={h} st={st} frame={frame} />
       {sub && (
         <div style={{
           position: 'absolute', left: tl.sub.cx - tl.sub.width / 2, width: tl.sub.width, top: tl.sub.top - st.subtitle.plate.padY, display: 'flex', justifyContent: 'center',
           opacity: Math.min(sub.join ? 1 : progress(t, sub.t0, sub.t0 + 0.12), sub.joinNext ? 1 : 1 - progress(t, sub.t1 - 0.12, sub.t1)), // 同一句拆出的几张之间不淡出淡入
         }}>
           <div style={{
-            background: st.palette.plate, opacity: st.subtitle.plate.opacity, borderRadius: st.subtitle.plate.radius,
-            padding: `${st.subtitle.plate.padY}px ${st.subtitle.plate.padX}px`, boxShadow: '0 2px 8px rgba(60,42,18,0.10)',
-            font: `${st.subtitle.weight} ${tl.sub.size}px ${st.subtitle.font}`, lineHeight: st.subtitle.lineHeight, color: st.palette.subtitle,
+            // 底板的透明度只给底色（原来给整个元素，字也跟着淡）；风格 0.7.0 去掉底板（opacity 0），改用纸色柔光 glow 把字从方格和墨迹上托出来
+            background: plateFill(st.palette.plate, st.subtitle.plate.opacity), borderRadius: st.subtitle.plate.radius,
+            // feather：底色向四周晕开、没有边（风格 0.7.0）。完全不衬时，镜头大幅移动途中画好的字会从字幕后面滑过、和字幕叠在一起（独立审片 E02 父子对话样片 333s、346s）
+            padding: `${st.subtitle.plate.padY}px ${st.subtitle.plate.padX}px`,
+            boxShadow: st.subtitle.plate.feather ? `0 0 ${st.subtitle.plate.feather}px ${st.subtitle.plate.feather * 0.6}px ${plateFill(st.palette.plate, st.subtitle.plate.opacity)}` : st.subtitle.plate.shadow === false || !st.subtitle.plate.opacity ? 'none' : '0 2px 8px rgba(60,42,18,0.10)',
+            textShadow: (st.subtitle.glow ?? []).map((r) => `0 0 ${r}px ${paper}`).join(', ') || undefined,
+            font: `${st.subtitle.weight} ${tl.sub.size}px ${st.subtitle.font}`, lineHeight: st.subtitle.lineHeight, color: sub.color ?? st.palette.subtitle, // 对话：按说话的人换字幕颜色
             letterSpacing: 1, textAlign: 'center', whiteSpace: 'nowrap',
           }}>{sub.lines.map((l, i) => <div key={i}>{l}</div>)}</div>
         </div>

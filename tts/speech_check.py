@@ -383,7 +383,7 @@ for spk in speakers:
             P6 = campplus.embedding(*sf.read(str(Path(__file__).parent / voices[spk]["ref"]), dtype="float32"))
             ident6 = float(nm(np.mean(ok_c, 0)) @ P6)
             per6 = sorted((float(c @ P6), sp6[k]["text"]) for k, c in enumerate(cam) if c is not None)
-            check(("像这个孩子" if not spk else "像这个人") + who(spk), ident6 >= SS["minIdentity"], f"整集 CAM++ 平均对声音包 {ident6:.3f}（下限 {SS['minIdentity']}；E02 v13 0.58）；最不像的："
+            check(("像这个孩子" if not spk else "像这个人") + who(spk), ident6 >= SS["minIdentity"], f"整集 CAM++ 平均对声音包 {ident6:.3f}（下限 {SS['minIdentity']}{'' if spk else '；E02 v13 0.58'}）；最不像的："
                   + "、".join(f"「{t[:8]}」{v:.2f}" for v, t in per6[:3]))
         L6 = [_lufs(g, ssr6) for g in segs6]
         R6 = [art_rate(w) if w else 0.0 for w in ws6]
@@ -405,7 +405,7 @@ for spk in speakers:
         med6 = float(np.median(pairs)) if pairs else 0.0
         ok6 = not bad6 and med6 <= SS.get("maxMedianTimbre", 9)
         print(f"[{'通过' if ok6 else '建议'}] 相邻两句接得上{who(spk)}：" + (f"{len(bad6)} 处接不上：" + "；".join(f"「{sp6[k]['text'][:8]}」→「{sp6[k + 1]['text'][:8]}」" + "、".join(m) for k, m in bad6[:5]) + "；") * bool(bad6)
-              + f"相邻两句 CAM++ 音色距离中位 {med6:.3f}（上限 {SS.get('maxMedianTimbre', '—')}；E02 v13 0.24）、90% 分位 {np.percentile(pairs, 90) if pairs else 0:.3f}，"
+              + f"相邻两句 CAM++ 音色距离中位 {med6:.3f}（上限 {SS.get('maxMedianTimbre', '—')}{'' if spk else '；E02 v13 0.24'}）、90% 分位 {np.percentile(pairs, 90) if pairs else 0:.3f}，"
               f"响度相邻差最大 {max(abs(a - b) for a, b in zip(L6, L6[1:])):.1f} LU，语速相邻差最大 {max((abs(a / b - 1) for a, b in zip(R6, R6[1:]) if a and b), default=0):.0%}")
         # 整集不越说越偏：后三分之一和前三分之一比（一次配长段时越说越低、越说越快、越说越响就是它）
         n6 = len(sp6); t6 = max(1, n6 // 3)
@@ -422,8 +422,9 @@ for spk in speakers:
                                       (f"响度 {dr_lu:+.1f} LU（上限 ±{SS.get('maxDriftLu')}）", abs(dr_lu) > SS.get("maxDriftLu", 99)),
                                       (f"语速 {dr_rate:+.0%}（上限 ±{SS.get('maxDriftRate', 9):.0%}）", abs(dr_rate) > SS.get("maxDriftRate", 9)),
                                       (f"音色 {dr_cam:.3f}（上限 {SS.get('maxDriftTimbre')}）", dr_cam > SS.get("maxDriftTimbre", 9))] if bad]
-        print(f"[{'通过' if not drift_bad else '建议'}] 整集不越说越偏{who(spk)}：后三分之一比前三分之一：" + ("；".join(drift_bad) if drift_bad else
-              f"音区 {dr_st:+.1f} 半音、响度 {dr_lu:+.1f} LU、语速 {dr_rate:+.0%}、音色（CAM++ 平均）{dr_cam:.3f}"))
+        if n6 >= 15:  # 对话里只说几句的人（爸爸 10 句）拿前后三分之一比没有意义
+            print(f"[{'通过' if not drift_bad else '建议'}] 整集不越说越偏{who(spk)}：后三分之一比前三分之一：" + ("；".join(drift_bad) if drift_bad else
+                  f"音区 {dr_st:+.1f} 半音、响度 {dr_lu:+.1f} LU、语速 {dr_rate:+.0%}、音色（CAM++ 平均）{dr_cam:.3f}"))
 
 rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
 rv = sorted({timing0["sentences"][k]["text"] for k, a, b in sentence_ranges() for t in revoice_at if a - 0.05 <= t <= b + 0.05}) if timing0.get("sentences") else []

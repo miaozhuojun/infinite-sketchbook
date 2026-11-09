@@ -40,9 +40,11 @@ export function sliceFor(tl, f0, f1) {
   const cam = tl.camera.filter((m, i) => i === 0 || m.t0 < tb + eps);
   const f = (a) => a?.slice(f0, f1);
   return {
-    canvas: tl.canvas, fps: tl.fps, view: tl.view, sub: tl.sub, frame: tl.frame, style: st, layers,
+    // 风格只取渲染器读的几项（改混音、关卡级别不该让整片重渲）
+    canvas: tl.canvas, fps: tl.fps, view: tl.view, sub: tl.sub, frame: tl.frame, layers,
+    style: { palette: st.palette, paper: st.paper, grade: st.grade, ink: st.ink, subtitle: st.subtitle, pencil: st.pencil },
     strokes: tl.strokes.map((s, i) => [i, s]).filter(([, s]) => s.t0 < tb + eps),
-    pen: penIdx.map((i) => [i, pen[i], pen[i].kind === 'down' ? tl.strokes[pen[i].stroke].color : null]),
+    pen: penIdx.map((i) => [i, pen[i], pen[i].kind === 'down' ? tl.strokes[pen[i].stroke] : null]), // 落笔段带上那一笔本身（笔画 t0 取整到两位，落笔段没取整，可能差一帧）
     camera: cam, effects: tl.effects.filter((e) => e.t0 < tb + eps),
     subtitles: tl.subtitles.filter((s) => s.t0 <= tb + eps && s.t1 > ta),
     pencil: tl.pencil ? { sway: f(tl.pencil.sway), lift: f(tl.pencil.lift), edge: f(tl.pencil.edge) } : null,
@@ -51,11 +53,12 @@ export function sliceFor(tl, f0, f1) {
   };
 }
 
-// 渲染程序本身：src/ 下的代码、Remotion 版本
+// 渲染程序本身：src/ 下全部代码（含子目录）、这个脚本（入口模板在这里）、装好的依赖版本（字体包、笔画库、React、Remotion 升级都要重渲）
 function engineKey() {
-  const src = fs.readdirSync(path.join(ENGINE, 'src')).sort().map((f) => [f, fs.readFileSync(path.join(ENGINE, 'src', f), 'utf8')]);
-  const ver = JSON.parse(fs.readFileSync(path.join(ENGINE, 'node_modules/@remotion/renderer/package.json'), 'utf8')).version;
-  return sha([src, ver]);
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [[path.relative(ENGINE, path.join(d, e.name)), fs.readFileSync(path.join(d, e.name), 'utf8')]]));
+  const lock = path.join(ENGINE, 'package-lock.json');
+  return sha([walk(path.join(ENGINE, 'src')), fs.readFileSync(fileURLToPath(import.meta.url), 'utf8'), fs.existsSync(lock) ? fs.readFileSync(lock, 'utf8') : '']);
 }
 
 export function plan(tl, { segment = 30, scale = 1, preset = null } = {}) {
@@ -151,7 +154,7 @@ export async function renderSegmented(tlPath, outFile, { audio = null, scale = 1
     fs.rmSync(dir, { recursive: true, force: true });
   }
   // 无损拼接（每段都从关键帧开始、编码参数一样），再配混音：Remotion 整条渲时是 48kHz 立体声 AAC 320k，这里一样；配音比画面短就补静音，长就截到画面长
-  const list = path.join(cache, '_concat.txt');
+  const list = path.join(path.dirname(path.resolve(outFile)), `.${path.basename(outFile)}.concat-${process.pid}.txt`); // 每次运行自己的清单，同一集同时跑两次也不互相覆盖
   fs.writeFileSync(list, segs.map((s) => `file '${file(s)}'`).join('\n'));
   fs.mkdirSync(path.dirname(path.resolve(outFile)), { recursive: true });
   const dur = (tl.durationInFrames / tl.fps).toFixed(6);
@@ -160,7 +163,7 @@ export async function renderSegmented(tlPath, outFile, { audio = null, scale = 1
   fs.rmSync(list);
   // 缓存只留这一次用到的段（上一版没变的段已经在里面了）
   const keep = new Set(segs.map((s) => `${s.hash}.mp4`));
-  for (const f of fs.readdirSync(cache)) if (!keep.has(f)) fs.rmSync(path.join(cache, f), { force: true });
+  for (const f of fs.readdirSync(cache)) if (!keep.has(f) && !f.endsWith('.part.mp4')) fs.rmSync(path.join(cache, f), { force: true }); // .part 可能是另一次运行正在写的
   const fresh = segs.filter((s) => !s.reused);
   fs.writeFileSync(outFile.replace(/\.mp4$/, '') + '.segments.json', JSON.stringify({ id: tl.id, segment, segments: segs.map(({ f0, f1, t0, t1, hash, reused, stale }) => ({ f0, f1, t0, t1, hash, reused, ...(stale ? { stale } : {}) })) }, null, 1));
   log(`分段渲染：${segs.length} 段，新渲 ${fresh.length} 段（${fresh.reduce((n, s) => n + s.t1 - s.t0, 0).toFixed(0)}s 画面），复用 ${segs.length - fresh.length} 段；用时 ${((Date.now() - t0) / 1000).toFixed(0)}s`);

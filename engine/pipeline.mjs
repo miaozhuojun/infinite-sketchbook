@@ -224,7 +224,8 @@ if (libOk && beatsOk && voiceOk && !SAMPLE) {
       R('设备预览', PY_QA, ['qa/device_preview.py', tl, video, path.join(outDir, `preview_${t}.png`)]),
       R('审片联系表', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review'), '--fps', String(fpsOf(tl))]),
       // 增量审片：这次只重渲了一部分段时，另出一份只含新渲那几段的联系表（<画幅>_changed_sheet_*），复审只看它
-      changedRanges(video) ? R('审片联系表（这次改过的段）', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review'), '--fps', String(fpsOf(tl)), '--ranges', changedRanges(video), '--prefix', 'changed']) : null,
+      changedRanges(video) ? R('审片联系表（这次改过的段）', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review'), '--fps', String(fpsOf(tl)), '--ranges', changedRanges(video), '--prefix', 'changed'])
+        : (fs.readdirSync(path.join(outDir, 'review')).filter((f) => f.startsWith(`${t}_changed_sheet_`)).forEach((f) => fs.rmSync(path.join(outDir, 'review', f))), null), // 这次没有「部分重渲」：上一轮的增量联系表删掉，免得审片看旧的
       t === compiled[0] && (beats.quiz || []).length ? R('理解度测试材料', PY_QA, ['qa/comprehension.py', 'pack', beatsPath, tl, video, path.join(outDir, 'comprehension')]) : null,
     ]);
   };

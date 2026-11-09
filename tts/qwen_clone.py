@@ -800,8 +800,33 @@ if os.path.exists(args.out + ".sent.wav"):
 print(f"  {len(sents)} 句里 {n_cached} 句用了缓存，{len(sents) - n_cached} 句新生成")
 sf.write(args.out + ".wav", full, sr)
 
-# 整段再回转核对一遍
-c_all = cer(syl(said_text(args.text)), syl(asr_text(args.out + ".wav")))
+# 整段再回转核对一遍。分块识别：一次识别十分钟的音频，Qwen3-ASR 会整段漏掉（E03 v2：逐句都过，整段识别漏了中间约 90 秒，
+# 错误率 0.105）。在句间停顿正中切成不超过 ASR_CHUNK 秒的几块，块里几句照样拼着识别，句与句的接缝绝大多数仍在块里查得到
+ASR_CHUNK = 30.0
+
+
+def asr_long(path, spans, max_sec=ASR_CHUNK):
+    x_, sr_ = sf.read(path, dtype="float32")
+    if not spans or len(x_) / sr_ <= max_sec:
+        return asr_text(path)
+    cuts, start = [0.0], spans[0]["start"]
+    for a_, b_ in zip(spans, spans[1:]):
+        if b_["end"] - start > max_sec:
+            cut = (a_["end"] + b_["start"]) / 2
+            cuts.append(cut); start = b_["start"]
+    cuts.append(len(x_) / sr_)
+    hyp = []
+    for c0, c1 in zip(cuts, cuts[1:]):
+        tmp = args.out + ".chunk.wav"
+        sf.write(tmp, x_[int(c0 * sr_):int(c1 * sr_)], sr_)
+        try:
+            hyp.append(asr_text(tmp))
+        finally:
+            os.remove(tmp)
+    return "".join(hyp)
+
+
+c_all = cer(syl(said_text(args.text)), syl(asr_long(args.out + ".wav", spans)))
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 # 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡

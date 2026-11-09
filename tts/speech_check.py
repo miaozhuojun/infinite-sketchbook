@@ -322,7 +322,22 @@ check("发声中无断音/爆音", not dropouts and jumps == 0, f"字中间掉�
 if tl.get("audio"):
     asr = load_stt(str(Path(__file__).parent / "models/Qwen3-ASR-0.6B"))
     from voice import read_numbers
-    hyp = said_text(asr.generate(str(root / "public" / tl["audio"]), language="Chinese").text)
+    # 分块识别（qwen_clone.py 的整段回转一样）：十分钟的总混一次识别会整段漏掉（E03 v2 漏了约 90 秒）。
+    # 在旁白片段之间的停顿正中切成不超过 30 秒的几块，块里几句照样拼着识别
+    xm, srm = sf.read(str(root / "public" / tl["audio"]), dtype="float32")
+    clips = sorted(tl["audioClips"], key=lambda c: c["at"])
+    cuts, start = [0.0], clips[0]["at"] if clips else 0.0
+    for a_, b_ in zip(clips, clips[1:]):
+        if b_["at"] + b_["srcOut"] - b_["srcIn"] - start > 30.0:
+            cuts.append((a_["at"] + a_["srcOut"] - a_["srcIn"] + b_["at"]) / 2); start = b_["at"]
+    cuts.append(len(xm) / srm)
+    import tempfile
+    parts = []
+    for c0, c1 in zip(cuts, cuts[1:]):
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tf:
+            sf.write(tf.name, xm[int(c0 * srm):int(c1 * srm)], srm)
+            parts.append(asr.generate(tf.name, language="Chinese").text)
+    hyp = said_text("".join(parts))
     from pypinyin import lazy_pinyin  # 按拼音比：同音字不算错（成/乘），读错的音仍算错
     DIG = str.maketrans("0123456789", "零一二三四五六七八九")
     from voice import read_numbers

@@ -913,9 +913,10 @@ const out = {
     };
     let k = 0; // 轮换到第几个候选位置
     const place = (t0, t1, depth) => {
+      t0 = r2(t0); t1 = r2(t1); // 先按存进时间线的精度取整再查：原来查的是没取整的 t1，存的是取整后的，安全区检查正好在多出来的那几毫秒里撞上内容（E03：118.8s）
       for (let i = 0; i < slots.length; i++) {
         const slot = slots[(k + i) % slots.length];
-        if (!clashes(slot, t0, t1)) return void wm.spans.push({ t0: r2(t0), t1: r2(t1), ...slot });
+        if (!clashes(slot, t0, t1)) return void wm.spans.push({ t0, t1, ...slot });
       }
       if (depth < 2) { const m = (t0 + t1) / 2; place(t0, m, depth + 1); place(m, t1, depth + 1); return; }
       const msg = `水印：${r2(t0)}–${r2(t1)}s 每个候选位置都会压到字幕、平台界面或内容，这一段不加`;

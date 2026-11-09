@@ -36,6 +36,7 @@ ap.add_argument("--no-cache", action="store_true", help="不用已缓存的句�
 ap.add_argument("--reseed", action="append", default=[], help="「句子=偏移」：这一句换个种子重新生成（听出畸变、怪腔调时用；可重复）")
 ap.add_argument("--tone", action="append", default=[], help="「句子=语气」：这一句按哪种语气挑候选（语气名在 voice.json 的 tones 里）")
 ap.add_argument("--turn", action="append", default=[], help="对话里一段话的开头（上一句是别人说的，engine/compiler/speakers.mjs）：不和上一句凑成一段配、挑候选时不和上一句比接不接得上")
+ap.add_argument("--fast", action="store_true", help="样片用：只查念对没有（回转识别）和逐字对齐（时间），不查音质（掉嗓子、破音、语速、背景、回声、沙沙声、音色），一句只要一条候选；精配过的句子直接用精配的缓存，快配的另存一份缓存，不混进精配的")
 ap.add_argument("--mood", action="append", default=[], help="「句子=情绪」：这一句用 voice.json 的 moods 里那段情绪参考音克隆（语气跟着内容变；可重复）")
 args = ap.parse_args()
 
@@ -70,6 +71,12 @@ PACK = voice.get("pack", {})
 BASE_F0, BASE_RATE = PACK.get("baseF0", 0), PACK.get("baseRate", 0)
 # 连贯（VOICE_PIPELINE.md「连贯」）：候选打分时加上「和上一句接不接得上」，PREV 是上一句选定那条的句尾音高和语速
 FLOW = voice.get("flow") if CANDS > 1 else None
+# 缓存键按精配的参数算（--fast 下面会把这几项关掉，键不能跟着变，不然找不到精配过的句子）
+KEY_CANDS, KEY_ECHO, KEY_FLOW = CANDS, MAX_ECHO, FLOW
+FAST = args.fast
+if FAST:  # 样片：只留念对、对齐、时长合理、没有掉音这几项，音质的关卡都不查
+    FLOOR = GEN_FLOOR = GEN_BAK = MAX_FLAT = MAX_ECHO = 0
+    NO_BREAKS, RATE, CANDS, FLOW = False, {}, 1, None
 PREV = {}
 if GEN_BAK:
     from dnsmos import score as dnsmos_score
@@ -409,9 +416,9 @@ reseed = {k.strip(): int(v) for k, v in (r.rsplit("=", 1) for r in args.reseed)}
 TURN = {t.strip() for t in args.turn}  # 对话：这几句是一段话的开头，前面是别人在说
 seed_of = lambda sent: args.seed + reseed.get(sent.strip(), 0) * args.max_tries  # 偏移按「整轮重试」跳，不和原来那轮的种子重叠
 # 候选 1 条时缓存键和原来一样（老缓存照用）；多条时还要看语气、语气目标和声音包的基准，任何一样变了都重挑
-cache_key = lambda sent: hashlib.sha1(json.dumps([sent, ref_for(sent)["sig"], ref_for(sent)["text"], TTS_MODEL, args.temperature, seed_of(sent), args.max_tries]
-                                                 + ([CANDS, tone_of(sent), TONES.get(tone_of(sent), {}), BASE_F0, BASE_RATE, MAX_ECHO] if CANDS > 1 else [])
-                                                 + ([FLOW] if FLOW else []), ensure_ascii=False).encode()).hexdigest()  # 加了连贯打分以后旧缓存不再算数
+cache_key = lambda sent, fast=None: hashlib.sha1(json.dumps([sent, ref_for(sent)["sig"], ref_for(sent)["text"], TTS_MODEL, args.temperature, seed_of(sent), args.max_tries]
+                                                 + ([KEY_CANDS, tone_of(sent), TONES.get(tone_of(sent), {}), BASE_F0, BASE_RATE, KEY_ECHO] if KEY_CANDS > 1 else [])
+                                                 + ([KEY_FLOW] if KEY_FLOW else []) + (["fast"] if (FAST if fast is None else fast) else []), ensure_ascii=False).encode()).hexdigest()  # 加了连贯打分以后旧缓存不再算数
 stray = [t for t in mood_of if t not in {x.strip() for x in sents}]
 if stray:
     raise SystemExit("--mood 里这些不是旁白稿里的一整句：" + "；".join(stray))
@@ -474,6 +481,12 @@ if CHUNK.get("maxSentences", 1) > 1:
             continue
         text = "".join(sents[k] for k in g)
         ckey = os.path.join(CACHE, "chunk-" + cache_key(text))
+        if FAST:  # 样片：精配过的段直接用；段里每句都精配过就逐句用精配的，不另配一段
+            full_c = os.path.join(CACHE, "chunk-" + cache_key(text, False))
+            if os.path.exists(full_c + ".wav") and os.path.exists(full_c + ".json"):
+                ckey = full_c
+            elif all(os.path.exists(os.path.join(CACHE, cache_key(sents[k], False)) + ".wav") for k in g):
+                continue
         res = None
         if not args.no_cache and os.path.exists(ckey + ".wav") and os.path.exists(ckey + ".json"):
             a_, s_ = sf.read(ckey + ".wav", dtype="float32"); m_ = json.load(open(ckey + ".json", encoding="utf-8"))
@@ -503,7 +516,7 @@ if CHUNK.get("maxSentences", 1) > 1:
             if os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk"):
                 continue
             # 一段一起配只按整段验收：切出来的每一句再按成片旁白检查的口径验一遍（语速、硬切按句量），不过的这一句单独配
-            if (lb := line_defects(take[0], take[1], take[4], voice)):
+            if not FAST and (lb := line_defects(take[0], take[1], take[4], voice)):
                 print(f"    整段切出来的第 {k + 1} 句{'、'.join(lb)}，这一句单独配")
                 continue
             pre[k] = take
@@ -522,9 +535,13 @@ for i, sent in enumerate(sents):
         print(f"  第 {i + 1}/{len(sents)} 句（种子 {seed}，{len(audio) / sr:.2f}s）：{note}  {sent}")
         continue
     fb_mark = os.path.join(CACHE, cache_key(sent)) + ".fallback"
-    if FALLBACK and sent.strip() not in mood_of and os.path.exists(fb_mark):
+    fb_full = os.path.join(CACHE, cache_key(sent, False)) + ".fallback"
+    if FALLBACK and sent.strip() not in mood_of and (os.path.exists(fb_mark) or FAST and os.path.exists(fb_full)):
         mood_of[sent.strip()] = FALLBACK
     key = os.path.join(CACHE, cache_key(sent))
+    full_key = os.path.join(CACHE, cache_key(sent, False))
+    if FAST and not args.no_cache and os.path.exists(full_key + ".wav") and os.path.exists(full_key + ".json"):
+        key = full_key  # 样片：这句精配过，直接用精配的那条
     cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
     if cached and FLOOR and pitch_drops(*sf.read(key + ".wav", dtype="float32"), GEN_FLOOR):
         print(f"  缓存里的「{sent}」掉嗓子，重新生成")  # 缓存是在加这项检查之前生成的，不能直接信
@@ -539,7 +556,7 @@ for i, sent in enumerate(sents):
             print(f"  缓存里的「{sent}」有破音，重新生成")
             cached = False
         # 拼好后换种子也配不出来、留了原来那条的句子（.postfail，种子没变）不再按这几项扔掉重配：同样的种子再试也是同样的结果，交给成片旁白检查点名、流水线换种子
-        elif not (os.path.exists(key + ".postfail") and json.load(open(key + ".postfail", encoding="utf-8")).get("seed") == json.load(open(key + ".json", encoding="utf-8")).get("seed")) \
+        elif not FAST and not (os.path.exists(key + ".postfail") and json.load(open(key + ".postfail", encoding="utf-8")).get("seed") == json.load(open(key + ".json", encoding="utf-8")).get("seed")) \
                 and (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
             print(f"  缓存里的「{sent}」{'、'.join(lb)}（成片旁白检查会点名），重新生成")
             cached = False
@@ -652,6 +669,8 @@ def assemble():
 # 吞字要和成片旁白检查一个口径：拿整段所有字的响度中位数做参照（单句里看不出来），所以拼好后再查一遍，有字偏弱的句子换下一个种子重配
 for rnd in range(4):
     full, words, spans = assemble()
+    if FAST:
+        break  # 样片不为字偏弱重配
     _, weak = weak_chars(full, sr, [{"text": w["text"], "t0": w["start"], "t1": w["end"]} for w in words])
     bad = sorted({words[k]["sent"] for k, _ in weak})
     if not bad:
@@ -672,7 +691,7 @@ for rnd in range(4):
 # 拼好后在整段上按成片旁白检查的口径再查一遍（一段一起配的声音切开、对齐响度以后，个别卡在线上的会冒出来；E02 v4「定在5」破音），
 # 查出来的句子单独换种子重配，最多 3 轮——不用人去成片里找、手动换种子
 # 也查成片旁白检查要查的其余几项（掉嗓子用成片的下限、每句回声）：E02 v4 有一句生成时过了、拼好后掉嗓子 139Hz，一句回声 122ms
-FINAL_ECHO = voice.get("maxEcho", 0)
+FINAL_ECHO = 0 if FAST else voice.get("maxEcho", 0)
 def assembled_defects(full, spans, words):
     bad = {}
     for t_, j in (pitch_breaks(full, sr) if NO_BREAKS else []):
@@ -725,7 +744,7 @@ if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
 
 # 每句都是同一个人：按句生成时每句是单独采样的，音色会一句一句地飘，听着像几个人你一句我一句（用户听 E01 v15）。
 # 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，最多 3 轮；还不够就留最像的那条
-MIN_CONS = voice.get("takeMinConsistency", 0)
+MIN_CONS = 0 if FAST else voice.get("takeMinConsistency", 0)
 if MIN_CONS:
     embs = [None] * len(sents)
     best_c = {}
@@ -783,11 +802,13 @@ c_all = cer(syl(said_text(args.text)), syl(asr_text(args.out + ".wav")))
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 # 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡
-if c_all > 0.005:
+if c_all > 0.005 and FAST:
+    print(f"  整段回转拼音错误率 {c_all:.3f}（样片不拦，精配时再查）")
+elif c_all > 0.005:
     raise SystemExit(f"整段回转拼音错误率 {c_all:.3f}（逐句都通过，但拼起来后识别有出入），需要人工检查")
 # 音色一致性：和真人录音质心比，防止参考音或模型改动让音色悄悄漂移
 sim = similarity(spk, full, sr, voice)
-ok = sim >= voice["minSimilarity"]
+ok = sim >= voice["minSimilarity"] or FAST  # 样片只报数，不拦
 print(f"[{'通过' if ok else '失败'}] 音色一致性：与真人录音相似度 {sim:.3f}（下限 {voice['minSimilarity']}）")
 if not ok:
     raise SystemExit("音色和真人录音差得太多，可能参考音或模型被改动，需要人工处理")

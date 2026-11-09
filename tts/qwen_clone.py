@@ -819,8 +819,10 @@ def asr_long(path, spans, max_sec=ASR_CHUNK):
     for c0, c1 in zip(cuts, cuts[1:]):
         tmp = args.out + ".chunk.wav"
         sf.write(tmp, x_[int(c0 * sr_):int(c1 * sr_)], sr_)
-        hyp.append(asr_text(tmp))
-        os.remove(tmp)
+        try:
+            hyp.append(asr_text(tmp))
+        finally:
+            os.remove(tmp)
     return "".join(hyp)
 
 

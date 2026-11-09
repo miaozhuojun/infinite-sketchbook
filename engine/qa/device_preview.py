@@ -20,7 +20,9 @@ W, H = tl["canvas"]["w"], tl["canvas"]["h"]
 
 # 关键帧：每句话画完的时刻（取 3 个有代表性的：前段、中段、结尾全景）
 ends = [p["drawEnd"] for p in tl["report"]["phrases"]]
-picks = sorted({ends[len(ends) // 4], ends[len(ends) * 2 // 3], tl["duration"] - 0.6})
+# 有片尾参考资料卡时，结尾全景取卡片出现前（卡片盖住整张纸）
+body_end = tl["endCard"]["t0"] if tl.get("endCard") else tl["duration"]
+picks = sorted({ends[len(ends) // 4], ends[len(ends) * 2 // 3], body_end - 0.6})
 
 
 def grab(t):

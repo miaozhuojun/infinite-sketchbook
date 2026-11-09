@@ -103,7 +103,8 @@ try {
     });
     // 全片最后一帧（整张纸）：看全局版式、片尾停在哪
     const lastPng = path.join(dir, 'last.png');
-    jobs.push({ comp, frame: tl.durationInFrames - 1, out: lastPng });
+    // 有片尾参考资料卡时，取卡片出现前的最后一帧（卡片盖住整张纸，看不到全局）
+    jobs.push({ comp, frame: tl.endCard ? Math.max(0, Math.round(tl.endCard.t0 * tl.fps) - 1) : tl.durationInFrames - 1, out: lastPng });
     manifest.targets.push({ target: t.target, timeline: t.timeline, canvas: tl.canvas, duration: tl.duration, chapters: tl.chapters ?? [], problems: t.problems, advice: t.advice, endsDir: path.join(dir, 'end'), lastPng, phrases });
   }
   console.log(`… 渲染 ${jobs.length} 张静帧`);

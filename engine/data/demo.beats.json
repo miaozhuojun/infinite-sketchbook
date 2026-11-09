@@ -8,6 +8,7 @@
   "objectives": ["能说出 1+1=2、2+2=4"],
   "note": "引擎自带的演示分镜，也是 CI 和检查器自测的基线。配音由 qa/fixtures/demo/make_demo.py 用提示音合成，不是人声，也不是作品"
  },
+ "endCard": { "sec": 2, "lines": ["片尾附言：分镜 endCard.lines 写的几行，接在参考资料后面"] },
  "narration": {
   "script": "我们来做加法。1加1等于2。2加2等于4。",
   "audio": "audio/demo.wav",

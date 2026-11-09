@@ -221,6 +221,7 @@
   ]
  },
 
+ "endCard": { "sec": 5, "fade": 0.6, "size": 36, "title": "参考资料", "note": "片尾参考资料卡：正片说完后单独停 sec 秒，列出分镜 facts 的 cite 和 endCard.lines；size 是 1080 短边下的字号，条目超过 7 条按比例缩小" },
  "narrative": {
   "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2, "termWithin": 3, "termWithinNote": "写稿自查（compiler/script_checks.mjs）：新词、新例子第一次说到以后，最多隔几句就要讲清（brief.terms 的 explain、bridge）" },
   "segment": { "requireRoles": [], "minQuiz": 0 },

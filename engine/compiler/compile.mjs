@@ -843,7 +843,7 @@ for (const p of report.phrases) {
 const SILENT = M.maxSilentWrite ?? 3;
 for (const p of report.phrases) {
   const s = (p.drawEnd ?? 0) - (p.audioEnd ?? 0);
-  if (s > SILENT) flag('sync.silent', `「${p.text.slice(0, 16)}」说完后笔还要写 ${r2(s)}s（上限 ${SILENT}s）：观众在静音里看笔补写。把画分到前一句、拆句，或加半句旁白`);
+  if (s > SILENT) flag('sync.silent', `「${p.text.slice(0, 16)}」说完后还要等画面 ${r2(s)}s（笔在写、在走或等镜头；上限 ${SILENT}s）：观众在静音里看笔补写。把画分到前一句、拆句，或加半句旁白`);
 }
 // 叙事节奏（完整一集）：钩子要在开头几秒内出现，两个顿悟之间不能隔太久
 const NR = style.narrative[beats.kind] || {};

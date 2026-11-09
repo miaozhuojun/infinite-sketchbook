@@ -135,13 +135,15 @@ if (libOk && beatsOk && voiceOk) {
   // 混音 → 旁白检查，在渲染之前（草稿也跑）。旁白检查查的是混音写出的成片旁白（tl.narration）和总混（tl.audio），加上源配音和时间线，
   // 一项都不看画面，所以混完就能查。原来排在渲染后面：E03 内容定稿后每次退回都是配音问题，每轮重配都要再等一次二十分钟的渲染
   const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
-  const speechLock = makeLock(); // 旁白检查要载配音、识别模型，几个画幅一个一个查
+  // 混音一个一个混（几个画幅共用同一个重采样的源配音 build/<id>.src48k.wav，同时混会读到写了一半的文件）；旁白检查要载配音、识别模型，也一个一个查
+  const mixLock = makeLock(), speechLock = makeLock();
   const pre = Object.fromEntries(compiled.map((t) => [t, []]));
   const speechFailed = [];
   await Promise.all(compiled.map(async (t) => {
     const tl = `build/${beats.id}-${t}.timeline.json`, L = pre[t];
-    if (!await runAsync(`[${t}] 混音`, PY_QA, ['audio/mix.py', tl], {}, L)) return;
+    if (!await mixLock(() => runAsync(`[${t}] 混音`, PY_QA, ['audio/mix.py', tl], {}, L))) return;
     if (noSpeech) return skip(`[${t}] 旁白检查`, noSpeech, L);
+    fs.rmSync(`build/${beats.id}-${t}.timeline.revoice.json`, { force: true }); // 旁白检查中途崩了不会写也不会删它，别拿上一轮的点名去重配
     if (!await speechLock(() => runAsync(`[${t}] 旁白检查`, PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' }, L))) speechFailed.push(t);
   }));
   for (const t of compiled) stages.push(...pre[t]);

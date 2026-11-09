@@ -151,9 +151,9 @@ export function scriptIssues(beats, style) {
   return issues;
 }
 
-// 以前被听错过的说法：tts/misheard.json（本机私有，配音试满都没过时 qwen_clone.py 自动追加）；没有时读仓库里的 misheard.example.json。
-// TTS_MISHEARD 指定别的文件（自测用）
+// 以前被听错过的说法：仓库里的 tts/misheard.example.json 加上本机私有的 tts/misheard.json（配音试满都没过时 qwen_clone.py 自动追加）。
+// TTS_MISHEARD 只读指定的那个文件（自测用）
 function misheard() {
-  const f = process.env.TTS_MISHEARD ?? ['../../tts/misheard.json', '../../tts/misheard.example.json'].map((r) => new URL(r, import.meta.url)).find((u) => fs.existsSync(u));
-  try { return f ? JSON.parse(fs.readFileSync(f, 'utf8')).pairs ?? [] : []; } catch { return []; }
+  const files = process.env.TTS_MISHEARD ? [process.env.TTS_MISHEARD] : ['../../tts/misheard.example.json', '../../tts/misheard.json'].map((r) => new URL(r, import.meta.url));
+  return files.filter((f) => fs.existsSync(f)).flatMap((f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')).pairs ?? []; } catch { return []; } });
 }

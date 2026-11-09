@@ -225,8 +225,10 @@ def note_misheard(sent):
     heard, n = hyps.most_common(1)[0]
     said = said_text(sent)
     risky = [said[i1:i2] for op, i1, i2, _, _ in difflib.SequenceMatcher(None, said, heard, autojunk=False).get_opcodes() if op in ("replace", "delete")]
-    src = MISHEARD if os.path.exists(MISHEARD) else MISHEARD.replace(".json", ".example.json")
-    data = json.load(open(src, encoding="utf-8")) if os.path.exists(src) else {"pairs": []}
+    data = json.load(open(MISHEARD, encoding="utf-8")) if os.path.exists(MISHEARD) else {"pairs": []}
+    example = MISHEARD.replace(".json", ".example.json")
+    if any(q.get("said") == sent.strip() and q.get("heard") == heard for q in json.load(open(example, encoding="utf-8")).get("pairs", [])) if os.path.exists(example) else False:
+        return
     if any(q.get("said") == sent.strip() and q.get("heard") == heard for q in data["pairs"]):
         return
     data["pairs"].append({"said": sent.strip(), "heard": heard, "risky": risky, "date": time.strftime("%Y-%m-%d")})
@@ -293,7 +295,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
             print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
-            if c > 0:
+            if c > 0 and abs(len(hs) - len(rs)) <= 1:  # 开头串进多余字的那种（只多出字）不算听错
                 HEARD.setdefault(text, []).append(hyp)
             continue
         audio = soften_edges(trim_edges(audio, sr), sr)
@@ -358,7 +360,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     if best:
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
-    raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
+    raise SystemExit(f"「{text}」连续 {args.max_tries} 次没有一条全部关卡都过（回转识别、掉嗓子、破音、硬切、语速……原因见上面每个种子那一行），需要人工处理（改写难读的词、拆短，或换参考音）")
 
 
 def split_synth(sent, seed0, pause=0.25, strict=False):
@@ -536,7 +538,9 @@ for i, sent in enumerate(sents):
         elif NO_BREAKS and pitch_breaks(x_c, sr_c):
             print(f"  缓存里的「{sent}」有破音，重新生成")
             cached = False
-        elif (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
+        # 拼好后换种子也配不出来、留了原来那条的句子（.postfail，种子没变）不再按这几项扔掉重配：同样的种子再试也是同样的结果，交给成片旁白检查点名、流水线换种子
+        elif not (os.path.exists(key + ".postfail") and json.load(open(key + ".postfail", encoding="utf-8")).get("seed") == json.load(open(key + ".json", encoding="utf-8")).get("seed")) \
+                and (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
             print(f"  缓存里的「{sent}」{'、'.join(lb)}（成片旁白检查会点名），重新生成")
             cached = False
         elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO * 1.05:

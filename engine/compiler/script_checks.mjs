@@ -8,6 +8,8 @@
 //                explain 是旁白里讲清它的那半句，bridge（新例子）是把它和前面熟悉的例子接上的那半句；
 //   facts[].from（kind: example 的示意数值）：{ "4": "天黑最要紧，给它4", … }——每个数在旁白里交代它从哪来的那半句；
 //   brief.payoff（可选）：片中回收开场小故事的那半句，回收句和开场没有共用三个字以上时写。
+// 另有一条查配音风险（script.tts，不用写字段）：很短的问句，和含有以前被听错过的字的句子（tts/misheard.json）。
+import fs from 'node:fs';
 import { strip } from './validate.mjs';
 
 const CN = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -133,5 +135,25 @@ export function scriptIssues(beats, style) {
       if (unknown.length) add('script.next', `phrases[${nexts.find(([p]) => sentOf(p.text) === k)?.[1] ?? nexts[0][1]}]`, `预告的问题里「${unknown.join('」「')}」前面没讲过：留给下一集的问题，用这一集讲过的东西来问（只把「怎么做到」留下）`);
     }
   }
+  // 5. 配音容易出错的句子（E03：内容定稿后每轮退回都是配音问题，两句爸爸的短问句被听错）：写稿时就提醒，改说法或定稿前单听这几句
+  const SHORT_Q = style.tts?.shortQuestionMax ?? 5;
+  sents.forEach((s, k) => {
+    const n = strip(s).length;
+    if (/[？?]$/.test(s.trim()) && n <= SHORT_Q) add('script.tts', `narration.script ${quote(k)}`, `只有 ${n} 个字的问句：配音容易念含糊、句末掉下去，回转识别也容易听错（E03「那，拧哪个？」听成「那您哪个」）。把问的东西说全（「那该拧哪一个旋钮？」），或者定稿前单听这一句`);
+  });
+  const byNeedle = new Map();
+  for (const p of misheard()) for (const w of (p.risky?.length ? p.risky : [strip(p.said ?? '')]).filter(Boolean)) {
+    const hit = sents.map((s, k) => [s, k]).filter(([s]) => strip(s).includes(w)).map(([, k]) => k);
+    if (hit.length && !byNeedle.has(w)) byNeedle.set(w, [p, hit]);
+  }
+  for (const [w, [p, hit]] of byNeedle)
+    add('script.tts', 'narration.script', `「${w}」以前被听错过（「${p.said}」听成「${p.heard}」${p.from ? `，${p.from}` : ''}），这一集 ${hit.length} 句有它：${hit.slice(0, 4).map(quote).join('、')}${hit.length > 4 ? ' 等' : ''}。能换说法就换，换不了的定稿前单听`);
   return issues;
+}
+
+// 以前被听错过的说法：tts/misheard.json（本机私有，配音试满都没过时 qwen_clone.py 自动追加）；没有时读仓库里的 misheard.example.json。
+// TTS_MISHEARD 指定别的文件（自测用）
+function misheard() {
+  const f = process.env.TTS_MISHEARD ?? ['../../tts/misheard.json', '../../tts/misheard.example.json'].map((r) => new URL(r, import.meta.url)).find((u) => fs.existsSync(u));
+  try { return f ? JSON.parse(fs.readFileSync(f, 'utf8')).pairs ?? [] : []; } catch { return []; }
 }

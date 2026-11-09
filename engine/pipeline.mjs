@@ -2,7 +2,8 @@
 // 三层分工：每期只写数据（data/<id>.beats.json）；组件库（library/）和风格规范（style/style.json）可增长、有测试；
 // 这里的关卡固定不变：能自动修的在各步骤内修（切点、限速、字号、避让、配音重试），修不了的写进报告，精确到元素和数值，进程以非零退出。
 // 用法：node pipeline.mjs data/<id>.beats.json [--targets 9x16,16x9,1x1] [--out out/<目录>]（默认 out/<id>）[--draft]
-// --draft：改稿时用，只配音、编译、查时间线（铅笔、安全区），不混音不渲染，几十秒出结果；定稿再去掉 --draft 跑全量
+// --draft：改稿时用，配音、编译、查时间线（铅笔、安全区）、混音、旁白检查都跑（点名的句子自动换种子重配），只是不渲染、不做要看画面的检查；
+// 旁白检查过了再去掉 --draft 整片渲染一次。定稿时旁白检查也在渲染之前跑，没过就不渲染
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -125,39 +126,62 @@ if (libOk && beatsOk && voiceOk && !branded) skip('水印、版权信息与存�
 if (libOk && beatsOk && voiceOk) {
   const compiled = targets.filter((t) => run(`[${t}] 编译（时间线、版面、镜头）`, 'node', ['compiler/compile.mjs', beatsPath, '--target', t]));
   spawnSync('node', ['compiler/gen-compositions.mjs']);
-  if (DRAFT) {
-    for (const t of compiled) {
-      const tl = `build/${beats.id}-${t}.timeline.json`;
-      run(`[${t}] 铅笔与运笔检查`, 'node', ['qa/pencil_check.mjs', tl]);
-      run(`[${t}] 平台安全区检查`, 'node', ['qa/safezone_check.mjs', tl]);
-    }
-    skip('混音、渲染、画面检查、旁白检查、预览与审片材料', '草稿模式（--draft）');
+  // 只看时间线的检查（铅笔、安全区）不用等渲染，编译完就查，草稿和定稿都跑
+  for (const t of compiled) {
+    const tl = `build/${beats.id}-${t}.timeline.json`;
+    run(`[${t}] 铅笔与运笔检查`, 'node', ['qa/pencil_check.mjs', tl]);
+    run(`[${t}] 平台安全区检查`, 'node', ['qa/safezone_check.mjs', tl]);
   }
+  // 混音 → 旁白检查，在渲染之前（草稿也跑）。旁白检查查的是混音写出的成片旁白（tl.narration）和总混（tl.audio），加上源配音和时间线，
+  // 一项都不看画面，所以混完就能查。原来排在渲染后面：E03 内容定稿后每次退回都是配音问题，每轮重配都要再等一次二十分钟的渲染
+  const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
+  const speechLock = makeLock(); // 旁白检查要载配音、识别模型，几个画幅一个一个查
+  const pre = Object.fromEntries(compiled.map((t) => [t, []]));
+  const speechFailed = [];
+  await Promise.all(compiled.map(async (t) => {
+    const tl = `build/${beats.id}-${t}.timeline.json`, L = pre[t];
+    if (!await runAsync(`[${t}] 混音`, PY_QA, ['audio/mix.py', tl], {}, L)) return;
+    if (noSpeech) return skip(`[${t}] 旁白检查`, noSpeech, L);
+    if (!await speechLock(() => runAsync(`[${t}] 旁白检查`, PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' }, L))) speechFailed.push(t);
+  }));
+  for (const t of compiled) stages.push(...pre[t]);
+  const mixed = compiled.filter((t) => pre[t][0]?.ok);
+  // 自动换种子重配：旁白检查点名了掉嗓子、破音、硬切、语速不对的句子（<时间线>.revoice.json），就给这几句换种子重配，
+  // 重新编译、混音、再查，最多两轮，都在渲染之前。配音按句缓存，只有点名的句子重配；配音那边拼好后已经查过一遍，
+  // 成片旁白（重采样、插停顿、片段淡入淡出）上偶尔还会查出来（E02 v5）
+  const round = Number(process.env.PIPE_REVOICE ?? 0);
+  const revoice = [...new Set(speechFailed.flatMap((t) => { const f = `build/${beats.id}-${t}.timeline.revoice.json`; return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; }))];
+  if (revoice.length && round < 2 && PY_MLX) {
+    const f = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath))) + '.autoreseed.json';
+    const auto = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+    for (const sent of revoice) auto[sent] = Math.max(auto[sent] ?? 0, beats.narration.reseed?.[sent] ?? 0) + 1;
+    fs.writeFileSync(f, JSON.stringify(auto, null, 1));
+    console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切或语速不对），换种子重配、重新混音再查，不渲染（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
+    const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, PIPE_REVOICE: String(round + 1) } });
+    process.exit(r.status ?? 1);
+  }
+  const renderable = mixed.filter((t) => !speechFailed.includes(t));
+  if (DRAFT) skip('渲染、画面检查、预览与审片材料', '草稿模式（--draft）：配音、编译、时间线检查、混音和旁白检查都跑了，只是不渲染');
+  else if (speechFailed.length) skip('渲染、画面检查、预览与审片材料', `旁白检查没通过（${speechFailed.join('、')}${round ? `，自动换种子重配 ${round} 轮后` : ''}）：先按上面的旁白检查改稿或在分镜里写 reseed，用 --draft 跑到旁白检查通过，再整片渲染`);
   // 各画幅一条链同时跑：渲染一次只渲一个（renderLock），一个画幅渲完做检查时，下一个画幅已经在渲了
   const renderLock = makeLock(), bookLock = makeLock();
   const chain = async (t, L) => {
     const id = `${beats.id}-${t}`, tl = `build/${id}.timeline.json`, video = path.join(outDir, `${t}.mp4`);
     const R = (name, cmd, args, opts) => runAsync(`[${t}] ${name}`, cmd, args, opts, L);
-    if (!await R('混音', PY_QA, ['audio/mix.py', tl])) return;
     if (!await renderLock(() => R('渲染', 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', ...(GL ? [`--gl=${GL}`] : [])]))) return;
     if (branded) await bookLock(() => R('版权信息与存证', PY_QA, ['qa/provenance.py', beatsPath, tl, video]));
-    // 旁白检查每个画幅都跑：各画幅的旁白是分别拼、分别混的（用户在横版里听出的畸变，原来只查竖版）
-    const noSpeech = beats.narration.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
     // 成片出来以后的检查互不依赖，一起跑
     await Promise.all([
       R('画面检查', PY_QA, ['qa/qa.py', tl, video, id]),
-      R('铅笔与运笔检查', 'node', ['qa/pencil_check.mjs', tl]),
-      R('平台安全区检查', 'node', ['qa/safezone_check.mjs', tl]),
       R('设备预览', PY_QA, ['qa/device_preview.py', tl, video, path.join(outDir, `preview_${t}.png`)]),
       R('审片联系表', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review')]),
-      noSpeech ? skip(`[${t}] 旁白检查`, noSpeech, L) : R('旁白检查', PY_MLX, ['speech_check.py', path.resolve(tl), path.resolve('.')], { cwd: '../tts' }),
       t === compiled[0] && (beats.quiz || []).length ? R('理解度测试材料', PY_QA, ['qa/comprehension.py', 'pack', beatsPath, tl, video, path.join(outDir, 'comprehension')]) : null,
     ]);
   };
   const lists = Object.fromEntries(compiled.map((t) => [t, []]));
-  await Promise.all((DRAFT ? [] : compiled).map((t) => chain(t, lists[t])));
+  await Promise.all((DRAFT || speechFailed.length ? [] : renderable).map((t) => chain(t, lists[t])));
   // 报告里按画幅、按步骤的固定顺序排（同时跑时完成先后不定）
-  const ORDER = ['混音', '渲染', '版权信息与存证', '画面检查', '铅笔与运笔检查', '平台安全区检查', '设备预览', '审片联系表', '旁白检查', '理解度测试材料'];
+  const ORDER = ['渲染', '版权信息与存证', '画面检查', '设备预览', '审片联系表', '理解度测试材料'];
   const rank = (s) => ORDER.findIndex((k) => s.name.endsWith(`] ${k}`));
   for (const t of compiled) stages.push(...lists[t].sort((a, b) => rank(a) - rank(b)));
 }
@@ -212,17 +236,4 @@ lines.push('## 接下来（程序判断不了的）',
 fs.writeFileSync(path.join(outDir, 'report.md'), lines.join('\n'));
 fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify({ id: beats.id, targets, ok: !failed.length, skipped: skipped.map((s) => s.name), stages }, null, 1));
 console.log(`\n${failed.length ? '✗' : '✓'} ${verdict}，报告：${path.join(outDir, 'report.md')}`);
-// 自动换种子重配：没过的只有旁白检查，且它点名了掉嗓子、破音、硬切、语速不对的句子（<时间线>.revoice.json），就给这几句换种子、整条重跑，最多两轮。
-// 配音那边拼好后已经查过一遍，可成片旁白（重采样、插停顿、片段淡入淡出）上偶尔还会查出来（E02 v5），原来要人手动写 reseed 再跑
-const round = Number(process.env.PIPE_REVOICE ?? 0);
-const revoice = [...new Set(targets.flatMap((t) => { const f = `build/${beats.id}-${t}.timeline.revoice.json`; return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; }))];
-if (failed.length && revoice.length && round < 2 && PY_MLX && failed.every((s) => s.name.includes('旁白检查'))) {
-  const f = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath))) + '.autoreseed.json';
-  const auto = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
-  for (const sent of revoice) auto[sent] = Math.max(auto[sent] ?? 0, beats.narration.reseed?.[sent] ?? 0) + 1;
-  fs.writeFileSync(f, JSON.stringify(auto, null, 1));
-  console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切或语速不对），换种子重配后整条重跑（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
-  const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, PIPE_REVOICE: String(round + 1) } });
-  process.exit(r.status ?? 1);
-}
 process.exit(failed.length ? 1 : 0);

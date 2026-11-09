@@ -29,6 +29,7 @@ tts/models/
 tts/ref/
 tts/out/
 tts/voice.json
+tts/misheard.json
 # 从私人录音里切参考片段的一次性脚本（含录音里的时间点），只留在本机
 tts/analyze_ref.py
 tts/build_refs.py

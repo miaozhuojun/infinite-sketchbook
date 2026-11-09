@@ -15,6 +15,7 @@ export type PenSeg =
 export type Effect = { id: string; type: 'glow'; cx: number; cy: number; r: number; color: string; t0: number; t1: number; t2?: number; t3?: number; rays?: number[] };
 export type Cam = { x: number; y: number; z: number };
 export type CamMove = { t0: number; t1: number; from: Cam; to: Cam; focus?: string[]; curve?: 'glide'; accel?: number }; // focus：推近镜头的焦点元素；curve：glide 是片尾长镜头的匀速曲线；accel：加速段占几成（style.motion.easeAccel）
+export type EndCard = { t0: number; t1: number; fade: number; title: string; refs: string[]; lines: string[]; size: number; titleSize: number };
 export type Timeline = {
   id: string; canvas: { w: number; h: number; fps: number }; fps: number; durationInFrames: number; duration: number;
   narration: string; audio?: string; strokes: Stroke[]; penTrack: PenSeg[]; effects: Effect[];
@@ -23,6 +24,8 @@ export type Timeline = {
   camera: CamMove[]; view: { cx: number; cy: number };
   pencil?: { sway: number[]; lift: number[]; edge?: number[] }; // 编译器预算并平滑好的铅笔姿态曲线（逐帧）；edge = 避开边缘/字幕的转角
   sub: { cx: number; top: number; size: number; width: number };
+  frame: { l: number; t: number; r: number; b: number }; // 取景框（屏幕坐标，平台界面以内）
+  endCard?: EndCard; // 片尾参考资料卡（分镜 facts 写了 cite 时自动生成）
   watermark?: Watermark; // 本机配置了品牌（brand.local.json）时才有
   chapters?: { title: string; t: number }[]; // 分镜里写了节名时才有：每节的起点（秒），发布时填进各平台的章节功能
 };

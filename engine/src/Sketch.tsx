@@ -246,6 +246,26 @@ const leadAt = (tl: Timeline, t: number): [string, string] => {
 const plateFill = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
 
 // ---------- 主画面 ----------
+
+// ---------- 片尾参考资料卡（屏幕层）：正片说完后整张纸色底淡入，取景框里列出这一集的资料和附言（timeline.endCard） ----------
+const EndCardLayer: React.FC<{ tl: Timeline; t: number }> = ({ tl, t }) => {
+  const c = tl.endCard;
+  if (!c || t < c.t0) return null;
+  const st = tl.style, f = tl.frame, k = progress(t, c.t0, c.t0 + c.fade);
+  return (
+    <div style={{ position: 'absolute', inset: 0, background: st.palette.paper, opacity: k }}>
+      <div style={{
+        position: 'absolute', left: f.l + (f.r - f.l) * 0.08, width: (f.r - f.l) * 0.84, top: f.t + (f.b - f.t) * 0.1, height: (f.b - f.t) * 0.8,
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: c.size * 0.55, color: st.palette.ink, font: `${st.subtitle.weight} ${c.size}px ${st.subtitle.font}`, lineHeight: 1.35,
+      }}>
+        <div style={{ fontSize: c.titleSize }}>{c.title}</div>
+        {c.refs.map((r, i) => <div key={i} style={{ paddingLeft: c.size * 1.2, textIndent: -c.size * 1.2 }}>{`${i + 1}. ${r}`}</div>)}
+        {c.lines.map((l, i) => <div key={`l${i}`} style={{ color: st.palette.accent, marginTop: i ? 0 : c.size * 0.4 }}>{l}</div>)}
+      </div>
+    </div>
+  );
+};
+
 export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolean }> = ({ tl, inkMode, showPen = true }) => {
   const frame = useCurrentFrame();
   const t = frame / tl.fps;
@@ -261,10 +281,10 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
     return [...m.entries()].filter(([, list]) => list.length);
   }, [tl]);
   // 字幕字体必须真正加载成功（不能悄悄回退到系统字体）：等待加载，失败就让渲染直接报错
-  const [fontHandle] = React.useState(() => (tl.subtitles.length || tl.watermark ? delayRender('加载字幕字体') : null));
+  const [fontHandle] = React.useState(() => (tl.subtitles.length || tl.watermark || tl.endCard ? delayRender('加载字幕字体') : null));
   React.useEffect(() => {
     if (fontHandle === null) return;
-    const spec = `${st.subtitle.weight} ${tl.sub.size}px "${st.subtitle.fontFamily}"`, sample = tl.subtitles.map((x) => x.text).join('') + (tl.watermark?.text ?? '');
+    const spec = `${st.subtitle.weight} ${tl.sub.size}px "${st.subtitle.fontFamily}"`, sample = tl.subtitles.map((x) => x.text).join('') + (tl.watermark?.text ?? '') + (tl.endCard ? [tl.endCard.title, ...tl.endCard.refs, ...tl.endCard.lines].join('') : '');
     document.fonts.load(spec, sample).then((faces) => {
       if (!faces.length || !document.fonts.check(spec, sample)) cancelRender(new Error(`字幕字体「${st.subtitle.fontFamily}」没有加载成功`));
       else continueRender(fontHandle);
@@ -336,6 +356,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
           }}>{sub.lines.map((l, i) => <div key={i}>{l}</div>)}</div>
         </div>
       )}
+      <EndCardLayer tl={tl} t={t} />
       <WatermarkLayer tl={tl} t={t} />
     </AbsoluteFill>
   );

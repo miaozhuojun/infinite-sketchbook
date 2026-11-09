@@ -781,7 +781,21 @@ for (const s of strokes) {
   }
 }
 
-const end = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold) + PEN.tail;
+const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold) + PEN.tail;
+// 片尾参考资料卡：正片说完以后单独停几秒，列出这一集用到的资料（facts 的 cite，按第一次出现的顺序去重），
+// 再加分镜 endCard.lines 里的几行（比如讲义怎么领）。每一集都有：写了 cite 就自动生成；endCard: false 关掉。
+// 卡片是屏幕层（不随镜头），整张纸色底盖住画面，画在取景框里（不进平台界面）。字号按画幅短边算
+const endCard = (() => {
+  const EC = style.endCard ?? {}, B = beats.endCard ?? {};
+  if (beats.endCard === false) return null;
+  const refs = [...new Set((beats.facts ?? []).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])))];
+  const lines = B.lines ?? [];
+  if (!refs.length && !lines.length) return null;
+  const sec = B.sec ?? EC.sec ?? 5, k = Math.min(TGT.w, TGT.h) / 1080, n = refs.length + lines.length;
+  const size = Math.round((EC.size ?? 36) * k * (n > 7 ? 7 / n : 1));
+  return { t0: r2(endBody), t1: r2(endBody + sec), fade: EC.fade ?? 0.6, title: B.title ?? EC.title ?? '参考资料', refs, lines, size, titleSize: Math.round(size * 1.5) };
+})();
+const end = endCard ? endCard.t1 : endBody;
 // 离场：写完最后一笔，抬笔沿压过内容最少的方向出画，最后整支笔都在画外（审片 v9：原来按世界坐标往右上挪 1200，
 // 16x9 镜头拉远后推不出画面，笔扫过算式和灯，停在右缘直到片尾）。候选方向不往下走，免得划过字幕
 const exitTo = (() => {
@@ -868,7 +882,7 @@ chapters.forEach((c, i) => {
 const out = {
   id: OUT_ID, target: targetName, canvas: { w: TGT.w, h: TGT.h, fps: FPS }, fps: FPS, durationInFrames: Math.ceil(end * FPS), duration: r2(end),
   narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
-  subtitles, chapters, style: styleSubset(style),
+  subtitles, chapters, style: styleSubset(style), ...(endCard ? { endCard } : {}),
   platforms: TGT.platforms, platformUI: Object.fromEntries(TGT.platforms.map((pf) => [pf, style.platformUI[pf]])),
   report: { ...report, problems, advice, fixes },
 };

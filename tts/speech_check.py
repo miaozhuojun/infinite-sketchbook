@@ -236,7 +236,10 @@ if voice.get("flowBaseline"):
 #     「拧（nǐng）」念成 níng 也照样写回「拧」，拼音比对查不出声调错（用户听 E03 样片：前半段有读错的）
 from tone_check import check as tone_check_run
 xs5, ssr5 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
-print("\n".join(tone_check_run(xs5, ssr5, timing0, Path(__file__).parent / "readings.json", who)[1]))
+try:
+    print("\n".join(tone_check_run(xs5, ssr5, timing0, Path(__file__).parent / "readings.json", who)[1]))
+except Exception as e:  # 只给建议的检查，自己出错也不能把旁白检查拦下
+    print(f"[建议] 声调检查没跑成：{e!r}")
 
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))

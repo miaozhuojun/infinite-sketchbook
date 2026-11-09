@@ -167,12 +167,16 @@ export function scriptIssues(beats, style) {
         n++;
         const j = drawnAt.get(a.target);
         if (j === undefined) continue;
-        const sec = chars.slice(j + 1, i).reduce((x, y) => x + y, 0) / RATE + (j < i ? chars[i] / 2 / RATE : 0);
+        // 从目标画下的那个词（它的 at）念到回描的那个词，按字数估秒数
+        const tj = beats.phrases[j], aj = (tj.actions ?? []).find((x) => x.id === a.target), tx = strip(tj.text ?? '');
+        const rest = j < i ? tx.length - Math.max(0, tx.indexOf(strip(aj?.at ?? ''))) : 0;
+        const upto = Math.max(0, strip(p.text ?? '').indexOf(strip(a.at ?? '')));
+        const sec = (rest + chars.slice(j + 1, i).reduce((x, y) => x + y, 0) + (j < i ? upto : 0)) / RATE;
         const recent = sec < RECENT, inView = chapterOf[j] === chapterOf[i] && !(p.revisit ?? []).length;
         if (!recent && (!inView || p.role === 'aha')) continue;
         flagged++;
-        add('script.retrace', `phrases[${i}].${a.id}`, `回描「${a.target}」（「${(p.caption ?? p.text ?? '').slice(0, 12)}」）：` + (recent ? `它${j === i ? '就是这句画的' : `约 ${sec.toFixed(0)} 秒前刚画`}` : '它是这一节画的，正在画面里') +
-          `，再描一遍只是重复。回描只用在两处：指回镜头外、前面画过的旧东西（换了节或回看），或顿悟那一步（role: aha）描出要总结的东西。别的删掉，让笔停一下、镜头静一会儿就好`);
+        add('script.retrace', `phrases[${i}].${a.id}`, `回描「${a.target}」（「${(p.caption ?? p.text ?? '').slice(0, 12)}」）：` + (recent ? `它${j === i ? '就是这句画的' : `约 ${Math.floor(sec)} 秒前刚画`}` : '它是这一节画的，正在画面里') +
+          (p.role === 'aha' ? '：顿悟句也一样，刚画完的东西观众还看着，推近把它框进来就够了，不用再描' : '，再描一遍只是重复。回描只用在两处：指回镜头外、前面画过的旧东西（换了节或回看），或顿悟那一步（role: aha）描出前面画的、要总结的东西。别的删掉，让笔停一下、镜头静一会儿就好'));
       }
     });
     if (flagged > 3) add('script.retrace', 'phrases', `这一集 ${n} 处回描，${flagged} 处是重复（上面逐条列了）`);

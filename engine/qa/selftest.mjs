@@ -432,9 +432,10 @@ const speechAdvice = (name, mutate, mustSay) => (noSpeech ? skip(name, noSpeech)
   if (!pick) return skip(name, '基线里没有出现够多、走势又一致的字');
   const [, ch, t] = pick[0].split('|');
   const own = JSON.parse(fs.readFileSync('../tts/readings.json', 'utf8'));
-  fs.writeFileSync(rd, JSON.stringify({ ...own, chars: { ...own.chars, [ch]: `a${{ 1: 3, 2: 4, 3: 1, 4: 2 }[t]}` } }));
+  const wrong = { 1: 3, 2: 4, 3: 1, 4: 2 }[t];
+  fs.writeFileSync(rd, JSON.stringify({ ...own, chars: { ...own.chars, [ch]: `a${wrong}` } }));
   const r = tone(['--readings', rd]), out = (r.stdout || '') + (r.stderr || '');
-  record(name, out.includes(`「${ch}」`) && out.includes('整集一直念得不像'), out);
+  record(name, new RegExp(`整集一直念得不像${wrong}声[^\\n]*「${ch}」（该念 a${wrong}`).test(out), out);
   for (const f of [j, rd]) fs.rmSync(f, { force: true });
 })();
 speechCase('整集的嗓子都低了 12%（像换了个大一点的孩子；Qwen3 的「音色一致性」看不出来）', sameSpeakerSrc(`

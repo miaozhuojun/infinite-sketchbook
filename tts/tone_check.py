@@ -35,7 +35,8 @@ def _to_mark(t3):
 
 
 def load_readings(path):
-    """readings.json：{"chars": {"拧": "ning3"}, "phrases": {"还得": ["hai2", "dei3"]}}；拼音库标错的读法登记在这里。"""
+    """注意：load_single_dict / load_phrases_dict 改的是整个进程共用的拼音库，同一进程里后面的拼音比对（speech_check 的可懂度）也按登记的读法注音。
+    readings.json：{"chars": {"拧": "ning3"}, "phrases": {"还得": ["hai2", "dei3"]}}；拼音库标错的读法登记在这里。"""
     from pypinyin import load_phrases_dict, load_single_dict
     if not path or not Path(path).exists():
         return {}
@@ -186,6 +187,8 @@ def check(x, sr, timing, readings=None, label=lambda sp: ""):
     rep = report(classify(syllables(x, sr, timing)))
     lines = []
     ok = not rep["systematic"] and not rep["single"]
+    if not rep["judged"]:
+        return rep, ["[建议] 声调：一个字都没判（逐字时间里没有句子，或句子都对不上），没查"]
     head = f"[{'通过' if ok else '建议'}] 声调：判了 {rep['judged']} 个字，走势和该念的声调一致约 {rep['accuracy']:.0%}（语流里分声调本来就粗，二三声最易混，只报明显的）"
     lines.append(head)
     for s in rep["systematic"]:

@@ -710,6 +710,16 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   p.actions.push({ id: '_late', type: 'text', at: a0.at, text: '这一行字太长了来不及跟上旁白', x: 490, y: 1300, size: 72 });
 }, compileNoFix(TGT), /说完后才起笔|和本句旁白重叠/, { advice: true });
 
+// 说完了还在写（sync.silent，默认只给建议）：一句话后面挂一大段字，旁白说完很久笔还在写（E03 v2：静音里补写 6 秒）
+// 判定只认被注入的那一句（基线自己有别的句子报这一项也不算抓到）；私有配置可能把它升成 hard，所以建议、问题都认（any）
+{
+  const p0 = beatsSrc.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1);
+  const head = (p0?.text ?? '').slice(0, 16).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  expectBeats('一句说完后笔还要写很久（静音里补写）', (b) => {
+    const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), a0 = p.actions[0];
+    p.actions.push({ id: '_silent', type: 'text', at: a0.at, text: '这是一行写起来很费时间的长长长长的字', x: 490, y: 1300, size: 72, ahead: true });
+  }, compileNoFix(TGT), new RegExp(`「${head}」说完后还要等画面`), { any: true });
+}
 // 配音风险（script.tts，只给建议）：很短的问句、含以前被听错过的字的句子（E03 两句爸爸的短问句被听错）。注入的句子和听错记录都自己带
 // 回描（script.retrace，只给建议）：刚画完、就在画面里的东西又描一遍（E03 样片 28 句 36 处回描，用户：太多了）。注入：一句不是顿悟的句子，回描它自己刚画的东西
 expectBeats('写稿自查：回描这句刚画的东西（重复，不是指回旧东西，也不是顿悟）', (b) => {

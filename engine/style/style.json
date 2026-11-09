@@ -8,7 +8,7 @@
   "narrative.roles": "advice", "narrative.quiz": "advice", "narrative.hook": "advice", "narrative.ahaGap": "advice",
   "type.scale": "advice", "type.minCjk": "advice", "type.minScreen": "advice", "layout.textGap": "advice", "layout.shapeGap": "advice",
   "camera.ahaPush": "advice", "camera.ahaNoZoomOut": "advice", "camera.ahaCentered": "advice", "framing.shapeCut": "advice",
-  "sync.trail": "advice", "sync.lag": "advice", "pace.pause": "advice",
+  "sync.trail": "advice", "sync.lag": "advice", "sync.silent": "advice", "pace.pause": "advice",
   "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
   "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
   "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice", "script.retrace": "advice"
@@ -78,6 +78,7 @@
   "travelBase": 0.12,
   "cameraMove": [0.7, 0.35],
   "maxLag": 1.5,
+  "maxSilentWrite": 3.0,
   "maxPause": 2.5,
   "maxPauseNonAha": 1.5,
   "textOverlapMin": 0.5,

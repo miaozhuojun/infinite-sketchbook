@@ -41,13 +41,14 @@ def write_sheets(items, out_dir, stem="sheet", note=""):
         tw = SHEET_W // cols
         th = round(first.height * tw / first.width)
         rows = -(-len(its) // cols)
-        # 不满一行时按用到的列数收窄（标题条至少 800 宽，放得下节名和句号）
-        img = Image.new("RGB", (max(min(cols, len(its)) * tw, 800), HEAD + rows * th), "white")
-        d = ImageDraw.Draw(img)
-        d.rectangle([0, 0, img.width, HEAD], fill="#222")
         part = f"（{j}/{n}）" if n > 1 else ""
         head = f"{title}{part}  ·  " if title else ""
-        d.text((10, 7), f"{head}第 {its[0]['n']}–{its[-1]['n']} 句  ·  每句说完画完那一刻{note}", fill="white", font=TITLE)
+        head = f"{head}第 {its[0]['n']}–{its[-1]['n']} 句  ·  每句说完画完那一刻{note}"
+        # 不满一行时按用到的列数收窄，但标题条要放得下整行标题（节名长、只有一两格时不截字）
+        img = Image.new("RGB", (max(min(cols, len(its)) * tw, round(TITLE.getlength(head)) + 20), HEAD + rows * th), "white")
+        d = ImageDraw.Draw(img)
+        d.rectangle([0, 0, img.width, HEAD], fill="#222")
+        d.text((10, 7), head, fill="white", font=TITLE)
         for i, it in enumerate(its):
             im = Image.open(it["png"]).convert("RGB").resize((tw, th), Image.LANCZOS)
             x, y = (i % cols) * tw, HEAD + (i // cols) * th

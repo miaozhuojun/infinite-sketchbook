@@ -87,6 +87,8 @@ elif cmd == "pack":
         else:
             import imageio_ffmpeg
             subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1", "-vf", "scale=540:-1", str(f)], check=True)
+            if not f.exists():  # -ss 落在最后一帧之后时 ffmpeg 不报错、也不出图
+                sys.exit(f"第 {i + 1} 句在 {t:.3f}s 截不到帧（{video} 比时间线短？），理解度材料不全")
         lines.append((i, tl["report"]["phrases"][i]["at"], f"{i + 1}. 旁白：「{text}」 → 画面：frames/{f.name}"))
     (out / "questions.json").write_text(json.dumps([{"id": i + 1, "q": q["q"]} for i, q in enumerate(quiz)], ensure_ascii=False, indent=1))
     # 按节分组：每看完一节先写这一节讲了什么、哪里没跟上，再往下看——一次看完全部再答题，跳得太快的地方察觉不到

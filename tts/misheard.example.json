@@ -1,0 +1,23 @@
+{
+ "note": "配音容易听错的说法。said 是稿子里的句子，heard 是回转识别（或人耳）听成的说法，risky 是 said 里被听错的字。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）提醒含 risky 的句子。本机另有 misheard.json（不进仓库），两份都读；配音时一句试满都没过、回转识别至少两次听成同一个说法，qwen_clone.py 自动追加一条。",
+ "pairs": [
+  {
+   "said": "那，拧哪个？",
+   "heard": "那您哪个",
+   "risky": [
+    "拧"
+   ],
+   "date": "2026-11-09",
+   "from": "E03"
+  },
+  {
+   "said": "往哪边拧？",
+   "heard": "往哪边去",
+   "risky": [
+    "拧"
+   ],
+   "date": "2026-11-09",
+   "from": "E03"
+  }
+ ]
+}

@@ -688,6 +688,49 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   p.actions.push({ id: '_late', type: 'text', at: a0.at, text: '这一行字太长了来不及跟上旁白', x: 490, y: 1300, size: 72 });
 }, compileNoFix(TGT), /说完后才起笔|和本句旁白重叠/, { advice: true });
 
+// 配音风险（script.tts，只给建议）：很短的问句、含以前被听错过的字的句子（E03 两句爸爸的短问句被听错）。注入的句子和听错记录都自己带
+expectBeats('写稿自查：只有几个字的问句（配音容易念含糊、被听错）', (b) => {
+  b.narration.script = `${b.narration.script}嘎嘣呢？`;
+}, validate, /「嘎嘣呢？」.*只有 3 个字的问句/, { advice: true });
+{
+  const f = path.resolve('build/_selftest.misheard.json');
+  fs.writeFileSync(f, JSON.stringify({ pairs: [{ said: '咕噜转一圈。', heard: '骨路转一圈', risky: ['咕噜'] }] }));
+  process.env.TTS_MISHEARD = f;
+  expectBeats('写稿自查：句子里有以前被听错过的字（tts/misheard.json）', (b) => {
+    b.narration.script = `${b.narration.script}它咕噜咕噜地转。`;
+  }, validate, /「咕噜」以前被听错过.*1 句有它/, { advice: true });
+  delete process.env.TTS_MISHEARD;
+  fs.rmSync(f, { force: true });
+}
+// 配音逐句验收（tts/voice.py 的 line_defects，qwen_clone.py 每个候选、退路、缓存复查和整段切出来的句子都用它）：
+// 掉嗓子、破音、硬切、语速离目标超过 maxDev，各造一条合成音，每条都要被点名，干净的那条不能被点名。阈值是 voice.json 的写法，这里给一份固定的
+if (SKIP.has('speech') || !PY_MLX) skip('配音逐句验收：掉嗓子、破音、硬切、语速（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
+else {
+  const r = spawnSync(PY_MLX, ['-c', `
+import sys, json, numpy as np
+sys.path.insert(0, '.')
+from voice import line_defects, soften_edges
+sr = 24000; sil = np.zeros(int(0.2 * sr))
+V = {"pitchFloorHz": 200, "takeNoBreaks": True, "rate": {"target": 4.0, "maxDev": 0.1, "minChars": 3}}
+def voiced(f):  # 按逐帧频率合成，带一个二次谐波，像人声一样有基频
+    ph = 2 * np.pi * np.cumsum(f) / sr
+    return 0.3 * np.sin(ph) + 0.15 * np.sin(2 * ph)
+flat = lambda hz, d: np.full(int(d * sr), float(hz))
+soft = lambda x: np.concatenate([sil, soften_edges(x, sr, 30), sil])
+W = lambda n, d: [{"text": "字", "start": i * d / n, "end": (i + 1) * d / n} for i in range(n)]
+cases = {
+  "干净": line_defects(soft(voiced(flat(300, 1))), sr, W(4, 1), V),
+  "硬切": line_defects(np.concatenate([sil, voiced(flat(300, 1)), sil]), sr, W(4, 1), V),
+  "掉嗓子": line_defects(soft(voiced(flat(120, 1))), sr, W(4, 1), V),
+  "破音": line_defects(soft(voiced(np.r_[flat(300, 0.5), flat(750, 0.08), flat(300, 0.5)])), sr, W(4, 1.08), V),
+  "语速": line_defects(soft(voiced(flat(300, 1))), sr, W(6, 1), V),
+}
+print(json.dumps(cases, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts' });
+  let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
+  const ok = got['干净']?.length === 0 && ['硬切', '掉嗓子', '破音', '语速'].every((k) => got[k]?.some((m) => m.startsWith(k)));
+  record('配音逐句验收：掉嗓子、破音、硬切、语速（单元检查）', ok, (r.stdout || '') + (r.stderr || ''));
+}
+
 // ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------
 {
   const r = spawnSync('node', ['qa/ink_check.mjs', '--old'], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');

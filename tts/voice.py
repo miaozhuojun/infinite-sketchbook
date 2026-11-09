@@ -339,6 +339,26 @@ def art_rate(words, gap_cap=0.12):
     return sum(len(w["text"]) for w in ws) / max(t, 0.3)
 
 
+def line_defects(x, sr, words, voice, floor_hz=None):
+    """一句配音会被成片旁白检查点名、要换种子重配的几项：掉嗓子、破音、硬切、语速（speech_check.py 0b、0j、0k、0l，同一套函数、同一套阈值）。
+    配音生成时每个候选、退路和缓存复查都拿它验收，坏句子在生成时就换种子，不等到混音后的旁白检查（E03 内容定稿后每轮退回都是这几类）。
+    words 是这一句的逐字时间（相对这一句）；floor_hz 默认这个声音的 pitchFloorHz，生成时传更严的 GEN_FLOOR。返回问题描述的列表，空 = 都过"""
+    out = []
+    floor = voice.get("pitchFloorHz", 0) if floor_hz is None else floor_hz
+    if floor and (d := pitch_drops(x, sr, floor)):
+        out.append("掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in d) + f"（下限 {floor:.0f}Hz）")
+    if voice.get("takeNoBreaks") and (b := pitch_breaks(x, sr)):
+        out.append("破音 " + "、".join(f"{t:.2f}s 跳 {j:.0f} 半音" for t, j in b))
+    if (h := hard_edges(x, sr)):
+        out.append("硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in h))
+    R = voice.get("rate") or {}
+    if R.get("target") and sum(len(w["text"]) for w in words) >= R.get("minChars", 3):
+        r = art_rate(words)
+        if abs(r / R["target"] - 1) > R.get("maxDev", 0.10):
+            out.append(f"语速 {r:.2f} 字/秒（目标 {R['target']}，最多差 {R.get('maxDev', 0.10):.0%}）")
+    return out
+
+
 # ---------- 变速不变调（旁白检查自测的注入用它造「换了个嗓子」的声音；VOICE_PIPELINE.md「像同一个人」） ----------
 def stretch(x, rate, sr, frame=0.03, tol=0.012):
     """WSOLA 变速不变调：rate > 1 变快（时长 ÷ rate），< 1 变慢。frame 秒汉宁窗、半帧重叠，每帧在 ±tol 秒里找和上一帧接得最顺的位置。

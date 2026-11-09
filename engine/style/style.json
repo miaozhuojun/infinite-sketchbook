@@ -11,7 +11,7 @@
   "sync.trail": "advice", "sync.lag": "advice", "pace.pause": "advice",
   "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
   "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
-  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice"
+  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice"
  },
 
  "palette": {

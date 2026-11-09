@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -209,6 +209,31 @@ asr_text = lambda path: said_text(asr.generate(path, language="Chinese").text)
 # 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
 # 「这就叫机器学习。」几乎全是 j/q/x，浊音谱平坦度天生偏高，30 多个种子都在 0.09 以上；原来每次跑都扔掉重配、再退回同一条，一次三分钟
 FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
+# 配音容易听错的说法（tts/misheard.json，本机私有；没有时从 misheard.example.json 起头）：一句试满都没过、回转识别至少两次听成同一个说法，
+# 就把「稿子 / 听成 / 听错的字」追加进去。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）以后提醒含这些字的句子。
+# E03：「那，拧哪个？」听成「那您哪个」，「往哪边拧？」听成「往哪边去」
+MISHEARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "misheard.json")
+HEARD = {}  # 句子 → 这次各个种子回转识别没对上时听成的说法
+
+
+def note_misheard(sent):
+    import difflib
+    from collections import Counter
+    hyps = Counter(HEARD.get(sent, []))
+    if not hyps or hyps.most_common(1)[0][1] < 2:
+        return
+    heard, n = hyps.most_common(1)[0]
+    said = said_text(sent)
+    risky = [said[i1:i2] for op, i1, i2, _, _ in difflib.SequenceMatcher(None, said, heard, autojunk=False).get_opcodes() if op in ("replace", "delete")]
+    data = json.load(open(MISHEARD, encoding="utf-8")) if os.path.exists(MISHEARD) else {"pairs": []}
+    example = MISHEARD.replace(".json", ".example.json")
+    if any(q.get("said") == sent.strip() and q.get("heard") == heard for q in json.load(open(example, encoding="utf-8")).get("pairs", [])) if os.path.exists(example) else False:
+        return
+    if any(q.get("said") == sent.strip() and q.get("heard") == heard for q in data["pairs"]):
+        return
+    data["pairs"].append({"said": sent.strip(), "heard": heard, "risky": risky, "date": time.strftime("%Y-%m-%d")})
+    json.dump(data, open(MISHEARD, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    print(f"  记进 misheard.json：「{sent.strip()}」回转识别 {n} 次听成「{heard}」，写稿自查以后提醒含「{'」「'.join(risky)}」的句子")
 
 
 def synth_sentence(text, seed0, R, strict=False, tone=None):
@@ -270,11 +295,17 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
             print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
+            if c > 0 and abs(len(hs) - len(rs)) <= 1:  # 开头串进多余字的那种（只多出字）不算听错
+                HEARD.setdefault(text, []).append(hyp)
             continue
         audio = soften_edges(trim_edges(audio, sr), sr)
         rel = align(audio, sr, text)
         if squashed(rel):
             print(f"    种子 {seed}：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
+            continue
+        # 硬切（成片旁白检查 0k 的同一条规则）：原来只在拼好后和成片里查，这里先挡掉，退路里也就不会有
+        if (he := hard_edges(audio, sr)):
+            print(f"    种子 {seed}：硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in he) + "，换种子重来")
             continue
         bk = None
         if GEN_BAK and (bk := bak_of(audio, sr)) < GEN_BAK:
@@ -310,6 +341,14 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         return pick
     if strict:
         raise SystemExit(f"「{text}」{args.max_tries} 次里没有全部关卡都过的候选")
+    # 退路也要过成片旁白检查会点名的几项（voice.py 的 line_defects：掉嗓子、破音、硬切、语速离目标不超过 maxDev），过不了宁可再试一轮种子：
+    # 原来语速退路收下离目标差 12% 的一条（成片检查上限 10%），E03 定稿后一句句在渲染完的成片里被点名
+    usable = lambda q: not line_defects(q[0], q[1], q[4], voice, GEN_FLOOR)
+    if best_rate and not usable(best_rate[1]):
+        print(f"    最接近语速目标的种子 {best_rate[1][2]} 也差 {best_rate[0]:.0%}，超过成片旁白检查的上限 {RATE.get('maxDev', 0.10):.0%}，不用它")
+        best_rate = None
+    best_flat = best_flat if best_flat and usable(best_flat[1]) else None
+    best = best if best and usable(best) else None
     if best_rate:
         print(f"    {args.max_tries} 次里没有一条语速在目标 ±{RATE.get('takeTol', 0.08):.0%} 里，用最接近的种子 {best_rate[1][2]}（差 {best_rate[0]:.0%}）")
         return best_rate[1]
@@ -321,7 +360,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     if best:
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
-    raise SystemExit(f"「{text}」连续 {args.max_tries} 次未通过回转检查，需要人工处理（改写难读的词，或换参考音）")
+    raise SystemExit(f"「{text}」连续 {args.max_tries} 次没有一条全部关卡都过（回转识别、掉嗓子、破音、硬切、语速……原因见上面每个种子那一行），需要人工处理（改写难读的词、拆短，或换参考音）")
 
 
 def split_synth(sent, seed0, pause=0.25, strict=False):
@@ -461,8 +500,13 @@ if CHUNK.get("maxSentences", 1) > 1:
             continue
         for k, take in zip(g, parts):
             # 这一句拼好后查出过破音、已经单独重配过（.nochunk 标记），就用单独配的那条
-            if not os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk"):
-                pre[k] = take
+            if os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk"):
+                continue
+            # 一段一起配只按整段验收：切出来的每一句再按成片旁白检查的口径验一遍（语速、硬切按句量），不过的这一句单独配
+            if (lb := line_defects(take[0], take[1], take[4], voice)):
+                print(f"    整段切出来的第 {k + 1} 句{'、'.join(lb)}，这一句单独配")
+                continue
+            pre[k] = take
         joined.update(k for k in g[:-1] if k in pre and k + 1 in pre)
 
 for i, sent in enumerate(sents):
@@ -494,6 +538,11 @@ for i, sent in enumerate(sents):
         elif NO_BREAKS and pitch_breaks(x_c, sr_c):
             print(f"  缓存里的「{sent}」有破音，重新生成")
             cached = False
+        # 拼好后换种子也配不出来、留了原来那条的句子（.postfail，种子没变）不再按这几项扔掉重配：同样的种子再试也是同样的结果，交给成片旁白检查点名、流水线换种子
+        elif not (os.path.exists(key + ".postfail") and json.load(open(key + ".postfail", encoding="utf-8")).get("seed") == json.load(open(key + ".json", encoding="utf-8")).get("seed")) \
+                and (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
+            print(f"  缓存里的「{sent}」{'、'.join(lb)}（成片旁白检查会点名），重新生成")
+            cached = False
         elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO * 1.05:
             print(f"  缓存里的「{sent}」有回声，重新生成")
             cached = False
@@ -520,12 +569,17 @@ for i, sent in enumerate(sents):
             audio, sr, seed, note, rel, bk = res
         else:
             if not FALLBACK or sent.strip() in mood_of:
+                note_misheard(sent)
                 raise SystemExit(f"「{sent}」试满 {(1 + voice.get('extraRounds', 0)) * args.max_tries} 次都没过，拆成两半也不行，需要人工处理")
             print(f"  「{sent}」用默认参考音 {args.max_tries} 次都没过，改用「{FALLBACK}」参考音")
             open(fb_mark, "w").write(FALLBACK)
             mood_of[sent.strip()] = FALLBACK
             key = os.path.join(CACHE, cache_key(sent))
-            audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
+            try:
+                audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
+            except SystemExit:
+                note_misheard(sent)
+                raise
             note = (note + "；" if note else "") + f"自动换「{FALLBACK}」参考音"
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
@@ -657,6 +711,7 @@ if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
             res = make_take(sents[i], takes[i][2] + 1, strict=True)
             if not res:
                 gave_up.add(i)
+                note_misheard(sents[i])
                 json.dump({"seed": takes[i][2], "defects": defects[i]}, open(post_key(i), "w", encoding="utf-8"), ensure_ascii=False)
                 print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res

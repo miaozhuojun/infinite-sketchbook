@@ -788,12 +788,17 @@ const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOvervie
 const endCard = (() => {
   const EC = style.endCard ?? {}, B = beats.endCard ?? {};
   if (beats.endCard === false) return null;
-  const refs = [...new Set((beats.facts ?? []).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])))];
-  const lines = B.lines ?? [];
+  const refs = [...new Set((beats.facts ?? []).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])).map(String))];
+  const lines = (B.lines ?? []).map(String);
   if (!refs.length && !lines.length) return null;
-  const sec = B.sec ?? EC.sec ?? 5, k = Math.min(TGT.w, TGT.h) / 1080, n = refs.length + lines.length;
-  const size = Math.round((EC.size ?? 36) * k * (n > 7 ? 7 / n : 1));
-  return { t0: r2(endBody), t1: r2(endBody + sec), fade: EC.fade ?? 0.6, title: B.title ?? EC.title ?? '参考资料', refs, lines, size, titleSize: Math.round(size * 1.5) };
+  const sec = Math.max(1, B.sec ?? EC.sec ?? 5), k = Math.min(TGT.w, TGT.h) / 1080;
+  // 字号：按折行后的总行数放得下取景框（卡片排在取景框宽 84%、高 80% 里，行高 1.35，条目间距 0.55 行；半角字约半个字宽）
+  const F = TGT.frame, boxW = (F.r - F.l) * 0.84, boxH = (F.b - F.t) * 0.8, items = [...refs.map((r, i) => `${i + 1}. ${r}`), ...lines];
+  const width = (t) => [...t].reduce((a, c) => a + (c.charCodeAt(0) < 256 ? 0.55 : 1), 0);
+  const need = (sz) => (refs.length ? 1.5 * 1.35 + 0.55 : 0) + items.reduce((a, t) => a + Math.ceil((width(t) * sz) / (boxW - sz * 1.2)) * 1.35 + 0.55, 0);
+  let size = Math.round((EC.size ?? 36) * k);
+  while (size > 16 && need(size) * size > boxH) size--;
+  return { t0: r2(endBody), t1: r2(endBody + sec), fade: EC.fade ?? 0.6, title: refs.length ? B.title ?? EC.title ?? '参考资料' : B.title ?? '', refs, lines, size, titleSize: Math.round(size * 1.5) };
 })();
 const end = endCard ? endCard.t1 : endBody;
 // 离场：写完最后一笔，抬笔沿压过内容最少的方向出画，最后整支笔都在画外（审片 v9：原来按世界坐标往右上挪 1200，

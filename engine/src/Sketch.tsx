@@ -258,7 +258,7 @@ const EndCardLayer: React.FC<{ tl: Timeline; t: number }> = ({ tl, t }) => {
         position: 'absolute', left: f.l + (f.r - f.l) * 0.08, width: (f.r - f.l) * 0.84, top: f.t + (f.b - f.t) * 0.1, height: (f.b - f.t) * 0.8,
         display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: c.size * 0.55, color: st.palette.ink, font: `${st.subtitle.weight} ${c.size}px ${st.subtitle.font}`, lineHeight: 1.35,
       }}>
-        <div style={{ fontSize: c.titleSize }}>{c.title}</div>
+        {c.title && <div style={{ fontSize: c.titleSize }}>{c.title}</div>}
         {c.refs.map((r, i) => <div key={i} style={{ paddingLeft: c.size * 1.2, textIndent: -c.size * 1.2 }}>{`${i + 1}. ${r}`}</div>)}
         {c.lines.map((l, i) => <div key={`l${i}`} style={{ color: st.palette.accent, marginTop: i ? 0 : c.size * 0.4 }}>{l}</div>)}
       </div>

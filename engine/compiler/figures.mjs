@@ -1,9 +1,10 @@
 // 讲义插图：把时间线里每一节画完那一刻的纸面导成矢量图（SVG），给讲义、印刷用（用户 2026-11-09：每集出一份讲义 PDF，每节一张整页大图，日后出书）。
-// 不经过渲染：笔迹直接取时间线里的几何（和成片同一套：楷体字形用 kai 轮廓，其余笔画按 perfect-freehand 和成片一样的参数生成轮廓），
+// 不经过渲染：笔迹直接取时间线里的几何，和成片同一套画法：成片用 mono（每一笔按 perfect-freehand 沿采样点生成轮廓，儿童手写的样子），
+// --ink kai 改用楷体字形轮廓（和渲染器的 kai 模式一样：有 kai 数据的笔画都用它），
 // 所以放多大都清楚。纸色和方格照风格规范；铅笔、字幕、水印、镜头都不要。
 // 每一节一张：取这一节画的笔画的范围（四周留白 pad），把到这一节结束时已画在这个范围里的笔画都画上（这一节接着上一节那块纸画时，前面画的也在）；
 // 光晕按那一刻亮着的画。另出一张全集纸面 all.svg。
-// 用法：node compiler/figures.mjs build/<id>-<画幅>.timeline.json --out <目录> [--pad 80]
+// 用法：node compiler/figures.mjs build/<id>-<画幅>.timeline.json --out <目录> [--pad 80] [--ink mono|kai]
 import fs from 'node:fs';
 import path from 'node:path';
 import { getStroke } from 'perfect-freehand';
@@ -12,7 +13,7 @@ const args = process.argv.slice(2);
 const tlPath = args[0], opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
 if (!tlPath) { console.error('用法：node compiler/figures.mjs <timeline.json> --out <目录> [--pad 80]'); process.exit(2); }
 const tl = JSON.parse(fs.readFileSync(tlPath, 'utf8'));
-const outDir = opt('--out', path.join('out', `${tl.beatsId ?? tl.id}-figures`)), PAD = Number(opt('--pad', 80));
+const outDir = opt('--out', path.join('out', `${tl.beatsId ?? tl.id}-figures`)), PAD = Number(opt('--pad', 80)), INK = opt('--ink', 'mono');
 fs.mkdirSync(outDir, { recursive: true });
 const st = tl.style;
 
@@ -23,7 +24,7 @@ function outlinePath(pts) { // 和 src/Sketch.tsx 的 outlinePath 一样
   for (let i = 2; i < pts.length - 1; i++) d += `${f2(avg(pts[i][0], pts[i + 1][0]))},${f2(avg(pts[i][1], pts[i + 1][1]))} `;
   return d + 'Z';
 }
-const inkPath = (s) => s.kind === 'glyph' && s.kai
+const inkPath = (s) => INK === 'kai' && s.kai
   ? `<g transform="${s.kai.gt}"><path d="${s.kai.outline}"/></g>`
   : `<path d="${outlinePath(getStroke(s.pts, { size: s.width * st.ink.freehand.sizeScale, thinning: st.ink.freehand.thinning, smoothing: st.ink.freehand.smoothing, streamline: 0, simulatePressure: false, start: { cap: true, taper: 0 }, end: { cap: true, taper: 0 }, last: true }))}"/>`;
 
@@ -67,7 +68,14 @@ chapters.forEach((c, i) => {
   if (!mine.length) return;
   const file = `${String(i + 1).padStart(2, '0')}.svg`;
   // 范围再放一圈：这一节的范围切到了前面画的东西（比如上一节写的标签），就把它整段框进来，不切半截
-  const b0 = union(mine.map((s) => s.box)), b = union([b0, ...strokes.filter((s) => s.t1 <= tEnd + 1e-6 && hit(s.box, { x0: b0.x0 - PAD, y0: b0.y0 - PAD, x1: b0.x1 + PAD, y1: b0.y1 + PAD })).map((s) => s.box)]);
+  const glow = (tl.effects ?? []).filter((e) => e.t1 <= tEnd + 1e-6 && (e.t2 === undefined || e.t2 > tEnd)).map((e) => ({ x0: e.cx - e.r, y0: e.cy - e.r, x1: e.cx + e.r, y1: e.cy + e.r }));
+  let b = union(mine.map((s) => s.box));
+  for (let k = 0; k < 10; k++) { // 一直放到不再切到任何笔画、光晕为止
+    const pad = { x0: b.x0 - PAD, y0: b.y0 - PAD, x1: b.x1 + PAD, y1: b.y1 + PAD };
+    const nb = union([b, ...strokes.filter((s) => s.t1 <= tEnd + 1e-6 && hit(s.box, pad)).map((s) => s.box), ...glow.filter((g) => hit(g, pad))]);
+    if (nb.x0 === b.x0 && nb.y0 === b.y0 && nb.x1 === b.x1 && nb.y1 === b.y1) break;
+    b = nb;
+  }
   fs.writeFileSync(path.join(outDir, file), svg(b, tEnd, c.title));
   index.push({ n: i + 1, title: c.title, file, t0: c.t, t1: tEnd });
 });

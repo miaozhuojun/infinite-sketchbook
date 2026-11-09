@@ -95,7 +95,7 @@
   "base": 42, "swing": 3, "length": 276, "halfWidth": 14, "scale": 0.95, "followZoom": true,
   "swaySigma": 0.25, "liftSigma": 0.06,
   "coverCost": 12, "maxCoverSec": 1.0, "maxCoverPhraseSec": 2.0, "coverNote": "写字和移动时笔身尽量不压别的元素已写出的字：角度轨迹里每个压字的采样点记 coverCost（约等于偏离自然角度 12°；e02 上 3 和 6 都还留着超过 1 秒的压字）；检查要求连续压字不超过 maxCoverSec 秒、一句里累计不超过 maxCoverPhraseSec 秒（审片 v9、v10：画声波时笔身横压 x₁、x₂ 和「×3」）。右手握笔、笔身朝右下，在圆的左边画东西时笔身一定会经过圆：e02 16x9 声波在圆左侧，这一句累计约 1.9 秒，要再少得改版式",
-  "edgeMargin": 8, "minAngle": 10, "maxAngle": 100, "turnPerFrame": 0.2, "travelTurnSteps": 4, "travelTurnNote": "抬笔移动时每帧最多转 travelTurnSteps × turnPerFrame 度（0.8°，检查上限 1°），写字和停笔时最多 0.4°（检查上限 0.5°，不晃眼）",
+  "edgeMargin": 8, "minAngle": 10, "maxAngle": 100, "turnPerFrame": 0.2, "travelTurnSteps": 4, "travelTurnNote": "turnPerFrame 是每 1/60 秒的转角，别的帧率按时长换算。抬笔移动时每 1/60 秒最多转 travelTurnSteps × turnPerFrame 度（0.8°，检查上限 1°），写字和停笔时最多 0.4°（检查上限 0.5°，不晃眼）",
   "park": { "minRest": 0.5, "dist": 70, "note": "写完一句、要停一会儿时，笔尖往右下退开 dist 屏幕像素，别压着刚写的东西（理解度测试：停笔时笔身压住了刚画的声波和算式）" }
  },
 

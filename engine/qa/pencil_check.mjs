@@ -1,7 +1,7 @@
 // 铅笔观感检查（每项都能失败）：直接调用渲染用的 pencilPose，检查的就是画出来的样子。
-//   1. 不晃眼：写字、停笔时笔身角度每帧变化 ≤ 0.5°，抬笔移动时 ≤ 1.0°；抬笔量每帧变化 ≤ 0.08
+//   1. 不晃眼：写字、停笔时笔身角度每 1/60 秒变化 ≤ 0.5°，抬笔移动时 ≤ 1.0°；抬笔量每 1/60 秒变化 ≤ 0.08（按秒算：30 帧/秒时每帧上限翻倍，同样快的动作判定一样）
 //   2. 不压字幕：字幕显示期间，笔身任何部分不得进入字幕框（外扩 8px）
-//   3. 运笔流畅：笔尖在屏幕上每帧位移 ≤ 60px（60fps），每一笔至少 3 帧（否则像掉帧/瞬移）
+//   3. 运笔流畅：笔尖在屏幕上每 1/60 秒位移 ≤ 60px，每一笔至少写 3/60 秒（否则像掉帧/瞬移）
 //   4. 笔身不出画：笔尖在画面里时，整支铅笔都要在画布内（审片发现方版铅笔被右边缘切掉）；从画外飞入、飞出画外的那两段移动不算
 //   5. 顿悟时镜头不拉远：role=aha 的句子说完后再停 aha.holdAfter 秒之前，镜头只能推近或保持（审片发现顿悟时反而拉远）
 //   5b. 镜头不甩：每次镜头移动的屏幕平均平移速度不超过 motion.flightSpeed（留 15%）
@@ -26,6 +26,8 @@ const check = (name, ok, detail, gate) => {
 };
 
 let prev = null, maxDA = [0, 0], maxDL = [0, 0], maxDAmove = [0, 0];
+// 上限按 60 帧/秒定，换成这条时间线的每帧：动作快慢按秒算，不按帧算
+const PF = 60 / tl.fps, LIM = { ang: 0.5 * PF, angMove: 1.0 * PF, lift: 0.08 * PF };
 const overlaps = [];
 // 写字、停笔时笔身转角每帧 ≤0.5°；抬笔在画面上移动（手在挪位置）时放宽到 ≤1.0°
 const movingAt = (t) => (tl.penTrack ?? []).some((sg) => sg.kind === 'move' && t >= sg.t0 && t < sg.t1);
@@ -43,8 +45,8 @@ for (let f = 0; f < tl.durationInFrames; f++) {
   const box = subtitleBox(tl, sub.lines ?? [sub.text], SUB_MARGIN);
   if (pencilFootprint(tl, p).some((q) => inBox(box, q))) overlaps.push(f);
 }
-check('笔身不晃眼', maxDA[0] <= 0.5 && maxDAmove[0] <= 1.0 && maxDL[0] <= 0.08,
-  `写字/停笔时角度每帧最大变化 ${maxDA[0].toFixed(2)}°（第 ${maxDA[1]} 帧，上限 0.5°），抬笔移动时 ${maxDAmove[0].toFixed(2)}°（第 ${maxDAmove[1]} 帧，上限 1.0°），抬笔量每帧最大变化 ${maxDL[0].toFixed(3)}（第 ${maxDL[1]} 帧，上限 0.08）`);
+check('笔身不晃眼', maxDA[0] <= LIM.ang && maxDAmove[0] <= LIM.angMove && maxDL[0] <= LIM.lift,
+  `${tl.fps}fps，写字/停笔时角度每帧最大变化 ${maxDA[0].toFixed(2)}°（第 ${maxDA[1]} 帧，上限 ${LIM.ang.toFixed(2)}°），抬笔移动时 ${maxDAmove[0].toFixed(2)}°（第 ${maxDAmove[1]} 帧，上限 ${LIM.angMove.toFixed(2)}°），抬笔量每帧最大变化 ${maxDL[0].toFixed(3)}（第 ${maxDL[1]} 帧，上限 ${LIM.lift.toFixed(3)}）`);
 const spans = [];
 for (const f of overlaps) { const last = spans[spans.length - 1]; if (last && f === last[1] + 1) last[1] = f; else spans.push([f, f]); }
 check('笔身不压字幕', overlaps.length === 0, overlaps.length ? `${overlaps.length} 帧重叠：` + spans.slice(0, 6).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : '字幕显示期间笔身从未进入字幕框');
@@ -59,9 +61,9 @@ for (let f = 0; f < tl.durationInFrames; f++) {
   }
   last = { x: p.x, y: p.y, on };
 }
-const short = tl.strokes.filter((s) => (s.t1 - s.t0) * tl.fps < 2.95).map((s) => s.id);
+const short = tl.strokes.filter((s) => (s.t1 - s.t0) * 60 < 2.95).map((s) => s.id); // 至少 3/60 秒
 check('运笔流畅（无瞬移）', over === 0 && !short.length,
-  `${tl.fps}fps，笔尖单帧最大位移 ${maxMove[0].toFixed(0)}px（第 ${maxMove[1]} 帧，上限 ${(60 * 60 / tl.fps).toFixed(0)}），超限 ${over} 帧；不足 3 帧的笔画 ${short.length} 个${short.length ? '：' + short.slice(0, 5).join('、') : ''}`);
+  `${tl.fps}fps，笔尖单帧最大位移 ${maxMove[0].toFixed(0)}px（第 ${maxMove[1]} 帧，上限 ${(60 * 60 / tl.fps).toFixed(0)}），超限 ${over} 帧；写不到 3/60 秒的笔画 ${short.length} 个${short.length ? '：' + short.slice(0, 5).join('、') : ''}`);
 // 4. 笔身不出画
 const outFrames = [];
 const offCanvas = ([x, y]) => x < 0 || x > tl.canvas.w || y < 0 || y > tl.canvas.h;

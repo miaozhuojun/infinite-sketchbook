@@ -94,6 +94,14 @@ jobs:
         run: npx remotion browser ensure
       - name: 流水线（没有品牌配置：不加水印；配音是合成的：不查旁白）
         run: node pipeline.mjs data/demo.beats.json
+      - name: 粗样片（--sample：低分辨率低帧率，另存在 out/demo-sample/，不碰全量的成片）
+        run: |
+          full="out/demo/9x16.mp4 out/demo/16x9.mp4 build/demo-9x16.timeline.json build/demo-16x9.timeline.json public/audio/demo.wav public/audio/demo-9x16.narration.wav public/audio/demo-16x9.narration.wav"
+          before=$(shasum $full)
+          node pipeline.mjs data/demo.beats.json --sample --targets 16x9
+          info=$(npx remotion ffprobe -v error -show_entries stream=width,height,r_frame_rate -of csv=p=0 out/demo-sample/16x9.mp4)
+          echo "$info"; echo "$info" | grep -qx '960,540,15/1'
+          [ "$before" = "$(shasum $full)" ]
       - name: 静帧审稿（试编时间线上渲静帧，出审稿和理解度材料）
         run: node qa/still_review.mjs data/demo.beats.json --out out/demo/stills
       - name: 上传报告和成片

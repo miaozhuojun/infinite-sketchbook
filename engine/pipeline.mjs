@@ -19,9 +19,14 @@ const arg = (k) => (process.argv.includes(k) ? process.argv[process.argv.indexOf
 // 生效的风格（默认 < 本机私有创作配置 < 这一期分镜）：画幅、发布清单也按它来，私有配置里定的「只出横版、各平台都传横版」才会生效
 const styleJson = loadStyle(beats);
 const DRAFT = process.argv.includes('--draft');
+// --sample：粗样片，给用户先看内容方向（声音、画质可以粗糙）。快配音（只查念对和对齐，精配过的句子直接用）、低分辨率低帧率、
+// 只出第一个画幅，混音、渲染，别的检查都不跑。输出在 out/<id>-sample/，时间线和配音都另存，不碰精配和定稿的那一份
+const SAMPLE = process.argv.includes('--sample');
+const SAMPLE_ID = `${beats.id}-sample`;
 // 画幅：命令行 --targets 优先，其次分镜里的 targets，否则用风格规范的默认母版（9:16 + 16:9）。每个平台只传一个文件，见报告里的发布清单
-const targets = arg('--targets')?.split(',') ?? beats.targets ?? styleJson.defaultTargets;
-const outDir = arg('--out') ?? path.join('out', beats.id);
+const allTargets = arg('--targets')?.split(',') ?? beats.targets ?? styleJson.defaultTargets;
+const targets = SAMPLE ? allTargets.slice(0, 1) : allTargets;
+const outDir = arg('--out') ?? path.join('out', SAMPLE ? SAMPLE_ID : beats.id);
 fs.mkdirSync(path.join(outDir, 'review'), { recursive: true });
 
 const stages = [];
@@ -66,8 +71,9 @@ function skip(name, why, list = stages) {
 }
 
 // 0. 组件库与分镜：先确认工具可靠、数据合规，再花时间渲染
-const libOk = run('组件库测试', 'node', ['library/test.mjs', '--preview']);
-run('墨迹叠色检查（交叠处不发黑、红压灰仍是红）', 'node', ['qa/ink_check.mjs']);
+if (SAMPLE) skip('组件库测试、墨迹叠色检查', '样片（--sample）');
+const libOk = SAMPLE || run('组件库测试', 'node', ['library/test.mjs', '--preview']);
+if (!SAMPLE) run('墨迹叠色检查（交叠处不发黑、红压灰仍是红）', 'node', ['qa/ink_check.mjs']);
 const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、字幕）', 'node', ['compiler/validate.mjs', beatsPath]);
 
 // 1. 配音：分镜里写了旁白稿就每次都按稿生成（内置回转检查、开头多字修剪、换种子重试）。
@@ -75,6 +81,8 @@ const beatsOk = run('分镜校验（组件、风格、叙事、事实出处、�
 const audioPath = path.join('public', beats.narration.audio || '');
 // 配音没配出来就停在这里：后面的编译、渲染、旁白检查都会拿上一版的配音去做，白跑几分钟，报告还会误导（E01 v17 实测）
 let voiceOk = true;
+// 样片用的配音：精配的配音和当前稿子对得上就用它；对不上就快配一份另存（<配音>.sample.*）
+let sampleVoice = null;
 // 合成提示音（演示分镜，narration.synthetic）不走克隆配音，音频由夹具脚本生成
 if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
@@ -85,7 +93,8 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   // 原来整条旁白都交给主讲的声音配：E02 父子对话样稿里，旁白检查点名爸爸的句子后，流水线用孩子的声音把它们重配了两轮
   const dialogue = isDialogue(beats), sents = dialogue ? sentenceSpeakers(beats).sentences : [];
   const speakers = dialogue ? ['', ...Object.keys(voicesOf(beats))].filter((sp) => sents.some((s) => s.speaker === sp)) : [''];
-  const partOf = (sp) => (dialogue ? `${base}.${sp || 'main'}` : base);
+  let vb = base, fastV = false; // vb：这次配到哪个前缀；样片快配时是 <配音>.sample，不覆盖精配的那份
+  const partOf = (sp) => (dialogue ? `${vb}.${sp || 'main'}` : vb);
   const whoSays = (sp) => (sp ? voicesOf(beats)[sp].label ?? sp : '主讲');
   const argsOf = (sp) => {
     const keep = (t) => !dialogue || sents.some((s) => s.speaker === sp && s.text === t);
@@ -93,25 +102,29 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
     return ['qwen_clone.py', dialogue ? sents.filter((s) => s.speaker === sp).map((s) => s.text).join('') : beats.narration.script, partOf(sp),
       ...(sp ? ['--voice', voicesOf(beats)[sp].voice] : []),
       ...pick({ ...(beats.narration.reseed ?? {}), ...autoReseed }, '--reseed'), ...pick(beats.narration.mood, '--mood'), ...pick(beats.narration.tone, '--tone'),
-      ...(dialogue ? turnStarts(sents).filter(keep).flatMap((t) => ['--turn', t]) : [])];
+      ...(dialogue ? turnStarts(sents).filter(keep).flatMap((t) => ['--turn', t]) : []), ...(fastV ? ['--fast'] : [])];
   };
-  const voiceArgs = dialogue ? speakers.map(argsOf) : argsOf('');
+  let voiceArgs = dialogue ? speakers.map(argsOf) : argsOf('');
   // 配音没变就不重跑（用户 2026-11-06：E02 做了快十个小时）：旁白稿、语气、换种子、配音配置和配音程序都和上次配成功时一样，
   // 音频和逐字时间也都在，就直接用上次的。全走缓存时配音这一步也要 3–10 分钟（逐句复查缓存、整段回转识别、拼好后的复查），改版面的那几轮白等
   const keyFiles = ['voice.json', 'qwen_clone.py', 'voice.py', ...(dialogue ? ['dialogue.py', ...speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice)] : [])];
-  const voiceKey = createHash('sha1').update(JSON.stringify([voiceArgs, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
-  const keyFile = base + '.voicekey', sameVoice = fs.existsSync(keyFile) && fs.readFileSync(keyFile, 'utf8') === voiceKey && fs.existsSync(base + '.wav') && fs.existsSync(base + '.timing.json');
+  const keyOf = (va) => createHash('sha1').update(JSON.stringify([va, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
+  const upToDate = (b, k) => fs.existsSync(b + '.voicekey') && fs.readFileSync(b + '.voicekey', 'utf8') === k && fs.existsSync(b + '.wav') && fs.existsSync(b + '.timing.json');
+  let voiceKey = keyOf(voiceArgs), sameVoice = upToDate(base, voiceKey);
+  if (SAMPLE && !sameVoice) { vb = base + '.sample'; fastV = true; voiceArgs = dialogue ? speakers.map(argsOf) : argsOf(''); voiceKey = keyOf(voiceArgs); sameVoice = upToDate(vb, voiceKey); }
+  const keyFile = vb + '.voicekey', voicedAudio = SAMPLE ? path.join(path.dirname(audioPath), `${SAMPLE_ID}.wav`) : audioPath;
+  if (SAMPLE && PY_MLX) sampleVoice = { audio: path.relative('public', voicedAudio), timing: vb + '.timing.json', fast: fastV };
   const missing = dialogue ? speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice).filter((f) => !fs.existsSync(path.resolve('../tts', f))) : [];
   if (PY_MLX && missing.length) { voiceOk = false; stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '', problems: [`没有音色配置 ${missing.join('、')}（narration.voices 里写的，相对 tts/）`] }); }
-  else if (PY_MLX && sameVoice) { skip('配音生成', '旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的配音'); fs.copyFileSync(base + '.wav', audioPath); }
-  else if (PY_MLX && !dialogue) { if (voiceOk = run('配音生成（按句缓存）', PY_MLX, voiceArgs, { cwd: '../tts' })) { fs.copyFileSync(base + '.wav', audioPath); fs.writeFileSync(keyFile, voiceKey); } }
+  else if (PY_MLX && sameVoice) { skip('配音生成', `旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的${fastV ? '样片快配' : ''}配音`); fs.copyFileSync(vb + '.wav', voicedAudio); }
+  else if (PY_MLX && !dialogue) { if (voiceOk = run(`配音生成（${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, voiceArgs, { cwd: '../tts' })) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); } }
   else if (PY_MLX) {
-    voiceOk = speakers.every((sp) => run(`配音生成（${whoSays(sp)}，按句缓存）`, PY_MLX, argsOf(sp), { cwd: '../tts' }));
+    voiceOk = speakers.every((sp) => run(`配音生成（${whoSays(sp)}，${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, argsOf(sp), { cwd: '../tts' }));
     if (voiceOk) {
-      fs.writeFileSync(base + '.order.json', JSON.stringify(sents, null, 1));
-      voiceOk = run('对话拼接（按旁白稿顺序）', PY_MLX, ['dialogue.py', base, base + '.order.json', ...speakers.flatMap((sp) => ['--part', `${sp}=${partOf(sp)}`])], { cwd: '../tts' });
+      fs.writeFileSync(vb + '.order.json', JSON.stringify(sents, null, 1));
+      voiceOk = run('对话拼接（按旁白稿顺序）', PY_MLX, ['dialogue.py', vb, vb + '.order.json', ...speakers.flatMap((sp) => ['--part', `${sp}=${partOf(sp)}`])], { cwd: '../tts' });
     }
-    if (voiceOk) { fs.copyFileSync(base + '.wav', audioPath); fs.writeFileSync(keyFile, voiceKey); }
+    if (voiceOk) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); }
   }
   else if (fs.existsSync(audioPath)) skip('配音生成', `没有本地配音环境（PY_MLX），沿用已有的 ${audioPath}，没核对它和当前稿子是否一致`);
   else stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '',
@@ -123,7 +136,24 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
 const branded = fs.existsSync('brand.local.json');
 if (!voiceOk) skip('编译、渲染与成片检查', '配音生成没通过，没有和当前稿子对得上的配音（见上面「配音生成」）');
 if (libOk && beatsOk && voiceOk && !branded) skip('水印、版权信息与存证', '本机没有配置品牌（brand.local.json）');
-if (libOk && beatsOk && voiceOk) {
+// 样片：另存一份分镜（id 加 -sample、帧率用 style.sample.fps、配音指向样片那份），编译、混音、低分辨率渲染，别的都不跑
+if (SAMPLE && libOk && beatsOk && voiceOk) {
+  const sb = structuredClone(beats), t = targets[0], S = styleJson.sample;
+  sb.id = SAMPLE_ID;
+  sb.narration = { ...sb.narration, ...(sampleVoice ? { audio: sampleVoice.audio, timing: sampleVoice.timing } : { timing: path.resolve(path.dirname(beatsPath), beats.narration.timing) }) };
+  sb.style = { ...(sb.style ?? {}), motion: { ...(sb.style?.motion ?? {}), fps: S.fps } };
+  const sp = `build/${SAMPLE_ID}.beats.json`;
+  fs.mkdirSync('build', { recursive: true });
+  fs.writeFileSync(sp, JSON.stringify(sb));
+  const id = `${SAMPLE_ID}-${t}`, video = path.join(outDir, `${t}.mp4`);
+  if (run(`[${t}] 编译（样片，${S.fps} 帧/秒）`, 'node', ['compiler/compile.mjs', sp, '--target', t, '--no-validate'])) {
+    spawnSync('node', ['compiler/gen-compositions.mjs']);
+    if (run(`[${t}] 混音`, PY_QA, ['audio/mix.py', `build/${id}.timeline.json`]))
+      run(`[${t}] 渲染（样片，${Math.round(styleJson.targets[t].w * S.scale)}×${Math.round(styleJson.targets[t].h * S.scale)}）`, 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', `--scale=${S.scale}`, `--x264-preset=${S.x264Preset}`, ...(GL ? [`--gl=${GL}`] : [])]);
+  }
+  skip('旁白检查、画面检查、铅笔与安全区、预览、联系表、理解度材料', '样片（--sample）：只看内容方向，通过后精配、整片渲染时再查');
+}
+if (libOk && beatsOk && voiceOk && !SAMPLE) {
   const compiled = targets.filter((t) => run(`[${t}] 编译（时间线、版面、镜头）`, 'node', ['compiler/compile.mjs', beatsPath, '--target', t]));
   spawnSync('node', ['compiler/gen-compositions.mjs']);
   // 只看时间线的检查（铅笔、安全区）不用等渲染，编译完就查，草稿和定稿都跑
@@ -193,7 +223,7 @@ const failed = stages.filter((s) => !s.ok), skipped = stages.filter((s) => s.ski
 const nAdvice = stages.reduce((n, s) => n + (s.advice?.length ?? 0), 0);
 const verdict = (failed.length ? `未通过（${failed.length} 个步骤失败）` : skipped.length ? `已执行的程序关卡全部通过，${skipped.length} 项未执行` : '程序关卡全部通过')
   + (nAdvice ? `；另有 ${nAdvice} 条创作建议（不拦截，按需采纳）` : '');
-const lines = [`# ${beats.id} 流水线报告`, '', `结果：**${verdict}**　画幅：${targets.join('、')}`, ''];
+const lines = [`# ${SAMPLE ? `${beats.id} 样片` : beats.id} 流水线报告`, '', `结果：**${verdict}**　画幅：${targets.join('、')}`, ''];
 for (const s of stages) {
   lines.push(s.skipped ? `## – ${s.name}（未执行：${s.skipped}）` : `## ${s.ok ? '✓' : '✗'} ${s.name}（${s.secs}s）`);
   for (const f of s.fixes) lines.push(`- 自动修正：${f}`);

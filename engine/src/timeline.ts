@@ -202,6 +202,15 @@ export const boxesOverlap = (a: Box, b: Box) => a.l < b.r && a.r > b.l && a.t < 
 // 可见水印（屏幕层）：品牌名小字，按 spans 在几个角之间轮换。编译器选位置、渲染、安全区检查共用这个框（字宽估算同字幕）
 export type WatermarkSpan = { t0: number; t1: number; x: number; y: number; anchor: 'l' | 'r' };
 export type Watermark = { text: string; size: number; opacity: number; fade: number; margin: number; contentMargin?: number; spans: WatermarkSpan[] };
+// 水印一段显示期间查遮挡的时刻：开头、中间每个 0.1 秒的整数倍、结尾。编译放水印和安全区检查都用这一份：
+// 原来各自从这段的开头每 0.1 秒数，编译把同一位置的相邻两段并成一段后，检查的格点和放的时候查过的对不上（E03 PR #53 审查）
+export function watermarkSampleTimes(t0: number, t1: number): number[] {
+  const out = [t0];
+  for (let k = Math.floor(t0 * 10 + 1e-6) + 1; k / 10 < t1 - 1e-6; k++) out.push(k / 10);
+  if (t1 > t0) out.push(t1);
+  return out;
+}
+
 export function watermarkBox(wm: Watermark, sp: { x: number; y: number; anchor: 'l' | 'r' }, margin = 0): Box {
   const w = [...wm.text].reduce((a, c) => a + (/[　-鿿＀-￯]/.test(c) ? 1 : 0.55), 0) * (wm.size + 1), l = sp.anchor === 'r' ? sp.x - w : sp.x;
   return { l: l - margin, r: l + w + margin, t: sp.y - margin, b: sp.y + wm.size * 1.25 + margin };

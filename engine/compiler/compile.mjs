@@ -898,24 +898,25 @@ const out = {
   const WM = style.watermark, slots = WM?.slots?.[targetName];
   const brand = fs.existsSync('brand.local.json') ? JSON.parse(fs.readFileSync('brand.local.json', 'utf8')) : null;
   if (brand?.watermark?.text && slots?.length) {
-    const { cameraAt, subtitleBox, watermarkBox, boxesOverlap, strokeScreenBox } = await import('../src/timeline.ts');
+    const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox } = await import('../src/timeline.ts');
     const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, contentMargin: WM.contentMargin, spans: [] };
     // 和安全区检查同样每 0.1 秒看一次，框再多留 4px，保证检查一定过
     const clashes = (slot, t0, t1) => {
       const box = watermarkBox(wm, slot, WM.margin + 4), far = watermarkBox(wm, slot, WM.contentMargin + 4);
       if (UI_ZONES.some((z) => boxesOverlap(box, z))) return true;
       if (subtitles.some((s) => s.t0 < t1 && s.t1 > t0 && boxesOverlap(box, subtitleBox(out, s.lines)))) return true;
-      for (let i = 0; t0 + i * 0.1 <= t1 + 1e-6; i++) {
-        const t = t0 + i * 0.1, c = cameraAt(camera, t);
+      for (const t of watermarkSampleTimes(t0, t1)) {
+        const c = cameraAt(camera, t);
         if (strokes.some((s) => s.t0 <= t && boxesOverlap(far, strokeScreenBox(out, s, c)))) return true;
       }
       return false;
     };
     let k = 0; // 轮换到第几个候选位置
     const place = (t0, t1, depth) => {
+      t0 = r2(t0); t1 = r2(t1); // 先按存进时间线的精度取整再查：原来查的是没取整的 t1，存的是取整后的，安全区检查正好在多出来的那几毫秒里撞上内容（E03：118.8s）
       for (let i = 0; i < slots.length; i++) {
         const slot = slots[(k + i) % slots.length];
-        if (!clashes(slot, t0, t1)) return void wm.spans.push({ t0: r2(t0), t1: r2(t1), ...slot });
+        if (!clashes(slot, t0, t1)) return void wm.spans.push({ t0, t1, ...slot });
       }
       if (depth < 2) { const m = (t0 + t1) / 2; place(t0, m, depth + 1); place(m, t1, depth + 1); return; }
       const msg = `水印：${r2(t0)}–${r2(t1)}s 每个候选位置都会压到字幕、平台界面或内容，这一段不加`;

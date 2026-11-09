@@ -14,7 +14,7 @@
 // 用法：node qa/safezone_check.mjs build/<id>.timeline.json
 import fs from 'node:fs';
 import { svgPathProperties } from 'svg-path-properties';
-import { cameraAt, subtitleBox, watermarkBox, boxesOverlap, strokeScreenBox } from '../src/timeline.ts';
+import { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox } from '../src/timeline.ts';
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];
@@ -134,8 +134,8 @@ for (const sp of wm?.spans ?? []) {
   const s = tl.subtitles.find((x) => x.t0 < sp.t1 && x.t1 > sp.t0 && boxesOverlap(box, subtitleBox(tl, x.lines)));
   if (s) { wmHits.push(`${at}压到字幕「${s.text}」`); continue; }
   const far = watermarkBox(wm, sp, wm.contentMargin ?? wm.margin); // 离内容要更远，免得像谁的标注（审片 v10：水印贴在灯泡正下方，像灯泡的标签）
-  for (let i = 0; sp.t0 + i * 0.1 <= sp.t1 + 1e-6; i++) {
-    const t = sp.t0 + i * 0.1, c = cameraAt(tl.camera, t), hit = tl.strokes.find((x) => x.t0 <= t && boxesOverlap(far, strokeScreenBox(tl, x, c)));
+  for (const t of watermarkSampleTimes(sp.t0, sp.t1)) {
+    const c = cameraAt(tl.camera, t), hit = tl.strokes.find((x) => x.t0 <= t && boxesOverlap(far, strokeScreenBox(tl, x, c)));
     if (hit) { wmHits.push(`${at}在 ${t.toFixed(2)}s 压到 ${hit.id}`); break; }
   }
 }

@@ -513,7 +513,7 @@ if CHUNK.get("maxSentences", 1) > 1:
             continue
         for k, take in zip(g, parts):
             # 这一句拼好后查出过破音、已经单独重配过（.nochunk 标记），就用单独配的那条
-            if os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk"):
+            if os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk") or FAST and os.path.exists(os.path.join(CACHE, cache_key(sents[k], False)) + ".nochunk"):
                 continue
             # 一段一起配只按整段验收：切出来的每一句再按成片旁白检查的口径验一遍（语速、硬切按句量），不过的这一句单独配
             if not FAST and (lb := line_defects(take[0], take[1], take[4], voice)):
@@ -574,6 +574,9 @@ for i, sent in enumerate(sents):
             if meta_c["bak"] < GEN_BAK:
                 print(f"  缓存里的「{sent}」背景不干净（DNSMOS BAK {meta_c['bak']:.2f}），重新生成")
                 cached = False
+    if FAST and not cached:
+        key = os.path.join(CACHE, cache_key(sent))  # 精配那条没过复查：快配写进快配的缓存，绝不覆盖精配的
+        cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
     if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")
         meta = json.load(open(key + ".json", encoding="utf-8"))

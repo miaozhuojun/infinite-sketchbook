@@ -9,7 +9,6 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
-import { GL } from './qa/gl.mjs';
 import { loadStyle } from './compiler/validate.mjs';
 import { isDialogue, sentenceSpeakers, turnStarts, voicesOf } from './compiler/speakers.mjs';
 
@@ -30,6 +29,16 @@ const outDir = arg('--out') ?? path.join('out', SAMPLE ? SAMPLE_ID : beats.id);
 fs.mkdirSync(path.join(outDir, 'review'), { recursive: true });
 
 const stages = [];
+// 渲染用的混音（时间线里写的，相对 public/）；分段渲染把它整条配到拼好的画面上
+const audioOf = (tl) => { const j = JSON.parse(fs.readFileSync(tl, 'utf8')), a = j.audio ?? j.narration; return a ? ['--audio', path.join('public', a)] : []; };
+const fpsOf = (tl) => JSON.parse(fs.readFileSync(tl, 'utf8')).fps;
+// 分段渲染这次新渲的段（秒），全部新渲或全部复用时返回 null
+const changedRanges = (video) => {
+  const f = video.replace(/\.mp4$/, '') + '.segments.json';
+  if (!fs.existsSync(f)) return null;
+  const segs = JSON.parse(fs.readFileSync(f, 'utf8')).segments, fresh = segs.filter((s) => !s.reused);
+  return fresh.length && fresh.length < segs.length ? fresh.map((s) => `${s.t0.toFixed(3)}-${s.t1.toFixed(3)}`).join(',') : null;
+};
 function run(name, cmd, args, opts = {}) {
   const t0 = Date.now();
   const r = spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 28, cwd: opts.cwd });
@@ -55,7 +64,7 @@ function record(name, status, out, t0, list) {
   const problems = [...(out.match(/问题 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\[错误\] (.*)$/gm)].map((m) => m[1])]
     .map((l) => l.trim()).filter(Boolean);
   const artifacts = [...out.matchAll(/^(?:设备预览|联系表|理解度测试材料|组件预览|存证)：(\S+)/gm)].map((m) => m[1]);
-  const notes = [...out.matchAll(/^((?:书写声|音乐)：.*)$/gm)].map((m) => m[1]); // 混音用了哪些素材，写进报告
+  const notes = [...out.matchAll(/^((?:书写声|音乐|分段渲染)：.*|\[警告\] .*)$/gm)].map((m) => m[1]); // 混音用了哪些素材、分段渲染复用了几段，写进报告
   // 建议：创作取舍（风格规范 gates 里的 advice 级），写进报告，不判失败
   const advice = [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])]
     .map((l) => l.trim()).filter(Boolean);
@@ -155,7 +164,7 @@ if (SAMPLE && libOk && beatsOk && voiceOk) {
   if (usable) {
     spawnSync('node', ['compiler/gen-compositions.mjs']);
     if (run(`[${t}] 混音`, PY_QA, ['audio/mix.py', `build/${id}.timeline.json`]))
-      run(`[${t}] 渲染（样片，${Math.round(styleJson.targets[t].w * S.scale)}×${Math.round(styleJson.targets[t].h * S.scale)}）`, 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', `--scale=${S.scale}`, `--x264-preset=${S.x264Preset}`, ...(GL ? [`--gl=${GL}`] : [])]);
+      run(`[${t}] 渲染（样片，${Math.round(styleJson.targets[t].w * S.scale)}×${Math.round(styleJson.targets[t].h * S.scale)}）`, 'node', ['render/segmented.mjs', tlp, video, ...audioOf(tlp), '--scale', String(S.scale), '--x264-preset', S.x264Preset]);
   }
   skip('旁白检查、画面检查、铅笔与安全区、预览、联系表、理解度材料', '样片（--sample）：只看内容方向，通过后精配、整片渲染时再查');
 }
@@ -206,20 +215,23 @@ if (libOk && beatsOk && voiceOk && !SAMPLE) {
   const chain = async (t, L) => {
     const id = `${beats.id}-${t}`, tl = `build/${id}.timeline.json`, video = path.join(outDir, `${t}.mp4`);
     const R = (name, cmd, args, opts) => runAsync(`[${t}] ${name}`, cmd, args, opts, L);
-    if (!await renderLock(() => R('渲染', 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', ...(GL ? [`--gl=${GL}`] : [])]))) return;
+    // 分段缓存渲染（render/segmented.mjs）：没变的段直接用上次渲好的，只渲改过的段
+    if (!await renderLock(() => R('渲染', 'node', ['render/segmented.mjs', tl, video, ...audioOf(tl)]))) return;
     if (branded) await bookLock(() => R('版权信息与存证', PY_QA, ['qa/provenance.py', beatsPath, tl, video]));
     // 成片出来以后的检查互不依赖，一起跑
     await Promise.all([
       R('画面检查', PY_QA, ['qa/qa.py', tl, video, id]),
       R('设备预览', PY_QA, ['qa/device_preview.py', tl, video, path.join(outDir, `preview_${t}.png`)]),
-      R('审片联系表', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review')]),
+      R('审片联系表', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review'), '--fps', String(fpsOf(tl))]),
+      // 增量审片：这次只重渲了一部分段时，另出一份只含新渲那几段的联系表（<画幅>_changed_sheet_*），复审只看它
+      changedRanges(video) ? R('审片联系表（这次改过的段）', PY_QA, ['qa/contact_sheet.py', video, path.join(outDir, 'review'), '--fps', String(fpsOf(tl)), '--ranges', changedRanges(video), '--prefix', 'changed']) : null,
       t === compiled[0] && (beats.quiz || []).length ? R('理解度测试材料', PY_QA, ['qa/comprehension.py', 'pack', beatsPath, tl, video, path.join(outDir, 'comprehension')]) : null,
     ]);
   };
   const lists = Object.fromEntries(compiled.map((t) => [t, []]));
   await Promise.all((DRAFT || speechFailed.length ? [] : renderable).map((t) => chain(t, lists[t])));
   // 报告里按画幅、按步骤的固定顺序排（同时跑时完成先后不定）
-  const ORDER = ['渲染', '版权信息与存证', '画面检查', '设备预览', '审片联系表', '理解度测试材料'];
+  const ORDER = ['渲染', '版权信息与存证', '画面检查', '设备预览', '审片联系表', '审片联系表（这次改过的段）', '理解度测试材料'];
   const rank = (s) => ORDER.findIndex((k) => s.name.endsWith(`] ${k}`));
   for (const t of compiled) stages.push(...lists[t].sort((a, b) => rank(a) - rank(b)));
 }

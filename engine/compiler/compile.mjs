@@ -836,6 +836,15 @@ for (const p of report.phrases) {
   if (p.insertedPause > M.maxPause) flag('pace.pause', `「${p.text}」后要等画面 ${p.insertedPause}s（上限 ${M.maxPause}s），旁白和画面没对上，需要拆句或减画`);
   else if (p.role !== 'aha' && p.insertedPause > M.maxPauseNonAha) flag('pace.pause', `「${p.text}」后停顿 ${p.insertedPause}s：长停顿应留给顿悟句（非顿悟句上限 ${M.maxPauseNonAha}s），需要把画面分到前后句或减画`);
 }
+// 说完了还在写（sync.silent）：一句旁白说完以后，笔还要再写多久（这句最后一笔写完 − 这句说完）。
+// 有意的停顿（hold、顿悟后停稳）不算在里面：那时笔已经停了。超过 motion.maxSilentWrite 秒，观众就是在静音里看笔补写——
+// E03 v2 全量审片的两条重要都是它（6 秒、5.3 秒），报告里早有数字，只是混在一百多条建议里，整片渲完、审完才被当回事。
+// 默认只给建议；作者要「旁白和书写同步」时在私有配置里把 sync.silent 设成 hard，草稿就停在渲染之前
+const SILENT = M.maxSilentWrite ?? 3;
+for (const p of report.phrases) {
+  const s = (p.drawEnd ?? 0) - (p.audioEnd ?? 0);
+  if (s > SILENT) flag('sync.silent', `「${p.text.slice(0, 16)}」说完后笔还要写 ${r2(s)}s（上限 ${SILENT}s）：观众在静音里看笔补写。把画分到前一句、拆句，或加半句旁白`);
+}
 // 叙事节奏（完整一集）：钩子要在开头几秒内出现，两个顿悟之间不能隔太久
 const NR = style.narrative[beats.kind] || {};
 if (NR.hookWithin !== undefined) {

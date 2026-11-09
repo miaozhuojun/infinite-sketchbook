@@ -96,7 +96,9 @@ try {
         const vis = x.pen ? shown(x.id, end.t) : null;
         return { id: x.id, type: x.type, text: src.text ?? src.label ?? null, at: src.at ?? null, cue: x.cue, start: x.start, end: x.end, pen: x.pen, ahead: !!src.ahead, visible: vis === null ? null : +vis.toFixed(2) };
       });
-      return { i, text: (subs[i]?.label ? `${subs[i].label}：` : '') + (subs[i]?.text ?? bp.caption ?? bp.text), // 对话：写上是谁说的
+      // 对话：写上是谁说的。这个人第一次开口那句，编译器已经在字幕前面写了称呼（compiler/compile.mjs 的 intro），不再加一遍（原来写成「爸爸：爸爸：跟我一样」）
+      const said = subs[i]?.text ?? bp.caption ?? bp.text, who = subs[i]?.label ? `${subs[i].label}：` : '';
+      return { i, text: said.startsWith(who) ? said : who + said,
        role: bp.role ?? '', chapter: bp.chapter ?? null, camera: bp.camera ?? (bp.revisit ? 'revisit' : null), at: a, audioEnd: rp.audioEnd, drawEnd: rp.drawEnd, insertedPause: rp.insertedPause, endT: end.t, png, strip, actions: acts };
     });
     // 全片最后一帧（整张纸）：看全局版式、片尾停在哪

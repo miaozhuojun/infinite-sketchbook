@@ -1,0 +1,5 @@
+{
+ "note": "拼音库（pypinyin）标错、配音也容易念错的读法。声调检查（tone_check.py）按这里的读法判。chars 整字改读法（这个字在本项目里几乎只这么用），phrases 按词改。拼音写 TONE3（数字标调，轻声 5）",
+ "chars": {"拧": "ning3"},
+ "phrases": {"拧毛巾": ["ning2", "mao2", "jin1"], "拧干": ["ning2", "gan1"], "拧成": ["ning2", "cheng2"], "还得": ["hai2", "dei3"]}
+}

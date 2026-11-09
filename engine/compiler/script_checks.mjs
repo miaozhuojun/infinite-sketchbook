@@ -8,7 +8,7 @@
 //                explain 是旁白里讲清它的那半句，bridge（新例子）是把它和前面熟悉的例子接上的那半句；
 //   facts[].from（kind: example 的示意数值）：{ "4": "天黑最要紧，给它4", … }——每个数在旁白里交代它从哪来的那半句；
 //   brief.payoff（可选）：片中回收开场小故事的那半句，回收句和开场没有共用三个字以上时写。
-// 另有一条查配音风险（script.tts，不用写字段）：很短的问句，和含有以前被听错过的字的句子（tts/misheard.json）。
+// 另有两条不用写字段：回描是不是重复（script.retrace），配音风险（script.tts）：很短的问句，和含有以前被听错过的字的句子（tts/misheard.json）。
 import fs from 'node:fs';
 import { strip } from './validate.mjs';
 
@@ -148,6 +148,39 @@ export function scriptIssues(beats, style) {
   }
   for (const [w, [p, hit]] of byNeedle)
     add('script.tts', 'narration.script', `「${w}」以前被听错过（「${p.said}」听成「${p.heard}」${p.from ? `，${p.from}` : ''}），这一集 ${hit.length} 句有它：${hit.slice(0, 4).map(quote).join('、')}${hit.length > 4 ? ' 等' : ''}。能换说法就换，换不了的定稿前单听`);
+  // 6. 回描（script.retrace）：只在两种地方值得——指回镜头外、前面画过的旧东西（换了节、回看），或者顿悟那一步把要总结的东西描一遍。
+  //    别的回描是重复：东西刚画完、就在画面里，再描一遍只是让笔多动一下，还拖慢画面（E03 样片 28 句里 36 处回描，用户：太多了）。
+  //    镜头在一节里框着这一节画过的全部（computePhraseCam），所以「同一节画的」就算在画面里。时间按旁白字数估（每秒 retraceRate 字）
+  {
+    const R = style.narrative?.retrace ?? {}, RECENT = R.recentSec ?? 8, RATE = R.rate ?? 4;
+    const drawnAt = new Map(), chapterOf = [];
+    let ch = 0;
+    beats.phrases.forEach((p, i) => {
+      if (p.chapter && i) ch++;
+      chapterOf[i] = ch;
+      for (const a of p.actions ?? []) if (a.type !== 'retrace' && !drawnAt.has(a.id)) drawnAt.set(a.id, i);
+    });
+    const chars = beats.phrases.map((p) => strip(p.text ?? '').length);
+    let n = 0, flagged = 0;
+    beats.phrases.forEach((p, i) => {
+      for (const a of (p.actions ?? []).filter((x) => x.type === 'retrace')) {
+        n++;
+        const j = drawnAt.get(a.target);
+        if (j === undefined) continue;
+        // 从目标画下的那个词（它的 at）念到回描的那个词，按字数估秒数
+        const tj = beats.phrases[j], aj = (tj.actions ?? []).find((x) => x.id === a.target), tx = strip(tj.text ?? '');
+        const rest = j < i ? tx.length - Math.max(0, tx.indexOf(strip(aj?.at ?? ''))) : 0;
+        const upto = Math.max(0, strip(p.text ?? '').indexOf(strip(a.at ?? '')));
+        const sec = (rest + chars.slice(j + 1, i).reduce((x, y) => x + y, 0) + (j < i ? upto : 0)) / RATE;
+        const recent = sec < RECENT, inView = chapterOf[j] === chapterOf[i] && !(p.revisit ?? []).length;
+        if (!recent && (!inView || p.role === 'aha')) continue;
+        flagged++;
+        add('script.retrace', `phrases[${i}].${a.id}`, `回描「${a.target}」（「${(p.caption ?? p.text ?? '').slice(0, 12)}」）：` + (recent ? `它${j === i ? '就是这句画的' : `约 ${Math.floor(sec)} 秒前刚画`}` : '它是这一节画的，正在画面里') +
+          (p.role === 'aha' ? '：顿悟句也一样，刚画完的东西观众还看着，推近把它框进来就够了，不用再描' : '，再描一遍只是重复。回描只用在两处：指回镜头外、前面画过的旧东西（换了节或回看），或顿悟那一步（role: aha）描出前面画的、要总结的东西。别的删掉，让笔停一下、镜头静一会儿就好'));
+      }
+    });
+    if (flagged > 3) add('script.retrace', 'phrases', `这一集 ${n} 处回描，${flagged} 处是重复（上面逐条列了）`);
+  }
   return issues;
 }
 

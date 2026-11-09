@@ -11,7 +11,7 @@
   "sync.trail": "advice", "sync.lag": "advice", "pace.pause": "advice",
   "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
   "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
-  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice"
+  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice", "script.retrace": "advice"
  },
 
  "palette": {
@@ -223,6 +223,7 @@
 
  "narrative": {
   "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2, "termWithin": 3, "termWithinNote": "写稿自查（compiler/script_checks.mjs）：新词、新例子第一次说到以后，最多隔几句就要讲清（brief.terms 的 explain、bridge）" },
-  "segment": { "requireRoles": [], "minQuiz": 0 }
+  "segment": { "requireRoles": [], "minQuiz": 0 },
+  "retrace": { "recentSec": 8, "rate": 4, "note": "写稿自查 script.retrace：回描的东西不到 recentSec 秒前刚画（按旁白每秒 rate 字估），或就在这一节、这句又不是顿悟，算重复（E03 样片 28 句 36 处回描，用户：太多了）" }
  }
 }

@@ -988,7 +988,8 @@ const out = {
   // 铅笔角度轨迹。每帧可行的角度（整支笔在画布内、笔身和影子不压字幕）是若干区间，不是"转够就行"的门槛：
   // 转多了一样会压到别处（实测方版为避开右边缘多转的角度把笔转进了字幕）。所以用动态规划，在可行角度里
   // 找一条转得慢（每帧 turnPerFrame 度，必要时两倍）、离自然角度最近的轨迹；哪一帧没有可行角度，就报给分镜。
-  const STEP = P.turnPerFrame, K = Math.round((P.maxAngle - P.minAngle) / STEP) + 1, ang = (k) => P.minAngle + k * STEP;
+  // turnPerFrame 和下面的每帧上限都是按 60 帧/秒定的「每 1/60 秒」，换成这条时间线的每帧（30 帧/秒时每帧可以转两倍）：转得多快按秒算，和铅笔检查一致
+  const PF = 60 / FPS, STEP = P.turnPerFrame * PF, K = Math.round((P.maxAngle - P.minAngle) / STEP) + 1, ang = (k) => P.minAngle + k * STEP;
   const a0s = new Float64Array(nF), feas = new Array(nF).fill(null); // feas[f]：null = 任何角度都行；否则按 1° 采样的可行表
   for (let f = 0; f < nF; f++) {
     const t = f / FPS, cam = cameraAt(camera, t), p = penAt(out, t);
@@ -1062,7 +1063,7 @@ const out = {
   // 在自然角度（不量化）和规划角度（按 turnPerFrame 量化）之间切换的那一帧会多跳最多一步：再按检查的上限压一遍每帧转角
   // （写字、停笔 ≤0.45°，抬笔移动 ≤0.95°，比检查的 0.5°、1° 各留一点余量）
   for (let f = 1; f < nF; f++) {
-    const lim = moving[f] ? 0.95 : 0.45, prev = a0s[f - 1] + edge[f - 1], cur = a0s[f] + edge[f];
+    const lim = (moving[f] ? 0.95 : 0.45) * PF, prev = a0s[f - 1] + edge[f - 1], cur = a0s[f] + edge[f];
     if (Math.abs(cur - prev) > lim) edge[f] = Math.round((prev + Math.sign(cur - prev) * lim - a0s[f]) * 100) / 100;
   }
   const stuck = [...path.keys()].filter((f) => !feasible(f, path[f]));

@@ -146,7 +146,13 @@ if (SAMPLE && libOk && beatsOk && voiceOk) {
   fs.mkdirSync('build', { recursive: true });
   fs.writeFileSync(sp, JSON.stringify(sb));
   const id = `${SAMPLE_ID}-${t}`, video = path.join(outDir, `${t}.mp4`);
-  if (run(`[${t}] 编译（样片，${S.fps} 帧/秒）`, 'node', ['compiler/compile.mjs', sp, '--target', t, '--no-validate'])) {
+  // 样片只看内容方向：编译报了「待改」（比如低帧率下铅笔贴边，E03 样片 15 帧/秒报、60 帧/秒不报）但时间线写出来了，照样混音、渲染，
+  // 待改留在报告里，打磨时整片编译再修。时间线没写出来（真编译失败）才停
+  const tlp = `build/${id}.timeline.json`, tc0 = Date.now();
+  const compiledOk = run(`[${t}] 编译（样片，${S.fps} 帧/秒）`, 'node', ['compiler/compile.mjs', sp, '--target', t, '--no-validate']);
+  const usable = compiledOk || (fs.existsSync(tlp) && fs.statSync(tlp).mtimeMs >= tc0);
+  if (!compiledOk && usable) skip(`[${t}] 编译的待改`, '样片照出：时间线已写出，待改见上一步，打磨时整片编译再修');
+  if (usable) {
     spawnSync('node', ['compiler/gen-compositions.mjs']);
     if (run(`[${t}] 混音`, PY_QA, ['audio/mix.py', `build/${id}.timeline.json`]))
       run(`[${t}] 渲染（样片，${Math.round(styleJson.targets[t].w * S.scale)}×${Math.round(styleJson.targets[t].h * S.scale)}）`, 'npx', ['remotion', 'render', 'src/index.ts', id, video, '--log=error', `--scale=${S.scale}`, `--x264-preset=${S.x264Preset}`, ...(GL ? [`--gl=${GL}`] : [])]);

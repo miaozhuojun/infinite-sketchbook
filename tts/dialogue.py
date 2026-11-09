@@ -45,7 +45,8 @@ for k, o in enumerate(order):
         raise SystemExit(f"第 {k + 1} 句「{o['text']}」和「{who or '主讲'}」配音里的第 {j + 1} 句「{S[j]['text'] if j < len(S) else '（没有了）'}」对不上")
     P["next"] = j + 1
     s = S[j]
-    ws = [w for w in P["t"]["words"] if s["start"] - 1e-3 <= w["start"] and w["end"] <= s["end"] + 1e-3]
+    # 按字的起点归句：句末最后一个字的终点常比句子终点晚几十毫秒（E03「大模型」的「型」晚 25ms），按终点卡会把它丢掉
+    ws = [dict(w, end=min(w["end"], s["end"])) for w in P["t"]["words"] if s["start"] - 1e-3 <= w["start"] < s["end"]]
     if not ws:
         raise SystemExit(f"「{o['text']}」在配音的逐字时间里没有字")
     a, b = int(round(s["start"] * sr)), int(round(s["end"] * sr))

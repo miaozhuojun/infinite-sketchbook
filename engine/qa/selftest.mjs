@@ -416,6 +416,27 @@ sf.write(${JSON.stringify(dst)}, (m if x.ndim == 1 else np.repeat(m[:, None], x.
 // 只给建议的几条：基线自己就报了这条建议时，注入看不出抓没抓到，跳过并写明
 const speechAdvice = (name, mutate, mustSay) => (noSpeech ? skip(name, noSpeech) : !b2 || b2.status !== 0 ? skip(name, '旁白基线没通过')
   : ((b2.stdout || '') + (b2.stderr || '')).includes(mustSay) ? skip(name, `基线自己就报了「${mustSay}」`) : expectFail(name, mutate, speech, mustSay, sbase));
+// 声调：一个字整集都念成别的声调（多音字按拼音库的读法念、「拧旋钮」念成 níng；用户听 E03 样片）。
+// 注入办法：基线里最常出现、走势和本调最一致的一个字，在读法表里把它改登记成别的声调；声调检查（tone_check.py，不用载模型，单独跑几秒）要报它整集念得不像
+(() => {
+  const name = '一个字整集都念成别的声调（拼音库标错的多音字，用户听 E03 样片「前半段有读错的」）';
+  if (noSpeech) return skip(name, noSpeech);
+  const nar = sbeatsSrc.narration || {};
+  const audio = path.resolve('public', nar.audio || ''), timing = path.resolve('data', nar.timing || '');
+  if (!nar.audio || !fs.existsSync(audio) || !fs.existsSync(timing)) return skip(name, '基线没有配音或逐字时间');
+  const tone = (args) => spawnSync(PY_MLX, ['tone_check.py', audio, timing, ...args], { encoding: 'utf8', cwd: '../tts' });
+  const j = path.resolve('build/_selftest.tone.json'), rd = path.resolve('build/_selftest.readings.json');
+  tone(['--json', j]);
+  const chars = fs.existsSync(j) ? JSON.parse(fs.readFileSync(j, 'utf8')).chars : {};
+  const pick = Object.entries(chars).filter(([k, v]) => k.startsWith('|') && /^[一-鿿]$/.test(k.split('|')[1]) && v.agree >= 0.7).sort((a, b) => b[1].n - a[1].n)[0];
+  if (!pick) return skip(name, '基线里没有出现够多、走势又一致的字');
+  const [, ch, t] = pick[0].split('|');
+  const own = JSON.parse(fs.readFileSync('../tts/readings.json', 'utf8'));
+  fs.writeFileSync(rd, JSON.stringify({ ...own, chars: { ...own.chars, [ch]: `a${{ 1: 3, 2: 4, 3: 1, 4: 2 }[t]}` } }));
+  const r = tone(['--readings', rd]), out = (r.stdout || '') + (r.stderr || '');
+  record(name, out.includes(`「${ch}」`) && out.includes('整集一直念得不像'), out);
+  for (const f of [j, rd]) fs.rmSync(f, { force: true });
+})();
 speechCase('整集的嗓子都低了 12%（像换了个大一点的孩子；Qwen3 的「音色一致性」看不出来）', sameSpeakerSrc(`
 for s in sp: shift(int(s['start'] * sr), int(s['end'] * sr), 0.88)`), '[失败] 像这个孩子');
 speechAdvice('有一句的嗓子像换了个孩子（音高和共振峰一起抬 15%；原来的「每句都是同一个人」看不出来）', sameSpeakerSrc(`
@@ -689,6 +710,12 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
 }, compileNoFix(TGT), /说完后才起笔|和本句旁白重叠/, { advice: true });
 
 // 配音风险（script.tts，只给建议）：很短的问句、含以前被听错过的字的句子（E03 两句爸爸的短问句被听错）。注入的句子和听错记录都自己带
+// 回描（script.retrace，只给建议）：刚画完、就在画面里的东西又描一遍（E03 样片 28 句 36 处回描，用户：太多了）。注入：一句不是顿悟的句子，回描它自己刚画的东西
+expectBeats('写稿自查：回描这句刚画的东西（重复，不是指回旧东西，也不是顿悟）', (b) => {
+  const p = b.phrases.find((q) => q.role !== 'aha' && (q.actions ?? []).some((a) => a.type !== 'retrace' && a.type !== 'strike'));
+  const a0 = p.actions.find((a) => a.type !== 'retrace' && a.type !== 'strike');
+  p.actions.push({ id: '_rt', type: 'retrace', at: a0.at, target: a0.id });
+}, validate, /_rt：回描「[^」]+」.*就是这句画的/, { advice: true });
 expectBeats('写稿自查：只有几个字的问句（配音容易念含糊、被听错）', (b) => {
   b.narration.script = `${b.narration.script}嘎嘣呢？`;
 }, validate, /「嘎嘣呢？」.*只有 3 个字的问句/, { advice: true });

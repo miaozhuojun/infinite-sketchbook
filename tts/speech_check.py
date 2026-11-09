@@ -5,7 +5,7 @@
   2. 吞字：配音时逐句对齐的逐字时间映射到成片旁白，每个字时长 ≥ 50ms，且能量不低于中位数 18 dB 以上。
   3. 断音/爆音：两侧都在发声的 ≥5ms 全零段（字中间掉音）不得出现，不得有相邻采样突跳。
   4. 总混可懂度：带书写声和音乐的总混，ASR 回转字错率 ≤ 2%。
-另有一项只给建议、不判失败：语气起伏（句内起伏和句间音区变化，和 voice.json 里按真人录音标定的值比）。
+另有几项只给建议、不判失败：语气起伏（句内起伏和句间音区变化，和 voice.json 里按真人录音标定的值比）、声调（tone_check.py，每个字的走势和该念的声调比）。
 用法：.venv-mlx/bin/python speech_check.py <timeline.json> [engine 根目录]
 """
 import json
@@ -231,6 +231,12 @@ if voice.get("flowBaseline"):
             f"90% 分位 {cmp(float(np.percentile(resets, 90)), bl['resetP90St'], '{:.1f}')}",
             f"语速波动 {cmp(float(rates.std() / rates.mean()), bl['rateCv'], '{:.2f}')}",
             f"句间停顿超过 1.5 秒 {cmp(longp, bl['longPauses'], '{}')} 处（共 {len(gaps)} 处）"]))
+
+# 0j. 声调（建议，不拦）：每个字的基频走势和按上下文该念的声调比（tone_check.py）。回转识别按上下文写字，
+#     「拧（nǐng）」念成 níng 也照样写回「拧」，拼音比对查不出声调错（用户听 E03 样片：前半段有读错的）
+from tone_check import check as tone_check_run
+xs5, ssr5 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+print("\n".join(tone_check_run(xs5, ssr5, timing0, Path(__file__).parent / "readings.json", who)[1]))
 
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))

@@ -220,7 +220,8 @@ FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
 # 就把「稿子 / 听成 / 听错的字」追加进去。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）以后提醒含这些字的句子。
 # E03：「那，拧哪个？」听成「那您哪个」，「往哪边拧？」听成「往哪边去」
 MISHEARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "misheard.json")
-HEARD = {}  # 句子 → 这次各个种子回转识别没对上时听成的说法
+HEARD = {}  # 句子 → 这次各个种子回转识别没对上时听成的说法（只收字数对得上的那种，给 misheard.json 用）
+HYPS = {}  # 句子 → 回转识别没对上时听成的说法，字数差多少都记，卡句清单用（识别自己多加了符号、多念漏念几个字的，在清单里一眼看得出）
 # 句子 → 这次没过关的种子 [(种子, 哪一类, 那一行说明)]。一句试满都没过时不再当场中断：记下来接着配后面的句子，
 # 全部配完一次列出所有卡住的句子（最常见的原因、回转识别听成了什么），再非零退出。
 # 原来卡一句就中断整轮：E04 153 句，一句试了 37 分钟才报错，改写后下一句又卡 11 分钟，一轮只能发现一句
@@ -313,6 +314,8 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
             reject(text, seed, "回转识别没对上" if c > 0 else "掉音", f" 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
+            if c > 0:
+                HYPS.setdefault(text, []).append(hyp)
             if c > 0 and abs(len(hs) - len(rs)) <= 1:  # 开头串进多余字的那种（只多出字）不算听错
                 HEARD.setdefault(text, []).append(hyp)
             continue
@@ -635,6 +638,13 @@ def tally(text):
     return "、".join(f"{k} {n} 次" for k, n in Counter(k for _, k, _ in FAILS.get(text, [])).most_common())
 
 
+def heard_as(text):
+    """这句话回转识别最常听成的两种说法：「；回转识别听成「……」5 次」，没有就是空串"""
+    from collections import Counter
+    top = Counter(HYPS.get(text, [])).most_common(2)
+    return "；回转识别听成" + "、".join(f"「{h}」{n} 次" for h, n in top) if top else ""
+
+
 # 卡句清单：试满都没配出来的句子一次列全，每句一行 [错误]（流水线把这些行原样记进报告的「待改」），每个种子的原因另存 <输出前缀>.stuck.json。
 # 配好的句子都已进缓存，改写卡住的句子后重跑只配改过的。没配全就不拼接、不做后面的整段检查
 STUCK_FILE = args.out + ".stuck.json"
@@ -642,17 +652,15 @@ if stuck_at:
     from collections import Counter
     rows = []
     for sent, idx in stuck_at.items():
-        heard = Counter(HEARD.get(sent, [])).most_common(2)
-        why = f"试了 {len(FAILS.get(sent, []))} 个种子：{tally(sent) or '没有记录'}"
-        if heard:
-            why += "；回转识别听成" + "、".join(f"「{h}」{n} 次" for h, n in heard)
+        why = f"试了 {len(FAILS.get(sent, []))} 个种子：{tally(sent) or '没有记录'}{heard_as(sent)}"
         if sent in SPLIT_STUCK:
-            why += f"；拆成两半，「{SPLIT_STUCK[sent]}」这一半也没过" + (f"（{tally(SPLIT_STUCK[sent])}）" if tally(SPLIT_STUCK[sent]) else "")
+            half = SPLIT_STUCK[sent]
+            why += f"；拆成两半，「{half}」这一半也没过" + (f"（{tally(half)}{heard_as(half)}）" if tally(half) else "")
         else:
             why += "；句子里没有能拆成两半的逗号"
         print(f"[错误] 第 {'、'.join(str(k + 1) for k in idx)}/{len(sents)} 句配不出来：「{sent.strip()}」{why}")
         rows.append({"index": [k + 1 for k in idx], "text": sent.strip(), "reasons": dict(Counter(k for _, k, _ in FAILS.get(sent, []))),
-                     "heard": [{"text": h, "times": n} for h, n in Counter(HEARD.get(sent, [])).most_common()],
+                     "heard": [{"text": h, "times": n} for h, n in Counter(HYPS.get(sent, [])).most_common()],
                      "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(sent, [])],
                      **({"half": {"text": SPLIT_STUCK[sent], "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(SPLIT_STUCK[sent], [])]}} if sent in SPLIT_STUCK else {})})
     json.dump({"sentences": len(sents), "stuck": rows}, open(STUCK_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)

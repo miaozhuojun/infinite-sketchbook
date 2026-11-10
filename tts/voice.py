@@ -160,10 +160,11 @@ def pause_points(words, start=0.0, end=None, min_pause=0.12):
 BREAK_PUNCT = "，、：；,;:"   # 句内该停一下的标点（句号、问号、叹号是句子之间，另有停顿）
 
 
-def phrasing(x, sr, words, text, stray=0.20, miss=0.06, floor_db=35.0):
+def phrasing(x, sr, words, text, stray=0.26, miss=0.06, floor_db=35.0):
     """断句：一句里每两个字之间最长的一段静音（前一个字的中点到后一个字的中点，比最响处低 floor_db 算静音）。
     返回 (stray, missed)，每项是 [(前文, 后文, 秒)]：
-      stray：没有标点却停了 ≥ stray 秒（「你还真猜对了……一半」「原地转圈……圈」）；
+      stray：没有标点却停了 ≥ stray 秒（「你还真猜对了……一半」0.29、「原地转圈……圈」0.34）。门槛 0.26：下一个字是 b/d/g/z 这类塞音时，
+        闭口那一下也是静音，0.20–0.25 秒常见（PR #59 审查在 989 条缓存上量到）；
       missed：逗号、顿号、冒号、分号处静音不到 miss 秒，一口气念了过去（「这一句只是他们觉得，并没有证明」逗号处 0）。
     用户 2026-11-10 听 E04 样片：该断的地方不断，不该断的地方断了。样片量出来 289 个逗号里 124 个没停，没标点却停了 0.2 秒以上的 9 处。
     words 和 text 对不上（数字念法、多出的字）时返回 ([], [])，不拦。"""
@@ -171,12 +172,14 @@ def phrasing(x, sr, words, text, stray=0.20, miss=0.06, floor_db=35.0):
     if not words:
         return [], []
     marks, k, buf = [], 0, ""   # marks[i] = 第 i 个词后面跟着的标点
+    import unicodedata
     for ch in text:
         if ch in BREAK_PUNCT or ch in "。？！.?!":
             if marks and not buf:
                 marks[-1] += ch
             continue
-        if not ch.strip() or k >= len(words):
+        # 其余标点、符号、空白（引号、括号、书名号、连字符「GPT-3」……）对齐前都去掉了，这里也跳过
+        if unicodedata.category(ch)[0] in "PSZ" or not ch.strip() or k >= len(words):
             continue
         buf += ch
         if buf == words[k]["text"]:

@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import phrasing, read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -216,6 +216,7 @@ asr_text = lambda path: said_text(asr.generate(path, language="Chinese").text)
 # 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
 # 「这就叫机器学习。」几乎全是 j/q/x，浊音谱平坦度天生偏高，30 多个种子都在 0.09 以上；原来每次跑都扔掉重配、再退回同一条，一次三分钟
 FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
+STRAY_FALLBACK = "每条都有没标点却停的地方，用停得最短的一条"  # 缓存里记 strayFallback，以后复查不再因为断句扔掉它
 # 配音容易听错的说法（tts/misheard.json，本机私有；没有时从 misheard.example.json 起头）：一句试满都没过、回转识别至少两次听成同一个说法，
 # 就把「稿子 / 听成 / 听错的字」追加进去。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）以后提醒含这些字的句子。
 # E03：「那，拧哪个？」听成「那您哪个」，「往哪边拧？」听成「往哪边去」
@@ -265,6 +266,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     best = None  # 只差背景分的候选里最干净的一条
     best_flat = None  # 只差沙沙声的候选里最干净的一条
     best_rate = None  # 只差语速的候选里离目标最近的一条
+    best_stray = None  # 只差断句（没标点却停了）的候选里停得最短的一条
     cands = []
     tone = tone or tone_of(text); target = TONES.get(tone, {})
     for attempt in range(args.max_tries):
@@ -350,12 +352,22 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             if not best_rate or abs(pr["artRate"] / RATE["target"] - 1) < best_rate[0]:
                 best_rate = (abs(pr["artRate"] / RATE["target"] - 1), (audio, sr, seed, note, rel, bk))
             continue
+        # 断错了地方：没有标点却停了（「你还真猜对了……一半」）。放在别的关卡后面，被它拒掉的候选别的都过了，可以当退路。
+        # 样片也查：用户看样片就听得出来（2026-11-10，E04）
+        stray, missed = phrasing(audio, sr, rel, text)
+        if stray:
+            reject(text, seed, "断错了地方", "：没有标点却停了 " + "、".join(f"「{a}|{b}」{g:.2f}s" for a, b, g in stray) + "，换种子重来")
+            g_ = max(g for _, _, g in stray)
+            if not best_stray or g_ < best_stray[0]:
+                best_stray = (g_, (audio, sr, seed, note, rel, bk))
+            continue
         e = embedding(spk, audio, sr)
         # 配了语速目标时，连贯打分不再拿声音包的基准语速比（量法不同：声音包按「首字到末字」量，逗号停顿算进去，每句都显得慢，候选就偏向快的那条）
         score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, None if RATE.get("target") else BASE_RATE, target.get("rate"))
+        pr["missed"] = len(missed)  # 逗号处一口气念过去的个数：挑候选时先比它，再比语气分（该断的地方要断）
         cands.append((score, (audio, sr, seed, note, rel, bk), pr))
     if cands:
-        cands.sort(key=lambda q: q[0])
+        cands.sort(key=lambda q: (q[2].get("missed", 0), q[0]))
         sc, pick, pr = cands[0]
         if len(cands) > 1:
             print(f"    {len(cands)} 条候选按「{tone}」挑了种子 {pick[2]}（音区 {12 * np.log2(pr['f0'] / BASE_F0) if BASE_F0 and pr['f0'] else 0:+.1f} 半音、起伏 {pr['range']:.1f}、句末 {pr['end']:+.1f}）")
@@ -381,6 +393,10 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     if best:
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
+    if best_stray:
+        print(f"    {args.max_tries} 次里每条都有没标点却停的地方，用停得最短的种子 {best_stray[1][2]}（{best_stray[0]:.2f}s）")
+        a_, sr_, sd_, nt_, rel_, bk_ = best_stray[1]
+        return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + STRAY_FALLBACK, rel_, bk_
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次没有一条全部关卡都过（回转识别、掉嗓子、破音、硬切、语速……原因见上面每个种子那一行），需要人工处理（改写难读的词、拆短，或换参考音）")
 
 
@@ -406,6 +422,18 @@ def split_synth(sent, seed0, pause=0.25, strict=False):
     audio = np.concatenate([a1, np.zeros(int(pause * sr_), np.float32), a2])
     rel = rel1 + [dict(w, start=w["start"] + off, end=w["end"] + off) for w in rel2]
     return audio, sr_, s1, "；".join(x for x in [n1, n2, "自动拆成两半配"] if x), rel, bk1
+
+
+def stray_cached(key, sent):
+    """缓存里的这句断错了地方（加断句检查之前配的）：重配"""
+    meta_c = json.load(open(key + ".json", encoding="utf-8"))
+    if meta_c.get("strayFallback") or os.path.exists(key + ".postfail"):  # 试满才收下的退路、换种子也配不好留了原条的：再配还是一样
+        return False
+    x_c, sr_c = sf.read(key + ".wav", dtype="float32")
+    st, _ = phrasing(x_c, sr_c, meta_c["words"], sent)
+    if st:
+        print(f"  缓存里的「{sent.strip()}」没有标点却停了（" + "、".join(f"{a}|{b} {g:.2f}s" for a, b, g in st) + "），重新生成")
+    return bool(st)
 
 
 def make_take(sent, seed0, strict=False):
@@ -604,9 +632,13 @@ for i, sent in enumerate(sents):
             if meta_c["bak"] < GEN_BAK:
                 print(f"  缓存里的「{sent}」背景不干净（DNSMOS BAK {meta_c['bak']:.2f}），重新生成")
                 cached = False
+    if cached and stray_cached(key, sent):
+        cached = False
     if FAST and not cached:
         key = os.path.join(CACHE, cache_key(sent))  # 精配那条没过复查：快配写进快配的缓存，绝不覆盖精配的
         cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
+        if cached and stray_cached(key, sent):
+            cached = False
     if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")
         meta = json.load(open(key + ".json", encoding="utf-8"))
@@ -645,7 +677,7 @@ for i, sent in enumerate(sents):
         else:
             sf.write(key + ".wav", audio, sr)
             json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
-                       **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+                       **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {}), **({"strayFallback": True} if STRAY_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     after_stuck = False
     takes.append([audio, sr, seed, note, rel])
     if FLOW:  # 下一句挑候选时要和这一句接得上

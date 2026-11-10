@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import phrasing, read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -324,6 +324,11 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         if squashed(rel):
             reject(text, seed, "吞字或对不上", f"：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
             continue
+        # 断错了地方：没有标点却停了 0.2 秒以上（「你还真猜对了……一半」）。样片也查：用户看样片就听得出来（2026-11-10，E04）
+        stray, missed = phrasing(audio, sr, rel, text)
+        if stray:
+            reject(text, seed, "断错了地方", "：没有标点却停了 " + "、".join(f"「{a}|{b}」{g:.2f}s" for a, b, g in stray) + "，换种子重来")
+            continue
         # 硬切（成片旁白检查 0k 的同一条规则）：原来只在拼好后和成片里查，这里先挡掉，退路里也就不会有
         if (he := hard_edges(audio, sr)):
             reject(text, seed, "硬切", f"：硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in he) + "，换种子重来")
@@ -353,9 +358,10 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         e = embedding(spk, audio, sr)
         # 配了语速目标时，连贯打分不再拿声音包的基准语速比（量法不同：声音包按「首字到末字」量，逗号停顿算进去，每句都显得慢，候选就偏向快的那条）
         score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, None if RATE.get("target") else BASE_RATE, target.get("rate"))
+        pr["missed"] = len(missed)  # 逗号处一口气念过去的个数：挑候选时先比它，再比语气分（该断的地方要断）
         cands.append((score, (audio, sr, seed, note, rel, bk), pr))
     if cands:
-        cands.sort(key=lambda q: q[0])
+        cands.sort(key=lambda q: (q[2].get("missed", 0), q[0]))
         sc, pick, pr = cands[0]
         if len(cands) > 1:
             print(f"    {len(cands)} 条候选按「{tone}」挑了种子 {pick[2]}（音区 {12 * np.log2(pr['f0'] / BASE_F0) if BASE_F0 and pr['f0'] else 0:+.1f} 半音、起伏 {pr['range']:.1f}、句末 {pr['end']:+.1f}）")
@@ -406,6 +412,15 @@ def split_synth(sent, seed0, pause=0.25, strict=False):
     audio = np.concatenate([a1, np.zeros(int(pause * sr_), np.float32), a2])
     rel = rel1 + [dict(w, start=w["start"] + off, end=w["end"] + off) for w in rel2]
     return audio, sr_, s1, "；".join(x for x in [n1, n2, "自动拆成两半配"] if x), rel, bk1
+
+
+def stray_cached(key, sent):
+    """缓存里的这句断错了地方（加断句检查之前配的）：重配"""
+    x_c, sr_c = sf.read(key + ".wav", dtype="float32")
+    st, _ = phrasing(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], sent)
+    if st:
+        print(f"  缓存里的「{sent.strip()}」没有标点却停了（" + "、".join(f"{a}|{b} {g:.2f}s" for a, b, g in st) + "），重新生成")
+    return bool(st)
 
 
 def make_take(sent, seed0, strict=False):
@@ -604,9 +619,13 @@ for i, sent in enumerate(sents):
             if meta_c["bak"] < GEN_BAK:
                 print(f"  缓存里的「{sent}」背景不干净（DNSMOS BAK {meta_c['bak']:.2f}），重新生成")
                 cached = False
+    if cached and stray_cached(key, sent):
+        cached = False
     if FAST and not cached:
         key = os.path.join(CACHE, cache_key(sent))  # 精配那条没过复查：快配写进快配的缓存，绝不覆盖精配的
         cached = not args.no_cache and os.path.exists(key + ".wav") and os.path.exists(key + ".json")
+        if cached and stray_cached(key, sent):
+            cached = False
     if cached:
         audio, sr = sf.read(key + ".wav", dtype="float32")
         meta = json.load(open(key + ".json", encoding="utf-8"))

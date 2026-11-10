@@ -147,6 +147,13 @@ export function validateBeats(beats, style, reg) {
     const C = style.chapters;
     if (chapterAt.length < C.minCount || chapterAt.length > C.maxCount) E('chapters', `共 ${chapterAt.length} 节，要在 ${C.minCount}–${C.maxCount} 节之间（YouTube 至少 3 节，B 站最多 10 节）`);
   }
+  // 音乐休止：只能列出这一集真有的节名
+  const rest = style.audio?.music?.rest ?? [];
+  const titles = new Set(beats.phrases.map((p) => p.chapter).filter(Boolean));
+  if (!Array.isArray(rest)) E('style.audio.music.rest', '要列出节名（这些节里音乐淡出）');
+  else for (const r of rest) if (!titles.has(r)) E('style.audio.music.rest', `「${r}」不是这一集的节名`);
+  const rf = style.audio?.music?.restFade ?? 3;
+  if (!(Number.isFinite(rf) && rf >= 0)) E('style.audio.music.restFade', '休止前后淡出淡入的秒数，要是不小于 0 的数');
   const ids = new Set(), drawnBefore = new Set();
   beats.phrases.forEach((p, pi) => {
     const P = `phrases[${pi}]「${(p.text || '').slice(0, 8)}」`;

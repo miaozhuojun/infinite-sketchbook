@@ -160,19 +160,10 @@ def pause_points(words, start=0.0, end=None, min_pause=0.12):
 BREAK_PUNCT = "，、：；,;:"   # 句内该停一下的标点（句号、问号、叹号是句子之间，另有停顿）
 
 
-def phrasing(x, sr, words, text, stray=0.26, miss=0.06, floor_db=35.0):
-    """断句：一句里每两个字之间最长的一段静音（前一个字的中点到后一个字的中点，比最响处低 floor_db 算静音）。
-    返回 (stray, missed)，每项是 [(前文, 后文, 秒)]：
-      stray：没有标点却停了 ≥ stray 秒（「你还真猜对了……一半」0.29、「原地转圈……圈」0.34）。门槛 0.26：下一个字是 b/d/g/z 这类塞音时，
-        闭口那一下也是静音，0.20–0.25 秒常见（PR #59 审查在 989 条缓存上量到）；
-      missed：逗号、顿号、冒号、分号处静音不到 miss 秒，一口气念了过去（「这一句只是他们觉得，并没有证明」逗号处 0）。
-    用户 2026-11-10 听 E04 样片：该断的地方不断，不该断的地方断了。样片量出来 289 个逗号里 124 个没停，没标点却停了 0.2 秒以上的 9 处。
-    words 和 text 对不上（数字念法、多出的字）时返回 ([], [])，不拦。"""
-    x = np.asarray(x, dtype=np.float64); x = x.mean(1) if x.ndim > 1 else x
-    if not words:
-        return [], []
-    marks, k, buf = [], 0, ""   # marks[i] = 第 i 个词后面跟着的标点
+def _marks(words, text):
+    """marks[i] = 第 i 个词后面跟着的标点（句内停顿和句末标点）；words 和 text 对不上（数字念法、多出的字）时返回 None"""
     import unicodedata
+    marks, k, buf = [], 0, ""
     for ch in text:
         if ch in BREAK_PUNCT or ch in "。？！.?!":
             if marks and not buf:
@@ -185,8 +176,53 @@ def phrasing(x, sr, words, text, stray=0.26, miss=0.06, floor_db=35.0):
         if buf == words[k]["text"]:
             marks.append(""); k += 1; buf = ""
         elif not words[k]["text"].startswith(buf):
-            return [], []
-    if k != len(words):
+            return None
+    return marks if k == len(words) else None
+
+
+def _ctx(words, i):
+    return "".join(w["text"] for w in words[max(0, i - 4): i + 1]), "".join(w["text"] for w in words[i + 1: i + 4])
+
+
+DRAWL = {"minSec": 0.42, "ratio": 2.2}   # 字拖长的默认门槛，voice.json 的 drawl 可以改（minSec 填 0 表示不查）
+
+
+def drawls(words, text, min_sec=DRAWL["minSec"], ratio=DRAWL["ratio"]):
+    """字拖长：句中一个字后面没有标点，对齐出来的时长 ≥ min_sec 秒，而且 ≥ ratio 倍这条配音单字时长的中位数。返回 [(前文, 后文, 秒)]。
+    用户 2026-11-10 听 E04 样片「天黑不天黑都一样」：听着在「黑」后面断开了，其实没有静音（phrasing 的 stray 抓不到），是「黑」拖了 0.56 秒，
+    这一段别的字中位 0.24 秒。拖长和停错一样，听着都是断在没有标点的地方。
+    只看单字的词（英文、数字连成一个词的时长不能按一个字比）；最后一个字是句末，拖长是正常收尾，不查。
+    words 和 text 对不上时返回 []，不拦。"""
+    if not min_sec or len(words) < 3:
+        return []
+    marks = _marks(words, text)
+    if marks is None:
+        return []
+    dur = [w["end"] - w["start"] for w in words]
+    single = [d for w, d in zip(words, dur) if len(w["text"]) == 1]
+    if len(single) < 3:
+        return []
+    med = float(np.median(single))
+    return [(*_ctx(words, i), round(dur[i], 2)) for i in range(len(words) - 1)
+            if not marks[i] and len(words[i]["text"]) == 1 and dur[i] >= min_sec and dur[i] >= ratio * med]
+
+
+def phrasing(x, sr, words, text, stray=0.26, miss=0.06, floor_db=35.0, drawl=None):
+    """断句：一句里每两个字之间最长的一段静音（前一个字的中点到后一个字的中点，比最响处低 floor_db 算静音）。
+    返回 (stray, missed)，每项是 [(前文, 后文, 秒, 类)]：
+      stray：断在了没有标点的地方，两类——
+        「停」：没有标点却停了 ≥ stray 秒（「你还真猜对了……一半」0.29、「原地转圈……圈」0.34）。门槛 0.26：下一个字是 b/d/g/z 这类塞音时，
+          闭口那一下也是静音，0.20–0.25 秒常见（PR #59 审查在 989 条缓存上量到）；
+        「拖」：没有静音，但字拖长了（drawls，「天黑……不天黑」的「黑」0.56 秒），秒数是这个字的时长。drawl 是 voice.json 的 drawl（minSec、ratio），
+          不给时用 DRAWL；
+      missed：逗号、顿号、冒号、分号处静音不到 miss 秒，一口气念了过去（「这一句只是他们觉得，并没有证明」逗号处 0），类是「连」。
+    用户 2026-11-10 听 E04 样片：该断的地方不断，不该断的地方断了。样片量出来 289 个逗号里 124 个没停，没标点却停了 0.2 秒以上的 9 处。
+    words 和 text 对不上（数字念法、多出的字）时返回 ([], [])，不拦。"""
+    x = np.asarray(x, dtype=np.float64); x = x.mean(1) if x.ndim > 1 else x
+    if not words:
+        return [], []
+    marks = _marks(words, text)
+    if marks is None:
         return [], []
     e, hop = _env_db(x, sr); quiet = e < e.max() - floor_db
     mid = lambda w: (w["start"] + w["end"]) / 2
@@ -197,15 +233,28 @@ def phrasing(x, sr, words, text, stray=0.26, miss=0.06, floor_db=35.0):
             cur = cur + 1 if q else 0; best = max(best, cur)
         return best * hop
 
-    ctx = lambda i: ("".join(w["text"] for w in words[max(0, i - 4): i + 1]), "".join(w["text"] for w in words[i + 1: i + 4]))
     st, ms = [], []
     for i in range(len(words) - 1):
         g = longest(mid(words[i]), mid(words[i + 1]))
         if not marks[i] and g >= stray:
-            st.append((*ctx(i), round(g, 2)))
+            st.append((*_ctx(words, i), round(g, 2), "停"))
         elif marks[i] and marks[i][-1] in BREAK_PUNCT and g < miss:
-            ms.append((*ctx(i), round(g, 2)))
+            ms.append((*_ctx(words, i), round(g, 2), "连"))
+    d = {**DRAWL, **(drawl or {})}
+    seen = {a for a, _, _, _ in st}
+    st += [(a, b, g, "拖") for a, b, g in drawls(words, text, d["minSec"], d["ratio"]) if a not in seen]  # 同一处又停又拖只记一次
     return st, ms
+
+
+def stray_text(items):
+    """断错地方的说明：「天黑|不天」拖长 0.56s、「猜对了|一半」停了 0.29s"""
+    return "、".join(f"「{a}|{b}」{'拖长' if k == '拖' else '停了'} {g:.2f}s" for a, b, g, k in items)
+
+
+def stray_excess(items, stray=0.26, drawl=None):
+    """断错得多厉害：每处秒数除以它那一类的门槛，取最大。试满都断错时挑它最小的一条当退路"""
+    lim = {"停": stray, "拖": {**DRAWL, **(drawl or {})}["minSec"] or 1.0}
+    return max(g / lim[k] for _, _, g, k in items)
 
 
 def echo_ms(x, sr, offsets, drop=20.0):

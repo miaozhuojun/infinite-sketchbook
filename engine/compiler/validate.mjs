@@ -4,7 +4,7 @@
 // 用法：node compiler/validate.mjs data/<id>.beats.json
 import { polyphoneIssues } from './polyphones.mjs';
 import { scriptIssues } from './script_checks.mjs';
-import { isDialogue, sentenceSpeakers, voicesOf } from './speakers.mjs';
+import { isDialogue, sentenceSpeakers, stripPunct, voicesOf } from './speakers.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,6 +118,28 @@ export function validateBeats(beats, style, reg) {
   for (const [t, m] of Object.entries(beats.narration?.mood ?? {})) {
     if (!sentences.includes(t)) E('narration.mood', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
     if (typeof m !== 'string' || !m.trim() || m.includes('=')) E('narration.mood', `「${t}」的情绪要写 voice.json 的 moods 里的名字`);
+  }
+  // 很短的一句单独成句（「爸！」「对。」「还真是。」「办不到。」）：配音按句生成，几个字的句子单独配，音色会飘，
+  // 旁白检查「每句都是同一个人」过不了（E03、E04 各卡了几次）。跟同一个人的下一句（没有就上一句）连成一句；
+  // 确实要单独成句的，整句写进 narration.allowShort。旁白稿只有一句（封面、频道图）时没有可连的，不查
+  const SHORT_MAX = style.tts?.shortSentenceMax ?? 4;
+  const allowShort = beats.narration?.allowShort ?? [];
+  if (!Array.isArray(allowShort)) E('narration.allowShort', '要写成数组：允许单独成句的短句（连句末标点的一整句）');
+  else for (const t of allowShort) if (!sentences.includes(t)) E('narration.allowShort', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
+  {
+    const bare = (s) => s.replace(/[\p{P}\p{S}\s]/gu, '');
+    const live = sentences.filter((s) => stripPunct(s)); // 和 sentenceSpeakers 同一个口径，下标才对得上说话人
+    const ss = isDialogue(beats) ? sentenceSpeakers(beats).sentences : null;
+    const who = (k) => (ss ? ss[k]?.speaker ?? '' : '');
+    const join = (a, b) => a.replace(/[。？！]$/, '，') + b;
+    if (live.length > 1) live.forEach((s, k) => {
+      const n = [...bare(s)].length;
+      if (!n || n > SHORT_MAX || (Array.isArray(allowShort) && allowShort.includes(s))) return;
+      const next = k + 1 < live.length && who(k + 1) === who(k) ? live[k + 1] : null;
+      const prev = k > 0 && who(k - 1) === who(k) ? live[k - 1] : null;
+      const fix = next ? `跟后面连成一句：「${join(s, next)}」` : prev ? `跟前面连成一句：「${join(prev, s)}」` : '前后都是别人说的，把这句说全';
+      E('narration.script', `「${s}」去掉标点只有 ${n} 个字，单独成了一句：这么短的句子单独配，音色会飘，旁白检查「每句都是同一个人」过不了（E03、E04 各卡了几次）。${fix}（「对。反过来也成立。」写成「对，反过来也成立。」）。确实要单独成句的，把整句（连句末标点）写进 narration.allowShort`);
+    });
   }
   for (const m of (beats.narration?.script ?? '').matchAll(/\d[：:]/g)) E('narration.script', `「${beats.narration.script.slice(Math.max(0, m.index - 4), m.index + 4)}」数字后面的冒号会被配音读成「比」，改成逗号`);
   for (const t of beats.targets ?? []) if (!style.targets[t]) E('targets', `未知画幅「${t}」，可用：${Object.keys(style.targets).join('、')}`);

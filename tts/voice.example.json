@@ -59,6 +59,11 @@
   "maxChars": 60
  },
  "chunkNote": "两三句同语气的话一起配，在句间停顿处切开：句首不用每句从头起调，接得更顺。切不开、对不上字的整段退回逐句配；成片检查点名的句子标 .nochunk 以后逐句配",
+ "drawl": {
+  "minSec": 0.42,
+  "ratio": 2.2
+ },
+ "drawlNote": "字拖长（voice.py 的 drawls）：句中一个字后面没有标点，对齐出来的时长 ≥ minSec 秒、而且 ≥ ratio 倍这条配音单字时长的中位数，听着就是在那里断开了（没有静音也一样）。和没标点却停一起算「断错了地方」，生成时换种子。minSec 填 0 表示不查。不写用这里的默认值",
  "takeNoBreaks": true,
  "maxBreaks": 0,
  "breaksNote": "破音：音高突然跳 14 半音以上又不是八度（voice.py 的 pitch_breaks）。takeNoBreaks 让生成时就挑掉有破音的候选；maxBreaks 是成片旁白检查的上限；成片拼好后还剩的破音、掉嗓子、回声句自动严格重配，最多 3 轮",

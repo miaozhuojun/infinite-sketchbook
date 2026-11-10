@@ -554,6 +554,26 @@ expectBeats('对话：一句话里换了说话的人', (b) => {
 }, validate, '一句话里换了说话的人');
 expectBeats('对话：字幕颜色不是调色板里的名字', (b) => { b.narration.voices = { dad: { voice: 'voice.example.json', caption: '#2b5f80' } }; }, validate, '不是规范调色板里的颜色名');
 expectBeats('回看的句子指向还没画过的元素', (b) => { b.phrases[0].revisit = [b.phrases.at(-1).actions?.[0]?.id ?? 'nope']; b.phrases[0].actions = []; }, validate, 'revisit');
+// 很短的一句单独成句（E03、E04 各卡了几次：几个字单独配，音色飘，「每句都是同一个人」过不了）：报错；写进 narration.allowShort 的放行
+expectBeats('旁白里四个字以内单独成了一句（「对。」）', (b) => { b.narration.script = '对。' + b.narration.script; }, validate, /「对。」去掉标点只有 1 个字，单独成了一句.*跟后面连成一句：「对，/);
+expectBeats('对话：短句后面换了人，提示跟前面连成一句', (b) => {
+  const [s0, s1] = b.narration.script.match(/[^。？！]+[。？！]/g);
+  b.narration.voices = { dad: { voice: 'voice.example.json', label: '爸爸' } };
+  b.narration.script = s0 + '还真是。' + b.narration.script.slice(s0.length);
+  b.phrases[0].text += '还真是'; // 主讲：我们来做加法还真是；下一句换爸爸说
+  for (const q of b.phrases.slice(1)) q.speaker = 'dad';
+}, validate, /「还真是。」去掉标点只有 3 个字.*跟前面连成一句：「[^」]+，还真是。」/);
+{
+  const b = structuredClone(beatsSrc);
+  b.id = '_selftest';
+  b.narration.script = '对。' + b.narration.script;
+  b.narration.allowShort = ['对。'];
+  const ok = (bb) => { fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(bb)); const r = spawnSync('node', validate('data/_selftest.beats.json'), { encoding: 'utf8' }); fs.rmSync('data/_selftest.beats.json', { force: true }); return !/单独成了一句/.test(r.stdout + r.stderr) ? '' : r.stdout; };
+  const o1 = SKIP.has('compile') ? null : ok(b);
+  const o2 = SKIP.has('compile') ? null : ok({ ...b, narration: { ...b.narration, script: '办不到。', allowShort: [] } });
+  if (o1 === null) skip('写进 allowShort 的短句、只有一句的旁白稿不报短句', '这次没改编译器和分镜校验（--skip compile）');
+  else record('写进 allowShort 的短句、只有一句的旁白稿（封面）不报短句（放行不能失效）', o1 === '' && o2 === '', o1 + o2);
+}
 expectBeats('提示词不在这句旁白里', (b) => { acts(b).at(-1).at = '这句旁白里没有的词'; }, validate, '不在这句旁白里');
 expectBeats('节名太长、章节不从第一句开始', (b) => { b.phrases.at(-1).chapter = '这是一个特别特别长的小节名字超过了十五个字'; }, validate, /节名要写，最多|从第一句开始/);
 expectBeats('完整一集缺少钩子和回收', (b) => { b.kind = 'episode'; for (const q of b.phrases) if (['hook', 'recap'].includes(q.role)) q.role = 'setup'; }, validate, '必须有 role=hook', { advice: true }); // 基线本身是完整一集时，先把钩子和回收去掉
@@ -767,6 +787,45 @@ print(json.dumps(cases, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts
   let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
   const ok = got['干净']?.length === 0 && ['硬切', '掉嗓子', '破音', '语速'].every((k) => got[k]?.some((m) => m.startsWith(k)));
   record('配音逐句验收：掉嗓子、破音、硬切、语速（单元检查）', ok, (r.stdout || '') + (r.stderr || ''));
+}
+
+// ---------- 配音断句（tts/voice.py 的 phrasing，单元检查）：没标点却停、字拖长（E04「天黑不天黑」：没有静音，「黑」拖了 0.56 秒）都要报；
+// 逗号前、句末的字拖长是正常停顿和收尾，不报。合成的音频：每个字一段连续的浊音，标点处留静音。voice.py 顶上要 mlx，这里换成空模块 ----------
+{
+  const r = spawnSync(PY_QA, ['-c', `
+import sys, types, json
+sys.modules['mlx'] = types.ModuleType('mlx'); sys.modules['mlx.core'] = types.ModuleType('mlx.core'); sys.modules['mlx'].core = sys.modules['mlx.core']
+sys.path.insert(0, '../tts')
+import numpy as np
+from voice import phrasing
+sr = 16000
+def take(text, durs, gaps, drawl=None):
+    # durs：每个字的秒数；gaps：{第几个字后面: 静音秒数}
+    words, xs, t = [], [], 0.0
+    chars = [c for c in text if c not in '，。']
+    for i, (c, d) in enumerate(zip(chars, durs)):
+        n = int(d * sr); xs.append(0.3 * np.sin(2 * np.pi * 220 * np.arange(n) / sr)); words.append({'text': c, 'start': round(t, 3), 'end': round(t + d, 3)}); t += d
+        g = gaps.get(i, 0.0)
+        if g: xs.append(np.zeros(int(g * sr))); t += g
+    return phrasing(np.concatenate(xs), sr, words, text, drawl=drawl)[0]
+T = '天黑不天黑都一样，它只看两件事。'
+d0 = [0.2] * 14
+out = {
+  'clean': take(T, d0, {7: 0.3}),
+  'drawl': take(T, [0.2, 0.56] + [0.2] * 12, {7: 0.3}),
+  'beforeComma': take(T, [0.2] * 7 + [0.6] + [0.2] * 6, {7: 0.3}),
+  'last': take(T, [0.2] * 13 + [0.7], {7: 0.3}),
+  'pause': take(T, d0, {1: 0.3, 7: 0.3}),
+  'off': take(T, [0.2, 0.56] + [0.2] * 12, {7: 0.3}, {'minSec': 0}),
+}
+print(json.dumps(out, ensure_ascii=False))`], { encoding: 'utf8' });
+  let o = null;
+  try { o = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch { /* 下面按漏掉记，打出 stderr */ }
+  const kinds = (xs) => (xs ?? []).map((x) => `${x[0]}|${x[1]}:${x[3]}`).join(',');
+  const out = (r.stdout || '') + (r.stderr || '');
+  record('配音断句：字拖长 0.56 秒、没有静音（「天黑|不天黑」）', !!o && kinds(o.drawl) === '天黑|不天黑:拖' && !o.clean.length, out);
+  record('配音断句：没标点却停了 0.3 秒', !!o && kinds(o.pause) === '天黑|不天黑:停', out);
+  record('配音断句：逗号前、句末拖长不算，drawl.minSec 填 0 不查（不误报）', !!o && !o.beforeComma.length && !o.last.length && !o.off.length, out);
 }
 
 // ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------

@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import phrasing, read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import phrasing, stray_text, stray_excess, read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -216,7 +216,9 @@ asr_text = lambda path: said_text(asr.generate(path, language="Chinese").text)
 # 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
 # 「这就叫机器学习。」几乎全是 j/q/x，浊音谱平坦度天生偏高，30 多个种子都在 0.09 以上；原来每次跑都扔掉重配、再退回同一条，一次三分钟
 FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
-STRAY_FALLBACK = "每条都有没标点却停的地方，用停得最短的一条"  # 缓存里记 strayFallback，以后复查不再因为断句扔掉它
+STRAY_FALLBACK = "每条都断在没标点的地方（停了或字拖长），用断得最轻的一条"  # 缓存里记 strayFallback，以后复查不再因为断句扔掉它
+# 字拖长的门槛（voice.json 的 drawl：minSec、ratio，见 voice.py 的 drawls）。E04「天黑不天黑」没有静音，是「黑」拖了 0.56 秒，听着一样断开
+DRAWL = voice.get("drawl")
 # 配音容易听错的说法（tts/misheard.json，本机私有；没有时从 misheard.example.json 起头）：一句试满都没过、回转识别至少两次听成同一个说法，
 # 就把「稿子 / 听成 / 听错的字」追加进去。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）以后提醒含这些字的句子。
 # E03：「那，拧哪个？」听成「那您哪个」，「往哪边拧？」听成「往哪边去」
@@ -266,7 +268,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     best = None  # 只差背景分的候选里最干净的一条
     best_flat = None  # 只差沙沙声的候选里最干净的一条
     best_rate = None  # 只差语速的候选里离目标最近的一条
-    best_stray = None  # 只差断句（没标点却停了）的候选里停得最短的一条
+    best_stray = None  # 只差断句（没标点却停了、字拖长）的候选里断得最轻的一条
     cands = []
     tone = tone or tone_of(text); target = TONES.get(tone, {})
     for attempt in range(args.max_tries):
@@ -352,12 +354,12 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             if not best_rate or abs(pr["artRate"] / RATE["target"] - 1) < best_rate[0]:
                 best_rate = (abs(pr["artRate"] / RATE["target"] - 1), (audio, sr, seed, note, rel, bk))
             continue
-        # 断错了地方：没有标点却停了（「你还真猜对了……一半」）。放在别的关卡后面，被它拒掉的候选别的都过了，可以当退路。
+        # 断错了地方：没有标点却停了（「你还真猜对了……一半」），或者字拖长了（「天黑……不天黑」）。放在别的关卡后面，被它拒掉的候选别的都过了，可以当退路。
         # 样片也查：用户看样片就听得出来（2026-11-10，E04）
-        stray, missed = phrasing(audio, sr, rel, text)
+        stray, missed = phrasing(audio, sr, rel, text, drawl=DRAWL)
         if stray:
-            reject(text, seed, "断错了地方", "：没有标点却停了 " + "、".join(f"「{a}|{b}」{g:.2f}s" for a, b, g in stray) + "，换种子重来")
-            g_ = max(g for _, _, g in stray)
+            reject(text, seed, "断错了地方", "：断在没有标点的地方 " + stray_text(stray) + "，换种子重来")
+            g_ = stray_excess(stray, drawl=DRAWL)
             if not best_stray or g_ < best_stray[0]:
                 best_stray = (g_, (audio, sr, seed, note, rel, bk))
             continue
@@ -394,7 +396,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
     if best_stray:
-        print(f"    {args.max_tries} 次里每条都有没标点却停的地方，用停得最短的种子 {best_stray[1][2]}（{best_stray[0]:.2f}s）")
+        print(f"    {args.max_tries} 次里每条都断在没标点的地方，用断得最轻的种子 {best_stray[1][2]}（{best_stray[0]:.2f} 倍门槛）")
         a_, sr_, sd_, nt_, rel_, bk_ = best_stray[1]
         return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + STRAY_FALLBACK, rel_, bk_
     raise SystemExit(f"「{text}」连续 {args.max_tries} 次没有一条全部关卡都过（回转识别、掉嗓子、破音、硬切、语速……原因见上面每个种子那一行），需要人工处理（改写难读的词、拆短，或换参考音）")
@@ -425,14 +427,14 @@ def split_synth(sent, seed0, pause=0.25, strict=False):
 
 
 def stray_cached(key, sent):
-    """缓存里的这句断错了地方（加断句检查之前配的）：重配"""
+    """缓存里的这句断错了地方（加断句、字拖长检查之前配的）：重配"""
     meta_c = json.load(open(key + ".json", encoding="utf-8"))
     if meta_c.get("strayFallback") or os.path.exists(key + ".postfail"):  # 试满才收下的退路、换种子也配不好留了原条的：再配还是一样
         return False
     x_c, sr_c = sf.read(key + ".wav", dtype="float32")
-    st, _ = phrasing(x_c, sr_c, meta_c["words"], sent)
+    st, _ = phrasing(x_c, sr_c, meta_c["words"], sent, drawl=DRAWL)
     if st:
-        print(f"  缓存里的「{sent.strip()}」没有标点却停了（" + "、".join(f"{a}|{b} {g:.2f}s" for a, b, g in st) + "），重新生成")
+        print(f"  缓存里的「{sent.strip()}」断在没有标点的地方（{stray_text(st)}），重新生成")
     return bool(st)
 
 
@@ -519,6 +521,23 @@ def split_chunk(res, texts):
 # 同一段里的句子之间不再另加停顿。一段配不过（全部关卡）就退回逐句配
 CHUNK = voice.get("chunk") or {}
 pre, joined = {}, set()  # pre[i]：这一句从段里切出来的 take；joined：这一句后面紧跟同一段的下一句（拼接时不另加停顿）
+
+
+def chunk_cached(ck, text):
+    """缓存里的一段：有破音、断在没有标点的地方（停了或字拖长）的扔掉重配，否则返回 take。
+    E04「天黑不天黑都一样……」就是一段一起配的，「黑」拖了 0.56 秒；原来段缓存只查破音，断句检查加上以后旧段也照用"""
+    if args.no_cache or not (os.path.exists(ck + ".wav") and os.path.exists(ck + ".json")):
+        return None
+    a_, s_ = sf.read(ck + ".wav", dtype="float32"); m_ = json.load(open(ck + ".json", encoding="utf-8"))
+    if NO_BREAKS and pitch_breaks(a_, s_):
+        return None
+    st, _ = phrasing(a_, s_, m_["words"], text, drawl=DRAWL)
+    if st:
+        print(f"  缓存里的一段「{text[:16]}…」断在没有标点的地方（{stray_text(st)}），重新生成")
+        return None
+    return a_, s_, m_["seed"], "缓存", m_["words"]
+
+
 if CHUNK.get("maxSentences", 1) > 1:
     groups, cur = [], []
     clean_len = lambda t: len(re.sub(PUNCT, "", t))
@@ -542,11 +561,10 @@ if CHUNK.get("maxSentences", 1) > 1:
                 ckey = full_c
             elif all(os.path.exists(os.path.join(CACHE, cache_key(sents[k], False)) + ".wav") for k in g):
                 continue
-        res = None
-        if not args.no_cache and os.path.exists(ckey + ".wav") and os.path.exists(ckey + ".json"):
-            a_, s_ = sf.read(ckey + ".wav", dtype="float32"); m_ = json.load(open(ckey + ".json", encoding="utf-8"))
-            if not (NO_BREAKS and pitch_breaks(a_, s_)):
-                res = (a_, s_, m_["seed"], "缓存", m_["words"])
+        res = chunk_cached(ckey, text)
+        if res is None and FAST and ckey == full_c:  # 精配的段没过复查：快配写进快配的缓存，绝不覆盖精配的
+            ckey = os.path.join(CACHE, "chunk-" + cache_key(text))
+            res = chunk_cached(ckey, text)
         # 一段配不过的记下来（.fail），以后直接逐句配：种子是确定的，再试也是同样几条都不过。
         # 原来每次跑都把配不过的段从头试满 10 个种子再退回逐句，句子全走缓存时主讲配音也要 11 分钟（E02 父子对话样稿，正常几十秒）
         if res is None and not args.no_cache and os.path.exists(ckey + ".fail"):

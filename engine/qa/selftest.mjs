@@ -568,7 +568,8 @@ expectBeats('对话：短句后面换了人，提示跟前面连成一句', (b) 
   b.id = '_selftest';
   b.narration.script = '对。' + b.narration.script;
   b.narration.allowShort = ['对。'];
-  const ok = (bb) => { fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(bb)); const r = spawnSync('node', validate('data/_selftest.beats.json'), { encoding: 'utf8' }); fs.rmSync('data/_selftest.beats.json', { force: true }); return !/单独成了一句/.test(r.stdout + r.stderr) ? '' : r.stdout; };
+  // 通过要真的通过（退出码 0、跑到最后一行），不能是半路崩了才没报短句
+  const ok = (bb) => { fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(bb)); const r = spawnSync('node', validate('data/_selftest.beats.json'), { encoding: 'utf8' }); fs.rmSync('data/_selftest.beats.json', { force: true }); return r.status === 0 && /分镜校验：通过/.test(r.stdout) ? '' : r.stdout + r.stderr; };
   const o1 = SKIP.has('compile') ? null : ok(b);
   const o2 = SKIP.has('compile') ? null : ok({ ...b, narration: { ...b.narration, script: '办不到。', allowShort: [] } });
   if (o1 === null) skip('写进 allowShort 的短句、只有一句的旁白稿不报短句', '这次没改编译器和分镜校验（--skip compile）');

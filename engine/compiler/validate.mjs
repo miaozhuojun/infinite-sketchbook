@@ -4,7 +4,7 @@
 // 用法：node compiler/validate.mjs data/<id>.beats.json
 import { polyphoneIssues } from './polyphones.mjs';
 import { scriptIssues } from './script_checks.mjs';
-import { isDialogue, sentenceSpeakers, voicesOf } from './speakers.mjs';
+import { isDialogue, sentenceSpeakers, stripPunct, voicesOf } from './speakers.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -128,13 +128,13 @@ export function validateBeats(beats, style, reg) {
   else for (const t of allowShort) if (!sentences.includes(t)) E('narration.allowShort', `「${t}」不是旁白稿里的一整句（要连句末标点一起写）`);
   {
     const bare = (s) => s.replace(/[\p{P}\p{S}\s]/gu, '');
-    const live = sentences.filter(bare);
+    const live = sentences.filter((s) => stripPunct(s)); // 和 sentenceSpeakers 同一个口径，下标才对得上说话人
     const ss = isDialogue(beats) ? sentenceSpeakers(beats).sentences : null;
     const who = (k) => (ss ? ss[k]?.speaker ?? '' : '');
     const join = (a, b) => a.replace(/[。？！]$/, '，') + b;
     if (live.length > 1) live.forEach((s, k) => {
       const n = [...bare(s)].length;
-      if (n > SHORT_MAX || (Array.isArray(allowShort) && allowShort.includes(s))) return;
+      if (!n || n > SHORT_MAX || (Array.isArray(allowShort) && allowShort.includes(s))) return;
       const next = k + 1 < live.length && who(k + 1) === who(k) ? live[k + 1] : null;
       const prev = k > 0 && who(k - 1) === who(k) ? live[k - 1] : null;
       const fix = next ? `跟后面连成一句：「${join(s, next)}」` : prev ? `跟前面连成一句：「${join(prev, s)}」` : '前后都是别人说的，把这句说全';

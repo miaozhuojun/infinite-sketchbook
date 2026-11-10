@@ -142,7 +142,7 @@
   "limiterLook": 0.003,
   "pencilSamples": ["pencil-01.ogg", "pencil-03.ogg", "pencil-04.ogg"],
   "samplesNote": "书写声和音乐用真实的 CC0 录音（来源和授权见 audio/cc0_sources.json，文件用 audio/fetch_cc0.sh 下载到 assets.local/cc0/，不进仓库）；没有文件时退回程序合成",
-  "music": { "track": "good-morning.ogg", "bpm": 80, "progression": [[53, 57, 60, 65], [50, 57, 62, 65], [46, 58, 62, 65], [48, 55, 60, 64]], "note": "track 是选定的 CC0 曲目；bpm 和 progression 只给没有曲目文件时的合成占位用" }
+  "music": { "track": "good-morning.ogg", "bpm": 80, "progression": [[53, 57, 60, 65], [50, 57, 62, 65], [46, 58, 62, 65], [48, 55, 60, 64]], "rest": [], "restFade": 3.0, "note": "track 是选定的 CC0 曲目；bpm 和 progression 只给没有曲目文件时的合成占位用。rest 列出节名：这些节里音乐休止（节前 restFade 秒淡完，下一节开头同样长淡入），留给要专心听的核心推理；每期分镜的 style.audio.music.rest 里写" }
  },
 
  "defaultTargets": ["9x16", "16x9"],

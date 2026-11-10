@@ -211,6 +211,24 @@ fade[:fi] = np.linspace(0, 1, fi)
 end = int(tl["duration"] * SR)
 fade[end - fo:end] = np.linspace(1, 0, fo)
 fade[end:] = 0
+# 休止：风格规范 audio.music.rest 列出的章节里音乐淡出，只留人声和笔声；下一节开头再淡入（用在要专心听的核心推理段）
+rest = AU["music"].get("rest", [])
+chap = tl.get("chapters", [])
+unknown = [r for r in rest if r not in {c["title"] for c in chap}]
+if unknown:
+    sys.exit(f"audio.music.rest 里的章节不存在：{'、'.join(unknown)}（现有：{'、'.join(c['title'] for c in chap)}）")
+rf = int(AU["music"].get("restFade", 3.0) * SR)
+for i, c in enumerate(chap):
+    if c["title"] not in rest:
+        continue
+    a, b = int(c["t"] * SR), int((chap[i + 1]["t"] if i + 1 < len(chap) else tl["duration"]) * SR)
+    g = np.ones(N)
+    g[a:b] = 0
+    g[max(0, a - rf):a] = np.linspace(1, 0, a - max(0, a - rf))  # 在节前淡完，换节时已经静了
+    g[b:min(N, b + rf)] = np.linspace(0, 1, min(N, b + rf) - b)
+    fade *= g
+if rest:
+    print(f"音乐休止：{'、'.join(rest)}")
 music *= fade
 
 # 人声出现时把音乐压低（侧链式闪避），用旁白片段时间表，平滑过渡

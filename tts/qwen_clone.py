@@ -441,6 +441,15 @@ if stray:
     raise SystemExit("--mood 里这些不是旁白稿里的一整句：" + "；".join(stray))
 n_cached = 0
 stuck_at = {}  # 试满都没配出来的句子 → 它在稿子里的第几句（从 0 数；同一句话可能出现几次）
+# 卡了这么多句、而且比这一轮新配出来的还多，就不再往下配：多半是参考音或 voice.json 的阈值出了问题，
+# 每句都试满再拆两半，一集要白跑几个小时。正常的稿子一集卡两三句，新配出来的远比这多，碰不到这条
+STUCK_STOP = 3
+fresh_ok = 0  # 这一轮新配出来（不是从缓存取）的句子数
+stopped_at = None  # 因为上面这条提前停下时，停在第几句（从 1 数）
+# 上一句卡住了：这一句挑候选时对着的「上一句」是再往前那句，不是改写后的新句子，所以这一句不进缓存，改完重跑时对着新的上一句重挑。
+# 原来卡一句就中断，后面的句子都是改完才配的；不这样做，卡句后面那一句挑中的候选会和原来不一样
+after_stuck = False
+held = 0  # 因此没进缓存的句子数
 
 
 def split_chunk(res, texts):
@@ -544,10 +553,13 @@ for i, sent in enumerate(sents):
     t0 = time.time()
     if FLOW and sent.strip() in TURN:
         PREV = {}  # 对话：上一句是别人说的，这一句重新起头，不按「和上一句接得上」挑
+        after_stuck = False
     if i in pre:  # 整段一起配好的，直接用
         audio, sr, seed, note, rel = pre[i]
         takes.append([audio, sr, seed, note, rel])
         n_cached += note.startswith("缓存")
+        fresh_ok += not note.startswith("缓存")
+        after_stuck = False
         if FLOW:
             PREV = prosody(audio, sr, rel)
         print(f"  第 {i + 1}/{len(sents)} 句（种子 {seed}，{len(audio) / sr:.2f}s）：{note}  {sent}")
@@ -619,12 +631,22 @@ for i, sent in enumerate(sents):
             if sent not in stuck_at:
                 note_misheard(sent)
             stuck_at.setdefault(sent, []).append(i)
+            after_stuck = True
             print(f"  第 {i + 1}/{len(sents)} 句没配出来（{time.time() - t0:.1f}s），先记下，接着配后面的  {sent}")
+            if len(stuck_at) >= STUCK_STOP and len(stuck_at) > fresh_ok:
+                stopped_at = i + 1
+                break
             continue
         audio, sr, seed, note, rel, bk = res
-        sf.write(key + ".wav", audio, sr)
-        json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
-                   **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+        fresh_ok += 1
+        if after_stuck and FLOW:
+            held += 1
+            note = (note + "；" if note else "") + "上一句没配出来，这一句不进缓存，改完重跑时对着新的上一句重挑"
+        else:
+            sf.write(key + ".wav", audio, sr)
+            json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
+                       **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+    after_stuck = False
     takes.append([audio, sr, seed, note, rel])
     if FLOW:  # 下一句挑候选时要和这一句接得上
         PREV = prosody(audio, sr, rel)
@@ -646,13 +668,14 @@ def heard_as(text):
 
 
 # 卡句清单：试满都没配出来的句子一次列全，每句一行 [错误]（流水线把这些行原样记进报告的「待改」），每个种子的原因另存 <输出前缀>.stuck.json。
-# 配好的句子都已进缓存，改写卡住的句子后重跑只配改过的。没配全就不拼接、不做后面的整段检查
+# 配好的句子进了缓存（紧跟在卡句后面的那一句除外，见 after_stuck），改写卡住的句子后重跑只配改过的和它后面那一句。
+# 没配全就不拼接、不做后面的整段检查（吞字、音色一致），那些检查在重跑配全后才做，可能再重配几句
 STUCK_FILE = args.out + ".stuck.json"
 if stuck_at:
     from collections import Counter
     rows = []
     for sent, idx in stuck_at.items():
-        why = f"试了 {len(FAILS.get(sent, []))} 个种子：{tally(sent) or '没有记录'}{heard_as(sent)}"
+        why = f"试了 {len(FAILS.get(sent, []))} 条：{tally(sent) or '没有记录'}{heard_as(sent)}"
         if sent in SPLIT_STUCK:
             half = SPLIT_STUCK[sent]
             why += f"；拆成两半，「{half}」这一半也没过" + (f"（{tally(half)}{heard_as(half)}）" if tally(half) else "")
@@ -663,12 +686,16 @@ if stuck_at:
                      "heard": [{"text": h, "times": n} for h, n in Counter(HYPS.get(sent, [])).most_common()],
                      "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(sent, [])],
                      **({"half": {"text": SPLIT_STUCK[sent], "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(SPLIT_STUCK[sent], [])]}} if sent in SPLIT_STUCK else {})})
-    json.dump({"sentences": len(sents), "stuck": rows}, open(STUCK_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    if stopped_at:
+        print(f"[错误] 配到第 {stopped_at}/{len(sents)} 句就停了：已经卡了 {len(stuck_at)} 句，比这一轮新配出来的（{fresh_ok} 句）还多，"
+              f"多半是参考音或 voice.json 的阈值出了问题，先查配置；后面 {len(sents) - stopped_at} 句没试")
+    json.dump({"sentences": len(sents), **({"stoppedAt": stopped_at} if stopped_at else {}), "stuck": rows}, open(STUCK_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     if os.path.exists(args.out + ".sent.wav"):
         os.remove(args.out + ".sent.wav")
     n_stuck = sum(len(v) for v in stuck_at.values())
-    raise SystemExit(f"{len(sents)} 句里 {n_stuck} 句试满都没配出来（上面 [错误] 各行；每个种子的原因在 {STUCK_FILE}），其余 {len(sents) - n_stuck} 句已配好、进了缓存。"
-                     "需要人工处理：改写难读的词、拆短，或换参考音")
+    raise SystemExit(f"{len(sents)} 句里 {n_stuck} 句试满都没配出来（上面 [错误] 各行；每个种子的原因在 {STUCK_FILE}），配好的 {len(takes)} 句"
+                     + (f"里 {len(takes) - held} 句进了缓存（紧跟在卡句后面的 {held} 句不进，重跑时重配）。" if held else "已进缓存。")
+                     + ("先查配置" if stopped_at else "需要人工处理：改写难读的词、拆短，或换参考音"))
 if os.path.exists(STUCK_FILE):
     os.remove(STUCK_FILE)
 

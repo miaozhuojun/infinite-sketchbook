@@ -42,7 +42,10 @@ const changedRanges = (video) => {
 function run(name, cmd, args, opts = {}) {
   const t0 = Date.now();
   const r = spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1 << 28, cwd: opts.cwd });
-  return record(name, r.status, (r.stdout || '') + (r.stderr || ''), t0, stages);
+  const ok = record(name, r.status, (r.stdout || '') + (r.stderr || ''), t0, stages);
+  // 配音：没配出来的句子在终端里也一条条列全（报告里本来就逐条写进「待改」），不用翻报告才知道卡了哪几句
+  if (!ok && opts.listProblems) for (const p of stages.at(-1).problems) console.log(`    待改：${p}`);
+  return ok;
 }
 // 同一步骤的异步版：各画幅的混音、渲染、检查同时跑（原来一个画幅做完才做下一个，两个画幅约 20 分钟）。结果记进这个画幅自己的列表，报告里仍按画幅顺序排
 function runAsync(name, cmd, args, opts = {}, list = stages) {
@@ -126,9 +129,10 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
   const missing = dialogue ? speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice).filter((f) => !fs.existsSync(path.resolve('../tts', f))) : [];
   if (PY_MLX && missing.length) { voiceOk = false; stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '', problems: [`没有音色配置 ${missing.join('、')}（narration.voices 里写的，相对 tts/）`] }); }
   else if (PY_MLX && sameVoice) { skip('配音生成', `旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的${fastV ? '样片快配' : ''}配音`); fs.copyFileSync(vb + '.wav', voicedAudio); }
-  else if (PY_MLX && !dialogue) { if (voiceOk = run(`配音生成（${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, voiceArgs, { cwd: '../tts' })) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); } }
+  else if (PY_MLX && !dialogue) { if (voiceOk = run(`配音生成（${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, voiceArgs, { cwd: '../tts', listProblems: true })) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); } }
   else if (PY_MLX) {
-    voiceOk = speakers.every((sp) => run(`配音生成（${whoSays(sp)}，${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, argsOf(sp), { cwd: '../tts' }));
+    // 一个人有句子没配出来，其余的人照样配完：卡住的句子一轮列全（原来第一个人失败就停，后面的人卡不卡要等下一轮才知道）
+    voiceOk = speakers.map((sp) => run(`配音生成（${whoSays(sp)}，${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, argsOf(sp), { cwd: '../tts', listProblems: true })).every(Boolean);
     if (voiceOk) {
       fs.writeFileSync(vb + '.order.json', JSON.stringify(sents, null, 1));
       voiceOk = run('对话拼接（按旁白稿顺序）', PY_MLX, ['dialogue.py', vb, vb + '.order.json', ...speakers.flatMap((sp) => ['--part', `${sp}=${partOf(sp)}`])], { cwd: '../tts' });

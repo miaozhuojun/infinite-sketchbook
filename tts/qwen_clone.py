@@ -220,7 +220,19 @@ FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
 # 就把「稿子 / 听成 / 听错的字」追加进去。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）以后提醒含这些字的句子。
 # E03：「那，拧哪个？」听成「那您哪个」，「往哪边拧？」听成「往哪边去」
 MISHEARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "misheard.json")
-HEARD = {}  # 句子 → 这次各个种子回转识别没对上时听成的说法
+HEARD = {}  # 句子 → 这次各个种子回转识别没对上时听成的说法（只收字数对得上的那种，给 misheard.json 用）
+HYPS = {}  # 句子 → 回转识别没对上时听成的说法，字数差多少都记，卡句清单用（识别自己多加了符号、多念漏念几个字的，在清单里一眼看得出）
+# 句子 → 这次没过关的种子 [(种子, 哪一类, 那一行说明)]。一句试满都没过时不再当场中断：记下来接着配后面的句子，
+# 全部配完一次列出所有卡住的句子（最常见的原因、回转识别听成了什么），再非零退出。
+# 原来卡一句就中断整轮：E04 153 句，跑了 37 分钟才报出一句卡住，改写后又跑 11 分钟报出下一句，一轮只能发现一句
+FAILS = {}
+SPLIT_STUCK = {}  # 句子 → 自动拆成两半后没过的那一半
+
+
+def reject(text, seed, kind, msg):
+    """一个种子没过关：照旧打印那一行，同时按类别记下，卡句清单要用"""
+    FAILS.setdefault(text, []).append((seed, kind, msg))
+    print(f"    种子 {seed}{msg}")
 
 
 def note_misheard(sent):
@@ -269,7 +281,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         sr = chunks[0].sample_rate
         dur = len(audio) / sr
         if not (0.12 * n_chars <= dur <= 0.45 * n_chars + 1.5):
-            print(f"    种子 {seed}：{dur:.1f}s 对 {n_chars} 个字不合理（失控或吞句），换种子重来")
+            reject(text, seed, "时长不合理", f"：{dur:.1f}s 对 {n_chars} 个字不合理（失控或吞句），换种子重来")
             continue
         # 语速粗筛：识别、对齐要好几秒，先按「有声音的时长」粗估语速，差得太远的直接换种子（E02 v6 加语速关卡后配音慢了一倍）。
         # 粗估和逐字对齐量出来的语速差不多，留 12% 余量，只筛掉明显不行的
@@ -277,18 +289,18 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             h10 = int(0.01 * sr); lv10 = 20 * np.log10(np.sqrt(np.convolve(audio.astype(np.float64) ** 2, np.ones(h10) / h10, "valid")[::h10]) + 1e-9)
             est = n_chars / max(0.3, (lv10 > lv10.max() - 35).sum() * 0.01) / 1.05  # 粗估比逐字对齐平均快 5%（323 条缓存标定：误筛 3/189，提前筛掉 28/134）
             if abs(est / RATE["target"] - 1) > RATE.get("takeTol", 0.08) + 0.12:
-                print(f"    种子 {seed}：粗估语速 {est:.2f} 字/秒，离 {RATE['target']} 太远，不识别了，换种子重来")
+                reject(text, seed, "语速不对", f"：粗估语速 {est:.2f} 字/秒，离 {RATE['target']} 太远，不识别了，换种子重来")
                 continue
         sf.write(tmp, audio, sr)
         hyp = asr_text(tmp)
         c, dz = cer(syl(ref), syl(hyp)), dropouts(audio, sr)
         drops = pitch_drops(audio, sr, GEN_FLOOR) if FLOOR else []
         if drops:
-            print(f"    种子 {seed}：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（生成时下限 {GEN_FLOOR:.0f}Hz），换种子重来")
+            reject(text, seed, "掉嗓子", f"：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（生成时下限 {GEN_FLOOR:.0f}Hz），换种子重来")
             continue
         brk = pitch_breaks(audio, sr) if NO_BREAKS else []
         if brk:
-            print(f"    种子 {seed}：破音 " + "、".join(f"{t:.2f}s 跳 {j:.0f} 半音" for t, j in brk) + "，换种子重来")
+            reject(text, seed, "破音", f"：破音 " + "、".join(f"{t:.2f}s 跳 {j:.0f} 半音" for t, j in brk) + "，换种子重来")
             continue
         note = None
         if c == 0 and dz == 0:
@@ -301,38 +313,40 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, GEN_FLOOR)):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
-            print(f"    种子 {seed} 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
+            reject(text, seed, "回转识别没对上" if c > 0 else "掉音", f" 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
+            if c > 0:
+                HYPS.setdefault(text, []).append(hyp)
             if c > 0 and abs(len(hs) - len(rs)) <= 1:  # 开头串进多余字的那种（只多出字）不算听错
                 HEARD.setdefault(text, []).append(hyp)
             continue
         audio = soften_edges(trim_edges(audio, sr), sr)
         rel = align(audio, sr, text)
         if squashed(rel):
-            print(f"    种子 {seed}：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
+            reject(text, seed, "吞字或对不上", f"：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
             continue
         # 硬切（成片旁白检查 0k 的同一条规则）：原来只在拼好后和成片里查，这里先挡掉，退路里也就不会有
         if (he := hard_edges(audio, sr)):
-            print(f"    种子 {seed}：硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in he) + "，换种子重来")
+            reject(text, seed, "硬切", f"：硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in he) + "，换种子重来")
             continue
         bk = None
         if GEN_BAK and (bk := bak_of(audio, sr)) < GEN_BAK:
-            print(f"    种子 {seed}：背景不干净（DNSMOS BAK {bk:.2f}，要 ≥{GEN_BAK}），换种子重来")
+            reject(text, seed, "背景不干净", f"：背景不干净（DNSMOS BAK {bk:.2f}，要 ≥{GEN_BAK}），换种子重来")
             if not best or bk > best[5]:
                 best = (audio, sr, seed, note, rel, bk)
             continue
         # 回声先查：只差沙沙声的候选会留作退路，退路也得没有回声（E01 v17：退路没查回声，混进一句 190ms 的）
         if MAX_ECHO and (ec := echo_ms(audio, sr, pause_points(rel))) > MAX_ECHO:
-            print(f"    种子 {seed}：有回声（停顿处衰减 20dB 要 {ec:.0f}ms，要 ≤{MAX_ECHO}），换种子重来")
+            reject(text, seed, "有回声", f"：有回声（停顿处衰减 20dB 要 {ec:.0f}ms，要 ≤{MAX_ECHO}），换种子重来")
             continue
         if MAX_FLAT and (fl := voiced_flatness(audio, sr)) > MAX_FLAT:
-            print(f"    种子 {seed}：说话时有沙沙声（浊音谱平坦度 {fl:.3f}，要 ≤{MAX_FLAT}），换种子重来")
+            reject(text, seed, "有沙沙声", f"：说话时有沙沙声（浊音谱平坦度 {fl:.3f}，要 ≤{MAX_FLAT}），换种子重来")
             if not best_flat or fl < best_flat[0]:
                 best_flat = (fl, (audio, sr, seed, note, rel, bk))
             continue
         # 打分：离语气目标多远 + 和声音包音色差多少（同一段参考音挑出来的，语气有变化、音色不变）
         pr = prosody(audio, sr, rel)
         if RATE.get("target") and len(re.sub(PUNCT, "", text)) >= RATE_MIN and abs(pr["artRate"] / RATE["target"] - 1) > RATE.get("takeTol", 0.08):
-            print(f"    种子 {seed}：语速 {pr['artRate']:.2f} 字/秒，离这个声音的 {RATE['target']} 超过 {RATE.get('takeTol', 0.08):.0%}，换种子重来")
+            reject(text, seed, "语速不对", f"：语速 {pr['artRate']:.2f} 字/秒，离这个声音的 {RATE['target']} 超过 {RATE.get('takeTol', 0.08):.0%}，换种子重来")
             if not best_rate or abs(pr["artRate"] / RATE["target"] - 1) < best_rate[0]:
                 best_rate = (abs(pr["artRate"] / RATE["target"] - 1), (audio, sr, seed, note, rel, bk))
             continue
@@ -379,10 +393,13 @@ def split_synth(sent, seed0, pause=0.25, strict=False):
         return None
     a_txt, b_txt = body[:cut] + "。", body[cut + 1:] + sent[len(body):]
     print(f"  「{sent}」拆成「{a_txt}」「{b_txt}」两半分别配")
+    half = a_txt
     try:
         r1 = synth_sentence(a_txt, seed0, ref_for(sent), strict)
+        half = b_txt
         r2 = synth_sentence(b_txt, seed0 + 50, ref_for(sent), strict)
     except SystemExit:
+        SPLIT_STUCK[sent] = half  # 卡句清单里写明是哪一半没过
         return None
     a1, sr_, s1, n1, rel1, bk1 = r1; a2, _, _, n2, rel2, _ = r2
     off = len(a1) / sr_ + pause
@@ -423,6 +440,16 @@ stray = [t for t in mood_of if t not in {x.strip() for x in sents}]
 if stray:
     raise SystemExit("--mood 里这些不是旁白稿里的一整句：" + "；".join(stray))
 n_cached = 0
+stuck_at = {}  # 试满都没配出来的句子 → 它在稿子里的第几句（从 0 数；同一句话可能出现几次）
+# 卡了这么多句、而且比这一轮新配出来的还多，就不再往下配：多半是参考音或 voice.json 的阈值出了问题，
+# 每句都试满再拆两半，一集要白跑几个小时。正常的稿子一集卡两三句，新配出来的远比这多，碰不到这条
+STUCK_STOP = 3
+fresh_ok = 0  # 这一轮新配出来（不是从缓存取）的句子数
+stopped_at = None  # 因为上面这条提前停下时，停在第几句（从 1 数）
+# 上一句卡住了：这一句挑候选时对着的「上一句」是再往前那句，不是改写后的新句子，所以这一句不进缓存，改完重跑时对着新的上一句重挑。
+# 原来卡一句就中断，后面的句子都是改完才配的；不这样做，卡句后面那一句挑中的候选会和原来不一样
+after_stuck = False
+held = 0  # 因此没进缓存的句子数
 
 
 def split_chunk(res, texts):
@@ -526,10 +553,13 @@ for i, sent in enumerate(sents):
     t0 = time.time()
     if FLOW and sent.strip() in TURN:
         PREV = {}  # 对话：上一句是别人说的，这一句重新起头，不按「和上一句接得上」挑
+        after_stuck = False
     if i in pre:  # 整段一起配好的，直接用
         audio, sr, seed, note, rel = pre[i]
         takes.append([audio, sr, seed, note, rel])
         n_cached += note.startswith("缓存")
+        fresh_ok += not note.startswith("缓存")
+        after_stuck = False
         if FLOW:
             PREV = prosody(audio, sr, rel)
         print(f"  第 {i + 1}/{len(sents)} 句（种子 {seed}，{len(audio) / sr:.2f}s）：{note}  {sent}")
@@ -584,31 +614,90 @@ for i, sent in enumerate(sents):
         n_cached += 1
     else:
         # 默认参考音先多试几轮（每轮 max_tries 个新种子），再自动拆两半：换参考音会让这一句听着像换了个人（用户听 E01 v15）
-        res = make_take(sent, seed_of(sent))
-        if res:
-            audio, sr, seed, note, rel, bk = res
-        else:
-            if not FALLBACK or sent.strip() in mood_of:
-                note_misheard(sent)
-                raise SystemExit(f"「{sent}」试满 {(1 + voice.get('extraRounds', 0)) * args.max_tries} 次都没过，拆成两半也不行，需要人工处理")
+        # 同一句话在稿子里出现两次、头一次已经卡住：种子是确定的，再试也是同样几十条都不过
+        res = None if sent in stuck_at else make_take(sent, seed_of(sent))
+        if not res and sent not in stuck_at and FALLBACK and sent.strip() not in mood_of:
             print(f"  「{sent}」用默认参考音 {args.max_tries} 次都没过，改用「{FALLBACK}」参考音")
             open(fb_mark, "w").write(FALLBACK)
             mood_of[sent.strip()] = FALLBACK
             key = os.path.join(CACHE, cache_key(sent))
             try:
-                audio, sr, seed, note, rel, bk = synth_sentence(sent, seed_of(sent), ref_for(sent))
+                res = synth_sentence(sent, seed_of(sent), ref_for(sent))
+                res = res[:3] + ((res[3] + "；" if res[3] else "") + f"自动换「{FALLBACK}」参考音",) + res[4:]
             except SystemExit:
+                res = None
+        if not res:
+            # 试满都没过、拆成两半也不行：不当场中断，记下来接着配后面的句子，全部配完一次列出（见下面的卡句清单）
+            if sent not in stuck_at:
                 note_misheard(sent)
-                raise
-            note = (note + "；" if note else "") + f"自动换「{FALLBACK}」参考音"
-        sf.write(key + ".wav", audio, sr)
-        json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
-                   **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+            stuck_at.setdefault(sent, []).append(i)
+            after_stuck = True
+            print(f"  第 {i + 1}/{len(sents)} 句没配出来（{time.time() - t0:.1f}s），先记下，接着配后面的  {sent}")
+            if len(stuck_at) >= STUCK_STOP and len(stuck_at) > fresh_ok:
+                stopped_at = i + 1
+                break
+            continue
+        audio, sr, seed, note, rel, bk = res
+        fresh_ok += 1
+        if after_stuck and FLOW:
+            held += 1
+            note = (note + "；" if note else "") + "上一句没配出来，这一句不进缓存，改完重跑时对着新的上一句重挑"
+        else:
+            sf.write(key + ".wav", audio, sr)
+            json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
+                       **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+    after_stuck = False
     takes.append([audio, sr, seed, note, rel])
     if FLOW:  # 下一句挑候选时要和这一句接得上
         PREV = prosody(audio, sr, rel)
     mood = mood_of.get(sent.strip())
     print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
+
+
+def tally(text):
+    """这句话各个种子没过关的原因，按次数从多到少：「掉嗓子 18 次、回转识别没对上 9 次」"""
+    from collections import Counter
+    return "、".join(f"{k} {n} 次" for k, n in Counter(k for _, k, _ in FAILS.get(text, [])).most_common())
+
+
+def heard_as(text):
+    """这句话回转识别最常听成的两种说法：「；回转识别听成「……」5 次」，没有就是空串"""
+    from collections import Counter
+    top = Counter(HYPS.get(text, [])).most_common(2)
+    return "；回转识别听成" + "、".join(f"「{h}」{n} 次" for h, n in top) if top else ""
+
+
+# 卡句清单：试满都没配出来的句子一次列全，每句一行 [错误]（流水线把这些行原样记进报告的「待改」），每个种子的原因另存 <输出前缀>.stuck.json。
+# 配好的句子进了缓存（紧跟在卡句后面的那一句除外，见 after_stuck），改写卡住的句子后重跑只配改过的和它后面那一句。
+# 没配全就不拼接、不做后面的整段检查（吞字、音色一致），那些检查在重跑配全后才做，可能再重配几句
+STUCK_FILE = args.out + ".stuck.json"
+if stuck_at:
+    from collections import Counter
+    rows = []
+    for sent, idx in stuck_at.items():
+        why = f"试了 {len(FAILS.get(sent, []))} 条：{tally(sent) or '没有记录'}{heard_as(sent)}"
+        if sent in SPLIT_STUCK:
+            half = SPLIT_STUCK[sent]
+            why += f"；拆成两半，「{half}」这一半也没过" + (f"（{tally(half)}{heard_as(half)}）" if tally(half) else "")
+        else:
+            why += "；句子里没有能拆成两半的逗号"
+        print(f"[错误] 第 {'、'.join(str(k + 1) for k in idx)}/{len(sents)} 句配不出来：「{sent.strip()}」{why}")
+        rows.append({"index": [k + 1 for k in idx], "text": sent.strip(), "reasons": dict(Counter(k for _, k, _ in FAILS.get(sent, []))),
+                     "heard": [{"text": h, "times": n} for h, n in Counter(HYPS.get(sent, [])).most_common()],
+                     "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(sent, [])],
+                     **({"half": {"text": SPLIT_STUCK[sent], "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(SPLIT_STUCK[sent], [])]}} if sent in SPLIT_STUCK else {})})
+    if stopped_at:
+        print(f"[错误] 配到第 {stopped_at}/{len(sents)} 句就停了：已经卡了 {len(stuck_at)} 句，比这一轮新配出来的（{fresh_ok} 句）还多，"
+              f"多半是参考音或 voice.json 的阈值出了问题，先查配置；后面 {len(sents) - stopped_at} 句没试")
+    json.dump({"sentences": len(sents), **({"stoppedAt": stopped_at} if stopped_at else {}), "stuck": rows}, open(STUCK_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    if os.path.exists(args.out + ".sent.wav"):
+        os.remove(args.out + ".sent.wav")
+    n_stuck = sum(len(v) for v in stuck_at.values())
+    raise SystemExit(f"{len(sents)} 句里 {n_stuck} 句试满都没配出来（上面 [错误] 各行；每个种子的原因在 {STUCK_FILE}），配好的 {len(takes)} 句"
+                     + (f"里 {len(takes) - held} 句进了缓存（紧跟在卡句后面的 {held} 句不进，重跑时重配）。" if held else "已进缓存。")
+                     + ("先查配置" if stopped_at else "需要人工处理：改写难读的词、拆短，或换参考音"))
+if os.path.exists(STUCK_FILE):
+    os.remove(STUCK_FILE)
 
 
 def finish(audio, sr_):

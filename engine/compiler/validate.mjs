@@ -152,6 +152,8 @@ export function validateBeats(beats, style, reg) {
   const titles = new Set(beats.phrases.map((p) => p.chapter).filter(Boolean));
   if (!Array.isArray(rest)) E('style.audio.music.rest', '要列出节名（这些节里音乐淡出）');
   else for (const r of rest) if (!titles.has(r)) E('style.audio.music.rest', `「${r}」不是这一集的节名`);
+  const rf = style.audio?.music?.restFade ?? 3;
+  if (!(Number.isFinite(rf) && rf >= 0)) E('style.audio.music.restFade', '休止前后淡出淡入的秒数，要是不小于 0 的数');
   const ids = new Set(), drawnBefore = new Set();
   beats.phrases.forEach((p, pi) => {
     const P = `phrases[${pi}]「${(p.text || '').slice(0, 8)}」`;

@@ -217,7 +217,7 @@ chap = tl.get("chapters", [])
 unknown = [r for r in rest if r not in {c["title"] for c in chap}]
 if unknown:
     sys.exit(f"audio.music.rest 里的章节不存在：{'、'.join(unknown)}（现有：{'、'.join(c['title'] for c in chap)}）")
-rf = int(AU["music"].get("restFade", 3.0) * SR)
+rf = int(max(0.0, float(AU["music"].get("restFade", 3.0))) * SR)
 for i, c in enumerate(chap):
     if c["title"] not in rest:
         continue

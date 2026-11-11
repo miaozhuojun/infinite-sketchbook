@@ -317,8 +317,9 @@ const samplesOf = (list) => {
 };
 // 一个元素到所有别的元素的最小余量。逐点两两比距离很慢（E05 一次编译 12–17 分钟，绝大部分在这里：自动避让每个挤字的标签试 192 个位置，
 // 每个位置都和全集几百个元素逐点比）。两个元素中线包围盒的距离减去两边最粗的半个笔宽，是它们任意两点净距的下界；
-// 下界减去要求的间距已经不小于 0 时，这个元素既造不成压线、也不会成为负余量的最小值，跳过逐点比较。
-// 结果只在「全都合格」时不同（best 可能是 Infinity 而不是某个正数），调用方只看 best 是否 ≥ 0、负的时候才用 who/raw/need，所以判定和报出的内容都不变。
+// 下界减去要求的间距不小于 min(当前最小余量, 0) 时，这个元素既造不成压线、也不会刷新负的最小余量，跳过逐点比较（1e-6 留在少剪的一侧，防浮点误差）。
+// 返回约定：best ≥ 0 只表示全都合格，这时的数值（可能是 Infinity）和 who/raw/need/row 都不可靠；best < 0 时五个字段和逐点比完全一样。
+// 现在的调用方只看 best 是否 ≥ 0、负的时候才用其余字段；要拿正的余量挑位置，得先去掉这个剪枝。
 const clearance = (A, pts) => {
   let best = Infinity, who = null, raw = Infinity, need = GAP, row = false;
   const ab = ptsBox(pts);
@@ -338,7 +339,7 @@ const clearance = (A, pts) => {
       if (d - ng < best) { best = d - ng; who = id; raw = d; need = ng; row = false; }
     }
   }
-  return { best, who, raw, need, row }; // best = 余量（≥0 才合格）
+  return { best, who, raw, need, row }; // best = 余量（≥0 才合格；≥0 时数值和其余字段不可靠，见上）
 };
 for (const a of allActions) {
   if (a.type !== 'text' || a.after) continue;

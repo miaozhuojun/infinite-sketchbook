@@ -3,7 +3,7 @@ import { getStroke } from 'perfect-freehand';
 import { AbsoluteFill, Html5Audio, cancelRender, continueRender, delayRender, staticFile, useCurrentFrame } from 'remotion';
 import 'lxgw-wenkai-webfont/lxgwwenkai-bold.css';
 import 'lxgw-wenkai-webfont/lxgwwenkai-regular.css'; // 风格 0.7.0 起字幕降一档字重
-import { Cam, cameraAt, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke } from './timeline';
+import { Cam, cameraAt, ease, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke, Sticker, STICKER, stickerCard, stickerTapes } from './timeline';
 
 // 所有颜色、纸面、墨迹、字幕参数都来自时间线里带的风格规范（style/style.json），这里不写裸值
 // 墨迹层的世界坐标框（overflow 可见，只是坐标系，不裁内容）
@@ -245,6 +245,21 @@ const leadAt = (tl: Timeline, t: number): [string, string] => {
 
 const plateFill = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
 
+// ---------- 贴图（sticker）：被依赖那一集的封面，印出来的小卡片贴在纸面上（世界层，墨迹下面） ----------
+// 0.5 秒从上方落下：先略高、略大、多歪一点，影子远而淡；落定时影子收近。只在第一帧前后很短地显出来，不是淡入
+const StickerCard: React.FC<{ s: Sticker; t: number }> = ({ s, t }) => {
+  if (t < s.t0) return null;
+  const k = ease(progress(t, s.t0, s.t1), 0.35), up = 1 - k, { W, H } = stickerCard(s), b = STICKER.border * s.w;
+  return (
+    <g opacity={Math.min(1, progress(t, s.t0, s.t0 + 0.08))} transform={`translate(${s.cx} ${s.cy - up * STICKER.rise}) rotate(${s.tilt + up * STICKER.turn}) scale(${1 + up * (STICKER.scale0 - 1)})`}>
+      <rect x={-W / 2 + 6 + up * 14} y={-H / 2 + 8 + up * 20} width={W} height={H} rx={3} fill={s.shade} opacity={STICKER.shadow * (0.6 + 0.4 * k)} filter="url(#sticker-shadow)" />
+      <rect x={-W / 2} y={-H / 2} width={W} height={H} rx={3} fill={s.card} />
+      <image href={s.href} x={-W / 2 + b} y={-H / 2 + b} width={s.w} height={s.h} preserveAspectRatio="xMidYMid slice" />
+      {stickerTapes(s).map((p, i) => <rect key={i} x={p.x - p.w / 2} y={p.y - p.h / 2} width={p.w} height={p.h} fill={s.tape} opacity={0.78} transform={`rotate(${p.ang} ${p.x} ${p.y})`} />)}
+    </g>
+  );
+};
+
 // ---------- 主画面 ----------
 
 // ---------- 片尾参考资料卡（屏幕层）：正片说完后整张纸色底淡入，取景框里列出这一集的资料和附言（timeline.endCard） ----------
@@ -290,6 +305,13 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
       else continueRender(fontHandle);
     }).catch((e) => cancelRender(e));
   }, [fontHandle]);
+  // 贴图是嵌在时间线里的图（data URI）：解码完再出帧，不然第一帧可能是空卡片
+  const [stickerHandle] = React.useState(() => (tl.stickers?.length ? delayRender('解码贴图') : null));
+  React.useEffect(() => {
+    if (stickerHandle === null) return;
+    Promise.all((tl.stickers ?? []).map((k) => { const im = new Image(); im.src = k.href; return im.decode(); }))
+      .then(() => continueRender(stickerHandle)).catch((e) => cancelRender(e));
+  }, [stickerHandle]);
   return (
     <AbsoluteFill style={{ backgroundColor: paper, overflow: 'hidden', ...(st.grade ? { filter: `contrast(${st.grade.contrast}) saturate(${st.grade.saturate})` } : {}) }}>
       {(tl.audio || tl.narration) && <Html5Audio src={staticFile(tl.audio ?? tl.narration)} />}
@@ -305,6 +327,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
               <feColorMatrix in="g" type="matrix" values={`0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  ${st.ink.grain.alphaGain} 0 0 0 ${st.ink.grain.alphaBias}`} result="ga" />
               <feComposite in="d" in2="ga" operator="in" />
             </filter>
+            <filter id="sticker-shadow" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation={7} /></filter>
             {tl.effects.map((e) => (
               <radialGradient key={e.id} id={`g-${e.id}`}>
                 <stop offset="0" stopColor={e.color} stopOpacity={0.7} />
@@ -313,6 +336,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
               </radialGradient>
             ))}
           </defs>
+          {(tl.stickers ?? []).map((k) => <StickerCard key={k.id} s={k} t={t} />)}
           {tl.effects.map((e) => {
             // 亮起 t0→t1；熄灭 t2→t3（off 动作）。光芒是柔和的光，不是墨线，随光晕一起亮灭
             const k = progress(t, e.t0, e.t1) * (e.t2 !== undefined ? 1 - progress(t, e.t2, e.t3 ?? e.t2) : 1);

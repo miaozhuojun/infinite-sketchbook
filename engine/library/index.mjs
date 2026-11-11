@@ -1,5 +1,7 @@
 // 组件注册表：自动加载 components/ 下所有组件。编译器、分镜校验、组件测试都从这里取组件和参数定义。
-// 内置动作（不是画图组件、由编译器直接处理）：retrace（回描已有元素加粗）、strike（划掉已有元素）、ring（圈出已有元素）、glow（光晕效果，不动笔）、off（熄灭光晕）。
+// 内置动作（不是画图组件、由编译器直接处理）：retrace（回描已有元素加粗）、strike（划掉已有元素）、ring（圈出已有元素）、glow（光晕效果，不动笔）、off（熄灭光晕）、sticker（贴图，不动笔）。
+// 不动笔的动作（铅笔不去画它，编译时直接按提示词的时刻出现）
+export const PENLESS = new Set(['glow', 'off', 'sticker']);
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,6 +22,17 @@ export const BUILTINS = {
   glow: {
     name: 'glow', title: '光晕', desc: '不动笔的柔和光晕（灯亮等），可带几道光芒（rays 写角度）。只用效果色。光是效果不是墨迹，所以能用 off 熄灭。',
     params: { cx: { type: 'number', required: true }, cy: { type: 'number', required: true }, r: { type: 'number', required: true }, color: { type: 'effectColor', required: true }, rays: { type: 'numbers', desc: '光芒方向（度），不写就没有光芒' } },
+  },
+  sticker: {
+    name: 'sticker', title: '贴图',
+    desc: '把一张图贴在纸面上：被依赖那一集的封面（每集能单独看：第一次用到前一集的结论时贴它的封面，同一句旁白复述一句）。印出来的小卡片，留一圈白边、略歪、上边两角两条胶带，0.5 秒从上方落下放好（不是淡入）。铅笔不画它；版面检查、取景、安全区检查把它当一块图形。图放在 public/stickers/（不进仓库），编译时嵌进时间线。',
+    params: {
+      src: { type: 'string', required: true, desc: 'public/stickers/ 下的文件名（.jpg .png .svg）' },
+      cx: { type: 'number', required: true }, cy: { type: 'number', required: true },
+      w: { type: 'number', required: true, desc: '图的宽（纸面像素，不含白边），高按图的比例' },
+      tilt: { type: 'number', desc: '歪几度（正数顺时针），默认 -3' },
+      ep: { type: 'string', desc: '这张图代表哪一集（brief.dependsOn 里的 ep）：分镜校验据此核对每条依赖都贴了封面' },
+    },
   },
   off: {
     name: 'off', title: '熄灭', desc: '让之前亮起的光晕（连同光芒）在提示词处熄灭，比如反例里同一盏灯灭掉。',

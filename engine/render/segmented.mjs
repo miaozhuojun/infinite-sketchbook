@@ -45,7 +45,7 @@ export function sliceFor(tl, f0, f1) {
     style: { palette: st.palette, paper: st.paper, grade: st.grade, ink: st.ink, subtitle: st.subtitle, pencil: st.pencil },
     strokes: tl.strokes.map((s, i) => [i, s]).filter(([, s]) => s.t0 < tb + eps),
     pen: penIdx.map((i) => [i, pen[i], pen[i].kind === 'down' ? tl.strokes[pen[i].stroke] : null]), // 落笔段带上那一笔本身（笔画 t0 取整到两位，落笔段没取整，可能差一帧）
-    camera: cam, effects: tl.effects.filter((e) => e.t0 < tb + eps),
+    camera: cam, effects: tl.effects.filter((e) => e.t0 < tb + eps), stickers: (tl.stickers ?? []).filter((k) => k.t0 < tb + eps),
     subtitles: tl.subtitles.filter((s) => s.t0 <= tb + eps && s.t1 > ta),
     pencil: tl.pencil ? { sway: f(tl.pencil.sway), lift: f(tl.pencil.lift), edge: f(tl.pencil.edge) } : null,
     watermark: tl.watermark ? { ...tl.watermark, spans: tl.watermark.spans.filter((s) => s.t0 <= tb + eps && s.t1 > ta).map((s) => ({ ...s, atEnd: s.t1 >= tl.duration })) } : null,

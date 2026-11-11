@@ -14,10 +14,12 @@
 // 用法：node qa/safezone_check.mjs build/<id>.timeline.json
 import fs from 'node:fs';
 import { svgPathProperties } from 'svg-path-properties';
-import { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox } from '../src/timeline.ts';
+import { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } from '../src/timeline.ts';
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];
+// 贴图（被依赖那一集的封面）也是内容：外轮廓当一笔图形，和笔画一起查（不进平台界面、不切半截、不进字幕区、水印不压它）
+const ink = [...tl.strokes, ...(tl.stickers ?? []).map(stickerInk)];
 // gate：风格规范 gates 里是 advice 的关卡没过只打 [建议]、不判失败（创作取舍）；没写 gate 或是 hard 的照常判失败
 const advs = [];
 const check = (name, ok, detail, gate) => {
@@ -39,7 +41,7 @@ check('字幕避开平台界面', !subHits.length, subHits.length ? subHits.slic
 const camEnds = [...new Set([...tl.camera.map((m) => m.t1), tl.duration - 0.01])].sort((a, b) => a - b);
 const focusAt = (t) => { let f = null; for (const m of tl.camera) if (m.t1 <= t + 1e-6) f = m.focus ?? null; return f; }; // 已到位的镜头是不是推近镜头
 const contentHits = [];
-for (const s of tl.strokes) {
+for (const s of ink) {
   const pr = new svgPathProperties(s.d), L = pr.getTotalLength();
   const times = [s.t1, ...camEnds.filter((t) => t > s.t1)];
   for (const t of times) {
@@ -59,7 +61,7 @@ for (const s of tl.strokes) {
 //     硬拦会让所有画面都往左缩（审片 E02 v5：16:9 同时发抖音、小红书，原来的检查只管 YouTube、B 站）
 if (feedZones.length) {
   const feedHits = [];
-  for (const s of tl.strokes) {
+  for (const s of ink) {
     if (s.kind !== 'glyph' && s.kind !== 'line') continue;
     const pr = new svgPathProperties(s.d), L = pr.getTotalLength();
     for (const t of [s.t1, ...camEnds.filter((t) => t > s.t1)].slice(0, 3)) {
@@ -75,7 +77,7 @@ if (feedZones.length) {
 const allBox = new Map();
 // 按实际墨迹算：渲染用的全部采样点，再向外扩半个笔宽（只取路径上 9 个点、不算笔宽时，
 // 「律」字最后一点露在 16:9 画面左缘 4px 也被当成整段在画外，审片 E01 v2）
-for (const s of tl.strokes) {
+for (const s of ink) {
   const b = allBox.get(s.action) ?? { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, t0: Infinity }, hw = (s.width ?? 0) / 2;
   let pts = s.pts;
   if (!pts?.length) { const pr = new svgPathProperties(s.d), L = pr.getTotalLength(); pts = Array.from({ length: 33 }, (_, k) => { const q = pr.getPointAtLength((L * k) / 32); return [q.x, q.y]; }); }
@@ -119,7 +121,7 @@ if (tl.subtitles.length) tl.camera.forEach((m, i) => {
 const offC = [], maxOff = tl.style?.motion?.aha?.maxOffCenter, fr = tl.frame;
 if (maxOff !== undefined && fr) for (const m of tl.camera) {
   if (!m.focus || !((m.to.push ?? 1) > 1.001)) continue;
-  const pts = tl.strokes.filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts);
+  const pts = ink.filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts);
   if (!pts.length) continue;
   const fx = (Math.min(...pts.map((q) => q[0])) + Math.max(...pts.map((q) => q[0]))) / 2, fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
   const dx = ((fx - m.to.x) * m.to.z) / (fr.r - fr.l), dy = ((fy - m.to.y) * m.to.z) / (fr.b - fr.t);
@@ -135,7 +137,7 @@ for (const sp of wm?.spans ?? []) {
   if (s) { wmHits.push(`${at}压到字幕「${s.text}」`); continue; }
   const far = watermarkBox(wm, sp, wm.contentMargin ?? wm.margin); // 离内容要更远，免得像谁的标注（审片 v10：水印贴在灯泡正下方，像灯泡的标签）
   for (const t of watermarkSampleTimes(sp.t0, sp.t1)) {
-    const c = cameraAt(tl.camera, t), hit = tl.strokes.find((x) => x.t0 <= t && boxesOverlap(far, strokeScreenBox(tl, x, c)));
+    const c = cameraAt(tl.camera, t), hit = ink.find((x) => x.t0 <= t && boxesOverlap(far, strokeScreenBox(tl, x, c)));
     if (hit) { wmHits.push(`${at}在 ${t.toFixed(2)}s 压到 ${hit.id}`); break; }
   }
 }
@@ -153,6 +155,6 @@ check('镜头停稳时内容不进字幕区', !inSub.length, inSub.length ? `${i
 const more = (xs) => (xs.length > 5 ? `；另有：${[...new Set(xs.slice(5).map((x) => x.split(' ')[0]))].join('、')}` : '');
 check('镜头停稳时不切字', !cuts.length, cuts.length ? `${cuts.length} 处：` + cuts.slice(0, 5).join('；') + more(cuts) : `${tl.camera.length} 个镜头位置上，文字都整段在取景框里或整段在画外`);
 check('镜头停稳时图形不切半截', !shapeCuts.length, shapeCuts.length ? `${shapeCuts.length} 处：` + shapeCuts.slice(0, 5).join('；') + more(shapeCuts) : `${tl.camera.length} 个镜头位置上，图形都整段在取景框里或整段在画外（声明 bleed 的图形没有停在边距里）`, 'framing.shapeCut');
-check('内容避开平台界面', !contentHits.length, contentHits.length ? `${contentHits.length} 笔：` + contentHits.slice(0, 5).join('；') : `${tl.strokes.length} 笔在所有镜头位置上都不被平台界面遮挡`);
+check('内容避开平台界面', !contentHits.length, contentHits.length ? `${contentHits.length} 笔：` + contentHits.slice(0, 5).join('；') : `${ink.length} 笔在所有镜头位置上都不被平台界面遮挡`);
 console.log(`\n安全区检查失败 ${fails.length} 项${advs.length ? `（另有建议 ${advs.length} 项）` : ''}`);
 process.exit(fails.length ? 1 : 0);

@@ -3,7 +3,7 @@ import { getStroke } from 'perfect-freehand';
 import { AbsoluteFill, Html5Audio, cancelRender, continueRender, delayRender, staticFile, useCurrentFrame } from 'remotion';
 import 'lxgw-wenkai-webfont/lxgwwenkai-bold.css';
 import 'lxgw-wenkai-webfont/lxgwwenkai-regular.css'; // 风格 0.7.0 起字幕降一档字重
-import { Cam, cameraAt, ease, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke, Sticker, STICKER, stickerCard } from './timeline';
+import { Cam, cameraAt, ease, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke, Sticker, STICKER, stickerCard, stickerTapes } from './timeline';
 
 // 所有颜色、纸面、墨迹、字幕参数都来自时间线里带的风格规范（style/style.json），这里不写裸值
 // 墨迹层的世界坐标框（overflow 可见，只是坐标系，不裁内容）
@@ -250,15 +250,12 @@ const plateFill = (hex: string, a: number) => { const n = parseInt(hex.slice(1),
 const StickerCard: React.FC<{ s: Sticker; t: number }> = ({ s, t }) => {
   if (t < s.t0) return null;
   const k = ease(progress(t, s.t0, s.t1), 0.35), up = 1 - k, { W, H } = stickerCard(s), b = STICKER.border * s.w;
-  const tw = STICKER.tapeW * s.w, th = STICKER.tapeH * s.w;
-  const tape = (x: number, ang: number) => <rect x={x - tw / 2} y={-H / 2 - th / 2} width={tw} height={th} fill={s.tape} opacity={0.78} transform={`rotate(${ang} ${x} ${-H / 2})`} />;
   return (
     <g opacity={Math.min(1, progress(t, s.t0, s.t0 + 0.08))} transform={`translate(${s.cx} ${s.cy - up * STICKER.rise}) rotate(${s.tilt + up * STICKER.turn}) scale(${1 + up * (STICKER.scale0 - 1)})`}>
       <rect x={-W / 2 + 6 + up * 14} y={-H / 2 + 8 + up * 20} width={W} height={H} rx={3} fill={s.shade} opacity={STICKER.shadow * (0.6 + 0.4 * k)} filter="url(#sticker-shadow)" />
       <rect x={-W / 2} y={-H / 2} width={W} height={H} rx={3} fill={s.card} />
       <image href={s.href} x={-W / 2 + b} y={-H / 2 + b} width={s.w} height={s.h} preserveAspectRatio="xMidYMid slice" />
-      {tape(-W / 2 + tw * 0.3, -32)}
-      {tape(W / 2 - tw * 0.3, 32)}
+      {stickerTapes(s).map((p, i) => <rect key={i} x={p.x - p.w / 2} y={p.y - p.h / 2} width={p.w} height={p.h} fill={s.tape} opacity={0.78} transform={`rotate(${p.ang} ${p.x} ${p.y})`} />)}
     </g>
   );
 };

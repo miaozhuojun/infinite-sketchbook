@@ -283,11 +283,13 @@ export function validateBeats(beats, style, reg) {
         if (!own.length) { E(W, `片中要在第一次用到它的地方贴「${d.ep}」的封面：加一个 sticker 动作，写 ep: "${d.ep}"`); return; }
         // 复述就在贴图的那一句或前后一句里（旁白里一字不差地有 recap 这句话，去掉标点比）
         const pi = own[0].pi, r = strip(d.recap);
-        if (![pi - 1, pi, pi + 1].some((q) => sayOf(q).includes(r) || (sayOf(q) + sayOf(q + 1)).includes(r)))
+        if (!r || !(sayOf(pi - 1) + sayOf(pi) + sayOf(pi + 1)).includes(r)) // 复述在贴图那一句、前一句、后一句连起来的这一段里
           E(`${W}.recap`, `「${d.recap}」不在贴封面那一句（phrases[${pi}]）或前后一句的旁白里：贴封面的同时，用这句话把它复述出来`);
       });
-      for (const { a } of stickers) if (a.ep && !dep.some((d) => d.ep === a.ep)) E(`sticker ${a.id}.ep`, `贴了「${a.ep}」的封面，brief.dependsOn 里没写这条依赖`);
     }
+    // 贴了哪一集的封面，依赖里就要写那一集（没写 dependsOn 按 [] 算）
+    const listed = Array.isArray(dep) ? dep : [];
+    for (const { a } of stickers) if (a.ep && !listed.some((d) => d?.ep === a.ep)) E(`sticker ${a.id}.ep`, `贴了「${a.ep}」的封面，brief.dependsOn 里没写这条依赖`);
   }
   // 叙事结构（创意自由，但完整一集必须有这些骨架）
   const rules = style.narrative[beats.kind] || { requireRoles: [], minQuiz: 0 };

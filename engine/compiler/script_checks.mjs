@@ -40,7 +40,7 @@ export function saidNumbers(text) {
   return s;
 }
 // 动作里会画到画面上的字（text、label、各种标签数组）；位置、颜色、引用这些不算
-const NOT_DRAWN = new Set(['id', 'type', 'at', 'on', 'after', 'target', 'color', 'anchor', 'note', 'layout', 'bleed', 'ahead', 'kind', 'speed', 'lead', 'hold']);
+const NOT_DRAWN = new Set(['id', 'type', 'at', 'on', 'after', 'target', 'color', 'anchor', 'note', 'layout', 'bleed', 'ahead', 'kind', 'speed', 'lead', 'hold', 'src', 'ep']); // src、ep：贴图的文件名和它代表哪一集，不是写在画面上的字
 const drawnStrings = (a) => Object.entries(a).filter(([k]) => !NOT_DRAWN.has(k)).flatMap(([, v]) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flat(3).filter((x) => typeof x === 'string') : []));
 
 // 预告里的这些词不算「这一集没讲过的东西」：问法、代词、连词

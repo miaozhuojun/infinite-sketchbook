@@ -139,7 +139,12 @@ const buildOne = (a) => {
   if (a.type === 'glow' || a.type === 'off') return;
   if (a.type === 'sticker') {
     // 贴图不动笔，但版面检查（留空、压线、避让）和取景要把它当一块图形：外轮廓当成一笔「图形」放进 geo，排笔时跳过它
-    geo.set(a.id, [{ kind: 'shape', color: style.palette.ink, width: style.ink.penWidth, d: 'M' + stickerOutline(stickerOf(a)).map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' L') }]);
+    // 只放外轮廓时，整个落在卡片里面的字量的是到轮廓线的距离，压在卡片上也不报（PR #66 审查）：卡片里面再铺一排横线，间距小于标签留空，
+    // 落在卡片里的任何一点离最近的线都不到留空，照样算压线
+    const sk = stickerOf(a), o = stickerOutline(sk), ink = (pts) => ({ kind: 'shape', color: style.palette.ink, width: style.ink.penWidth, d: 'M' + pts.map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' L') });
+    const rows = [], step = Math.max(6, (style.type.labelGap ?? 14) * 0.9), [p0, p1, p2, p3] = o; // 外轮廓：左上、右上、右下、左下（含胶带）
+    for (let u = step / 2; u < 1; u += step / dist(p0, p3)) rows.push(ink([[p0[0] + (p3[0] - p0[0]) * u, p0[1] + (p3[1] - p0[1]) * u], [p1[0] + (p2[0] - p1[0]) * u, p1[1] + (p2[1] - p1[1]) * u]]));
+    geo.set(a.id, [ink(o), ...rows]);
     return;
   }
   if (a.type === 'retrace') {
@@ -530,7 +535,7 @@ function schedule(boost) {
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
       // 回看之后：镜头停在前面某一节，铅笔还留在最后写字的地方（多半在这一镜画外）。按原处起飞，镜头和笔从不同的地方出发，
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
-      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered[0]) {
+      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered.find((x) => !PENLESS.has(x.type))) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z]; penAway = true; }
       }
@@ -756,7 +761,9 @@ const pushMove = (t0, t1, to, focus) => {
 phrases.forEach((p, pi) => {
   const tc = targetCam[pi];
   // 这句没有笔画（比如结尾回收句只说不画）也要移到自己的取景：从句子开头起移
-  const first = strokes.find((s) => p.actions.some((a) => a.id === s.action)) ?? { t0: report.phrases[pi].at + (focusCam[pi] ? 0 : M.cameraMove[0]) };
+  // 这句第一样新东西出现的时刻：第一笔，或者贴图开始落下（贴图的提示词在第一笔前面时，镜头要先到，PR #66 审查）
+  const t0s = [strokes.find((s) => p.actions.some((a) => a.id === s.action))?.t0, ...stickers.filter((k) => p.actions.some((a) => a.id === k.id)).map((k) => k.t0)].filter((x) => x != null);
+  const first = t0s.length ? { t0: Math.min(...t0s) } : { t0: report.phrases[pi].at + (focusCam[pi] ? 0 : M.cameraMove[0]) };
   if (!tc || !first) return;
   if (!camera.length) { camera.push({ t0: 0, t1: 0, from: tc, to: tc }); return; }
   // 顿悟后至少停留：推近到位后 hold 秒，且这句说完后 holdAfter 秒，才离开
@@ -830,6 +837,14 @@ const glideAt = (f, t, e) => { const z = f.z * Math.pow(t.z / f.z, e); if (Math.
   const px = (t.x * t.z - f.x * f.z) / (t.z - f.z), py = (t.y * t.z - f.y * f.z) / (t.z - f.z); return { x: px + (f.x - px) * f.z / z, y: py + (f.y - py) * f.z / z, z }; };
 const glideE = (u, dur) => { const r = Math.min(0.45, 1.5 / Math.max(dur, 1e-6)), k = 1 / (2 * r * (1 - r)); return u < r ? u * u * k : u > 1 - r ? 1 - (1 - u) * (1 - u) * k : (u - r / 2) / (1 - r); };
 const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0); if (m.curve === 'glide') c = glideAt(m.from, m.to, glideE(u, m.t1 - m.t0)); else { const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } } return c; };
+// 贴图落定时，外轮廓（含胶带）也要在取景框里
+for (const k of stickers) {
+  const c = camAt(k.t1);
+  for (const [x, y] of stickerOutline(k)) {
+    const sx = (x - c.x) * c.z + VIEW.cx, sy = (y - c.y) * c.z + VIEW.cy;
+    if (sx < TGT.frame.l || sx > TGT.frame.r || sy < TGT.frame.t || sy > TGT.frame.b) { problems.push(`镜头外：贴图 ${k.id} 在 ${r2(k.t1)}s 屏幕(${r2(sx)},${r2(sy)})`); break; }
+  }
+}
 for (const s of strokes) {
   const c = camAt(s.t1), pr = new svgPathProperties(s.d);
   for (let k = 0; k <= 12; k++) {

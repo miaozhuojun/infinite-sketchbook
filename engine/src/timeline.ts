@@ -269,10 +269,25 @@ export const STICKER = { border: 0.035, tapeW: 0.24, tapeH: 0.07, tapeOut: 0.045
 type StickerGeo = Pick<Sticker, 'cx' | 'cy' | 'w' | 'h' | 'tilt'>;
 // 卡片（含白边）的宽高
 export const stickerCard = (s: StickerGeo) => ({ W: s.w * (1 + 2 * STICKER.border), H: s.h + 2 * STICKER.border * s.w });
-// 外轮廓（世界坐标，闭合）：卡片四角，上边再加胶带伸出去的那一截，按 tilt（度）绕中心转
+// 两条胶带（卡片坐标，未转 tilt）：中心在上沿、离左右边 0.3 个胶带宽，各转 ∓32°。绘制（成片、讲义插图）和外轮廓都用它
+export const STICKER_TAPE_ANGLE = 32;
+export function stickerTapes(s: StickerGeo): { x: number; y: number; w: number; h: number; ang: number }[] {
+  const { W, H } = stickerCard(s), tw = STICKER.tapeW * s.w, th = STICKER.tapeH * s.w;
+  return [{ x: -W / 2 + tw * 0.3, y: -H / 2, w: tw, h: th, ang: -STICKER_TAPE_ANGLE }, { x: W / 2 - tw * 0.3, y: -H / 2, w: tw, h: th, ang: STICKER_TAPE_ANGLE }];
+}
+// 外轮廓（世界坐标，闭合）：包住卡片和两条胶带的矩形（卡片坐标里取包围盒），按 tilt（度）绕中心转。顺序：左上、右上、右下、左下、左上
 export function stickerOutline(s: StickerGeo): [number, number][] {
-  const { W, H } = stickerCard(s), up = STICKER.tapeOut * s.w, r = (s.tilt * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r);
-  const loc: [number, number][] = [[-W / 2, -H / 2 - up], [W / 2, -H / 2 - up], [W / 2, H / 2], [-W / 2, H / 2], [-W / 2, -H / 2 - up]];
+  const { W, H } = stickerCard(s), r = (s.tilt * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r);
+  let x0 = -W / 2, x1 = W / 2, y0 = -H / 2;
+  const y1 = H / 2;
+  for (const t of stickerTapes(s)) {
+    const a = (t.ang * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+    for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const lx = (dx * t.w) / 2, ly = (dy * t.h) / 2, px = t.x + lx * ca - ly * sa, py = t.y + lx * sa + ly * ca;
+      x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py);
+    }
+  }
+  const loc: [number, number][] = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
   return loc.map(([x, y]) => [s.cx + x * c - y * sn, s.cy + x * sn + y * c]);
 }
 // 当成一笔墨迹交给按笔画查的检查（安全区、水印避让、镜头到位后的动静）：外轮廓每条边上取几个点

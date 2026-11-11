@@ -197,7 +197,7 @@ expectFail('镜头停稳时一个图形压在字幕衬底底下', (tl) => {
 }, safezone, '[失败] 镜头停稳时内容不进字幕区');
 // 贴图（被依赖那一集的封面）也是内容：外轮廓和笔画一样查（每集能单独看，用户 2026-11-11）。贴一张卡片，镜头停稳时它的下半截落在字幕衬底底下
 expectFail('镜头停稳时贴图压在字幕衬底底下', (tl) => {
-  const i = tl.camera.findIndex((m) => !m.focus && m.t1 > m.t0), m = tl.camera[i], c = m.to;
+  const m = tl.camera.find((x) => !x.focus && x.t1 > x.t0) ?? tl.camera[0], c = m.to;
   const y = c.y + (subTop(tl) + 10 - tl.view.cy) / c.z; // 卡片中心落在字幕上沿下面 10px
   tl.stickers = [{ id: '_stk', href: 'data:image/svg+xml;base64,', cx: c.x, cy: y, w: 300 / c.z, h: 170 / c.z, tilt: -3, t0: Math.max(0, m.t1 - 0.6), t1: Math.max(0.1, m.t1 - 0.1), card: '#ffffff', tape: '#e6d7ad', shade: '#3c2a12' }];
 }, safezone, '[失败] 镜头停稳时内容不进字幕区');
@@ -752,8 +752,11 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
   const STK = 'public/stickers/_selftest.svg';
   fs.mkdirSync('public/stickers', { recursive: true });
   fs.writeFileSync(STK, '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#c4432f"/></svg>');
-  const say = (b) => strip(b.phrases.at(-1).text);
-  const stick = (b, ep) => { const p = b.phrases.at(-1); p.actions.push({ id: '_stk', type: 'sticker', at: p.actions[0]?.at ?? p.text.slice(0, 2), src: '_selftest.svg', cx: 2600, cy: 400, w: 300, ep }); };
+  // 注入挑最后一句会画东西的句子（片尾全景、回看的句子不画新东西，往那儿加贴图会多报一条无关的错）
+  const host = (b) => b.phrases.findLast((q) => !q.camera && !q.revisit?.length && q.actions?.length) ?? b.phrases.at(-1);
+  const say = (b) => strip(host(b).text);
+  const stick = (b, ep) => { const p = host(b); p.actions.push({ id: '_stk', type: 'sticker', at: p.actions[0]?.at ?? p.text.slice(0, 2), src: '_selftest.svg', cx: 2600, cy: 400, w: 300, ep }); };
+  try {
   expectBeats('写了依赖前一集，片中没贴那一集的封面', (b) => {
     b.brief = { ...(b.brief ?? {}), dependsOn: [{ ep: 'e00-test', what: '测试用的前提', recap: say(b) }] };
   }, validate, /贴「e00-test」的封面/);
@@ -766,9 +769,16 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
     stick(b, 'e00-test');
   }, validate, /dependsOn 里没写这条依赖/);
   expectBeats('贴图的图不在 public/stickers/ 里', (b) => {
-    stick(b); b.phrases.at(-1).actions.at(-1).src = '_selftest-missing.png';
+    stick(b); host(b).actions.at(-1).src = '_selftest-missing.png';
   }, validate, /找不到 public\/stickers\/_selftest-missing.png/);
-  fs.rmSync(STK, { force: true });
+  // 编译：贴图整个盖在一段文字上（文字落在卡片里面，离外轮廓很远），版面检查也要报（PR #66 审查：原来只量到外轮廓的距离）
+  expectBeats('贴图整个盖在一段文字上（关闭自动修复）', (b) => {
+    const p = b.phrases.find((q) => !q.camera && !q.revisit?.length && q.actions?.some((a) => a.type === 'text' && typeof a.x === 'number'));
+    const t = p.actions.find((a) => a.type === 'text' && typeof a.x === 'number');
+    b.brief = { ...(b.brief ?? {}), dependsOn: [{ ep: 'e00-test', what: '测试用的前提', recap: strip(p.text) }] };
+    p.actions.push({ id: '_stk', type: 'sticker', at: t.at, src: '_selftest.svg', cx: t.x + 60, cy: t.y, w: 900, ep: 'e00-test' });
+  }, compileNoFix(TGT), /离 _stk|_stk.*离/);
+  } finally { fs.rmSync(STK, { force: true }); }
 }
 // 多音字：结构助词「地」（用户听 E02 v5：「细细地讲」念成了 dì）
 expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b) => {

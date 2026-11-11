@@ -112,7 +112,7 @@ if (vMax) for (const m of tl.camera ?? []) {
 }
 check('镜头不甩', !fast.length, fast.length ? `${fast.length} 次镜头移动太快（上限 ${vMax}px/s）：` + fast.slice(0, 5).join('、') : vMax ? `每次镜头移动平均平移不超过 ${vMax}px/s` : '风格里没写 flightSpeed，不查', 'camera.flightSpeed');
 
-// 5c. 镜头到位后不对着空纸讲（编译和这里共用 src/timeline.ts 的 idleAfterCamera）：换取景（不算推近、回看、全景长镜头）到位以后，
+// 5c. 镜头到位后不对着空纸讲（判定在 src/timeline.ts 的 idleAfterCamera，自测也用它挑注入点）：换取景（不算推近、回看、全景长镜头）到位以后，
 //     到下一笔、发光或下一次镜头移动之前，旁白在讲的时间超过 motion.maxIdleAfterMove 秒。
 //     审片 E05 v1：换节镜头在上一句说完前就飞走，五处提前离场，205 秒那处对着空纸讲了 7 秒（E04 复盘同一类，第二次出现做成检查）
 const maxIdle = tl.style?.motion?.maxIdleAfterMove ?? 2.5;

@@ -456,7 +456,7 @@ const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l &
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
   const strokes = [], penTrack = [], effects = [], audioClips = [], report = { phrases: [], actions: [] };
-  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
+  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
     const clipIn = p.cutIn, clipOut = p.cutOut;
@@ -493,7 +493,7 @@ function schedule(boost) {
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
       if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered[0]) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
-        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
+        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z]; penAway = true; }
       }
       // 全片第一笔：片子一开头笔就在纸上落笔处，不先从画外飞进来（审片 E01 v9：飞进来要 0.76 秒，开场钩子的灯晚亮）
       const opening = penPos === OFF && !strokes.length && cue - (a.lead ?? PEN.cueLead) < 1;
@@ -520,7 +520,8 @@ function schedule(boost) {
       // 距离取笔和镜头里飞得远的那个：镜头是在两个取景中心之间飞，常比笔飞得远（审片 v9：进尾卡那次镜头平均 1350–1455px/s，超过上限）
       const camFar = targetCam[pi - 1] && targetCam[pi] ? Math.hypot(targetCam[pi].x - targetCam[pi - 1].x, targetCam[pi].y - targetCam[pi - 1].y) : 0;
       const flyDur = Math.max(M.chapterMoveMin ?? 0, (Math.max(dist(fromPos, st), camFar) * z) / (M.flightSpeed ?? V_MOVE));
-      if (flight) t = Math.max(t, takeoff + flyDur);
+      // 不早于 takeoff 起飞：飞行时长取镜头飞行和笔自己移过去里长的那个（只按 flyDur 算时，笔移得更久就会提前起飞，绕过句末约束）
+      if (flight) t = Math.max(t, takeoff + Math.max(flyDur, travel));
       // 起飞后离落笔还早（提示词在句尾）：按正常时长飞到，到了先停着等，不把整句都拉成一次慢吞吞的飞行（审片 v10：回顾第一站飞了 6.3 秒）
       const slack = flight ? t - takeoff - Math.max(flyDur, travel) : 0;
       // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
@@ -561,10 +562,11 @@ function schedule(boost) {
         const best = cands.filter(fits).sort((x, y) => x.c - y.c)[0];
         return best;
       };
-      // 换节要等上一句说完才起飞（见 takeoff）：等够 minRest 秒就先退到不压东西的地方停着，从那里起飞（原来手一空就飞，不用等）
+      // 换节要等上一句说完才起飞（见 takeoff）：等够 minRest 秒就先退到不压东西的地方停着，从那里起飞（原来手一空就飞，不用等）。
+      // 只在笔上一句刚写过、还在原处时停：上一句是不画的回看时笔已被当成在画外（penAway），上一句不画时取景也还没到那一镜
       let flyFrom = fromPos;
-      const flyT0 = flight ? (slack > 1 ? takeoff : Math.min(t - travel, takeoff)) : 0;
-      if (flight && flyT0 - penFree >= PK.minRest) {
+      const flyT0 = flight ? takeoff : 0;
+      if (flight && penPhrase === pi - 1 && !penAway && targetCam[pi - 1] && flyT0 - penFree >= PK.minRest) {
         const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1]].filter(Boolean), false, flyT0, null);
         if (best && dist(best.q, penPos) > 2) {
           const go = moveDur(dist(penPos, best.q), 0.12, z);
@@ -610,7 +612,7 @@ function schedule(boost) {
         penTrack.push({ kind: 'down', t0: t, t1: t + dur, stroke: idx });
         t += dur;
         penPos = [en.x, en.y];
-        penPhrase = pi;
+        penPhrase = pi; penAway = false;
       });
       penFree = t;
       report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(start), end: r2(t), lag: r2(start - cue), pen: true, audioStart: r2(audioStart), audioEnd: r2(audioEnd), speed: r2(speed) });

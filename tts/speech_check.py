@@ -74,7 +74,7 @@ for sp in speakers:
 # 掉嗓子、破音落在的时刻：最后归到句子，写进 <时间线>.revoice.json，流水线据此给这几句自动换种子重配一轮（不用人手动 reseed）。
 # E02 v5：配音那边拼好后查过没问题，成片旁白（48k、插了停顿、片段两头 3ms 淡入淡出）上又查出一句掉嗓子
 # 点名按时刻落到具体句子（sentence_at）：(时刻, 往哪边看)。收音硬切属于前一句（往前看），起音硬切属于后一句（往后看），其余看时刻本身
-revoice_at = []
+revoice_at, revoice_k = [], set()
 def phrase_at(t, side=0.0):
     k = sentence_at(t, _spans, side)
     if k is not None:
@@ -372,7 +372,7 @@ for spk in speakers:
             rates.append((k, art_rate(ws), sp))
     off = [(k, r, sp) for k, r, sp in rates if abs(r / RATE["target"] - 1) > RATE.get("maxDev", 0.10)]
     for k, r, sp in off:
-        revoice_at.extend((a + 0.01, 0.0) for kk, a, b in sentence_ranges() if kk == k)
+        revoice_k.add(k)  # 已经知道是哪一句，直接记句号（按时刻反查时，相邻两句范围重叠会落到前一句）
     rs = [r for _, r, _ in rates]
     check("语速一致" + who(spk), not off, (f"{len(off)} 句离 {RATE['target']} 字/秒超过 {RATE.get('maxDev', 0.10):.0%}：" + "；".join(f"「{sp['text'][:10]}」{r:.2f}" for _, r, sp in off[:6]) + "；")
           * bool(off) + f"全片每句 {min(rs):.2f}–{max(rs):.2f} 字/秒，波动 {np.std(rs) / np.mean(rs):.2f}")
@@ -449,7 +449,7 @@ for spk in speakers:
                   f"音区 {dr_st:+.1f} 半音、响度 {dr_lu:+.1f} LU、语速 {dr_rate:+.0%}、音色（CAM++ 平均）{dr_cam:.3f}"))
 
 rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
-rv = sorted({timing0["sentences"][k]["text"] for t, side in revoice_at if (k := sentence_at(t, _spans, side)) is not None}) if timing0.get("sentences") else []
+rv = sorted({timing0["sentences"][k]["text"] for k in revoice_k | {sentence_at(t, _spans, side) for t, side in revoice_at} if k is not None}) if timing0.get("sentences") else []
 if rv:
     rv_path.write_text(json.dumps(rv, ensure_ascii=False, indent=1))
     print(f"要换种子重配的句子：{len(rv)} 句（{rv_path.name}）")

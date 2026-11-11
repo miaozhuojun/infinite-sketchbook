@@ -127,7 +127,7 @@ expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (t
 {
   const MAXI = base.style?.motion?.maxIdleAfterMove ?? 2.5, D = MAXI + 1;
   const talk = (a, b) => (base.audioClips ?? []).reduce((s, c) => s + Math.max(0, Math.min(b, c.at + c.srcOut - c.srcIn) - Math.max(a, c.at)), 0);
-  const cand = idleAfterCamera(base).find((x) => x.idle <= MAXI && talk(x.arrive, x.arrive + D) > MAXI + 0.3);
+  const cand = idleAfterCamera(base).find((x) => base.camera.some((m) => m.t1 === x.arrive) && x.idle <= MAXI && talk(x.arrive, x.arrive + D) > MAXI + 0.3); // 到位时没在写的那种
   if (!cand) skip('镜头到位后画面晚了几秒才动（对着空纸讲）', '基线里没有到位后旁白还要讲几秒的换取景');
   else expectFail('镜头到位后画面晚了几秒才动（对着空纸讲）', (tl) => {
     // 到位那一刻起的都推后（时间线里的时刻是取整过的，第一笔常和到位同一个数，留 0.01 秒余量）；到位的那次镜头移动本身不动
@@ -653,6 +653,35 @@ else {
     if (tl && freed > said - early - 0.2) skip('换节镜头等上一句说完才起飞', `注入后上一句的笔还是到句末才空（${freed}s，句末 ${said}s），测不出`);
     else record('换节镜头等上一句说完才起飞（笔和镜头都不早于句末前 takeoffEarly 秒）', !!fly && !!cam && fly.t0 >= said - early - 0.01 && cam.t0 >= said - early - 0.01,
       out + `\n上一句说完 ${said}s、笔 ${freed}s 就空了，笔起飞 ${fly?.t0}s，镜头起飞 ${cam?.t0}s`);
+    fs.rmSync('data/_selftest.beats.json', { force: true });
+    for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+  }
+}
+// 回看后接新的一节、回看那句不画（审 PR #64 复现）：回看时笔被当成在回看取景的画外，等上一句说完时不能再从那个假位置「停笔」，
+// 不然真笔从最后一笔的终点一帧跳过去（运笔流畅判失败，单帧 834px）。注入：第一句加一个远处的字，下一句改成回看第一句、不画，再下一句照常画
+if (SKIP.has('compile')) skip('不画的回看之后换节，笔不瞬移', '这次没改编译器和分镜校验（--skip compile）');
+else {
+  const b = structuredClone(beatsSrc); b.id = '_selftest';
+  for (const a of acts(b)) {
+    for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov);
+    delete a.layout;
+  }
+  const i = b.phrases.findIndex((q, k) => q.actions?.some((a) => a.type === 'text' && typeof a.x === 'number') && b.phrases[k + 2]?.actions?.some((a) => a.type !== 'off' && a.type !== 'glow'));
+  if (i < 0) skip('不画的回看之后换节，笔不瞬移', '基线分镜里找不到连着三句、头尾都画东西的地方');
+  else {
+    const p = b.phrases[i], t0 = p.actions.find((a) => a.type === 'text' && typeof a.x === 'number');
+    p.actions.push({ id: '_far', type: 'text', at: t0.at, text: '1', x: t0.x + 2400, y: t0.y, size: t0.size ?? 72 });
+    const ids = new Set(b.phrases[i + 1].actions?.map((a) => a.id));
+    for (const a of acts(b)) for (const k of ['after', 'on', 'target']) if (ids.has(a[k])) delete a[k];
+    Object.assign(b.phrases[i + 1], { revisit: [t0.id], actions: [] });
+    fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+    const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT, '--no-validate'], { encoding: 'utf8' });
+    const tlp = path.resolve(`build/_selftest-${TGT}.timeline.json`);
+    if (!fs.existsSync(tlp)) skip('不画的回看之后换节，笔不瞬移', '注入后编不出来：' + ((r.stdout || '') + (r.stderr || '')).trim().split('\n').at(-1));
+    else {
+      const pc = pencil(tlp), out = (pc.stdout || '') + (pc.stderr || '');
+      record('不画的回看之后换节，笔不瞬移（运笔流畅不判失败）', /\[通过\] 运笔流畅/.test(out), out);
+    }
     fs.rmSync('data/_selftest.beats.json', { force: true });
     for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
   }

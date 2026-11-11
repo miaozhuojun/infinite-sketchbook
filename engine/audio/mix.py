@@ -211,6 +211,22 @@ fade[:fi] = np.linspace(0, 1, fi)
 end = int(tl["duration"] * SR)
 fade[end - fo:end] = np.linspace(1, 0, fo)
 fade[end:] = 0
+# 片尾：音乐全程不停，到片尾卡才变——慢慢淡出，再落一声「叮—咚」，听得出片子完了（风格规范 audio.music.outro；没有片尾卡或没配 outro 就只在最后 1.5 秒淡出）
+OUT = AU["music"].get("outro") or {}
+end_t = (tl.get("endCard") or {}).get("t0")
+sting = np.zeros(N)
+if OUT and end_t is not None:
+    a = int((end_t + OUT.get("delay", 0.5)) * SR)
+    b = min(end, a + int(OUT.get("fade", 3.5) * SR))
+    if a < b:
+        g = np.ones(N)
+        g[a:b] = np.linspace(1, 0, b - a)
+        g[b:] = 0
+        fade = np.minimum(fade, g)
+    t_st = min(b / SR - OUT.get("stingLead", 0.8), tl["duration"] - 2.0)
+    for k, m in enumerate(OUT.get("sting", [])):
+        add(sting, int((t_st + k * OUT.get("gap", 0.45)) * SR), tone(midi(m), 2.4, ((1, 1.0), (2.76, 0.35), (5.4, 0.1)), decay=1.3, attack=0.003))
+    print(f"片尾：{end_t:.1f}s 起音乐淡出" + (f"，{t_st:.1f}s 一声收尾" if OUT.get("sting") else ""))
 # 休止：风格规范 audio.music.rest 列出的章节里音乐淡出，只留人声和笔声；下一节开头再淡入（用在要专心听的核心推理段）
 rest = AU["music"].get("rest", [])
 chap = tl.get("chapters", [])
@@ -261,7 +277,9 @@ v_l = meter.integrated_loudness(voice)
 foley = set_lufs(foley, v_l + AU["foleyRel"])   # 书写声：轻，只作质感
 music = set_lufs(music, v_l + AU["musicRel"])   # 音乐：垫底（闪避前的整体水平）
 chime = set_lufs(chime, v_l + AU["chimeRel"])
-mix = voice + foley * foley_duck + music + chime
+if sting.any():
+    sting = set_lufs(sting, v_l + AU["chimeRel"] + OUT.get("stingRel", 0))
+mix = voice + foley * foley_duck + music + chime + sting
 for _ in range(2):  # 限幅会让响度略降，归一再限一次即收敛
     mix = limit(set_lufs(mix, AU["voiceLufs"]), AU["truePeak"], AU["limiterLook"])
 out = f"audio/{tl['id']}.mix.wav"

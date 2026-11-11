@@ -300,17 +300,39 @@ const textPair = (A, pa, B, pb) => {
   return null;
 };
 const needGap = (A, B) => (A.type === 'text' && B.type === 'text' ? Math.max(GAP, style.type.labelTextGapEm * Math.min(A.size, B.size)) : GAP);
+// 采样点的中线包围盒和最粗笔宽
+const ptsBox = (pts) => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, w = 0;
+  for (const [x, y, pw] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (pw > w) w = pw; }
+  return { x0, y0, x1, y1, w };
+};
+// 每个元素的采样点和包围盒按 geo 里的那个数组缓存（元素重画时 geo 换成新数组，缓存自然失效；笔画被原地改了 d、width 也重算）
+const geoSamples = new WeakMap();
+const samplesOf = (list) => {
+  const c = geoSamples.get(list);
+  if (c && c.sig.length === list.length && c.sig.every((v, i) => v.d === list[i].d && v.w === list[i].width)) return c;
+  const pts = sampleList(list), fresh = { sig: list.map((s) => ({ d: s.d, w: s.width })), pts, box: ptsBox(pts) };
+  geoSamples.set(list, fresh);
+  return fresh;
+};
+// 一个元素到所有别的元素的最小余量。逐点两两比距离很慢（E05 一次编译 12–17 分钟，绝大部分在这里：自动避让每个挤字的标签试 192 个位置，
+// 每个位置都和全集几百个元素逐点比）。两个元素中线包围盒的距离减去两边最粗的半个笔宽，是它们任意两点净距的下界；
+// 下界减去要求的间距已经不小于 0 时，这个元素既造不成压线、也不会成为负余量的最小值，跳过逐点比较。
+// 结果只在「全都合格」时不同（best 可能是 Infinity 而不是某个正数），调用方只看 best 是否 ≥ 0、负的时候才用 who/raw/need，所以判定和报出的内容都不变。
 const clearance = (A, pts) => {
   let best = Infinity, who = null, raw = Infinity, need = GAP, row = false;
+  const ab = ptsBox(pts);
   for (const [id, list] of geo) {
     const B = actionsById.get(id);
     if (id === A.id || related(A, B)) continue;
-    const pb = sampleList(list);
+    const sb = samplesOf(list), pb = sb.pts;
     if (B.type === 'text') {
       const tp = textPair(A, pts, B, pb);
       if (tp && tp.margin < best) { best = tp.margin; who = id; raw = tp.raw; need = tp.need; row = true; }
     }
-    const ng = needGap(A, B);
+    const ng = needGap(A, B), b = sb.box;
+    const dx = Math.max(0, b.x0 - ab.x1, ab.x0 - b.x1), dy = Math.max(0, b.y0 - ab.y1, ab.y0 - b.y1);
+    if (Math.hypot(dx, dy) - (ab.w + b.w) / 2 - ng >= Math.min(best, 0) + 1e-6) continue;
     for (const [bx, by, bw] of pb) for (const [ax, ay, aw] of pts) {
       const d = Math.hypot(ax - bx, ay - by) - (aw + bw) / 2;
       if (d - ng < best) { best = d - ng; who = id; raw = d; need = ng; row = false; }

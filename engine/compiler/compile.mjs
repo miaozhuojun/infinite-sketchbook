@@ -493,7 +493,8 @@ const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l &
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
   const strokes = [], penTrack = [], effects = [], stickers = [], audioClips = [], report = { phrases: [], actions: [] };
-  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
+  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false, awayUntil = 0; // awayUntil：回看时退场的那段移动走完的时刻（不进 penFree）
+  // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
     const clipIn = p.cutIn, clipOut = p.cutOut;
@@ -502,18 +503,25 @@ function schedule(boost) {
     const audioStart = T, audioEnd = T + (clipOut - clipIn), phraseStartFree = penFree;
     // 回看（片尾回顾）：这句镜头飞回前面某一节，铅笔不写。原来笔就停在最后写字的地方，镜头一飞，它在屏幕上被拖着扫过字幕区和画面边
     // （E06 试编：回顾第一句镜头往右上飞、最后一句飞回来，笔尖各贴着字幕和抖音按钮列过去一次）。
-    // 改成：笔停的地方在上一镜或这一镜里看得见，就在镜头起飞时先退到两镜的右边外面；之后第一句落笔照「回看之后」从画外飞进来
-    if (p.revisit?.length && penPos !== OFF) {
-      const cams = [targetCam[pi - 1], targetCam[pi]].filter(Boolean);
-      const seen = (c) => { const sx = (penPos[0] - c.x) * c.z + VIEW.cx, sy = (penPos[1] - c.y) * c.z + VIEW.cy; return sx > -60 && sx < TGT.w + 60 && sy > -60 && sy < TGT.h + 60; };
-      // 退到的点：两镜的右边外面，高度取这一镜的中心（镜头上下飞时笔跟着往同一个方向走，不被拖着竖穿字幕区）
-      const off = cams.some(seen) ? offRight(cams, cams.at(-1).y) : null;
-      if (off) {
-        const t0 = Math.max(penFree, T), z = Math.max(...cams.map((c) => c.z));
-        const d = moveDur(dist(penPos, off), 0.12, z);
+    // 改成：一段连着不动笔的句子（从这句回看起，到下一句动笔之前）只退一次场：镜头真的要移、笔又在上一镜或这一镜里看得见时，
+    // 笔先退到这一段每一镜（连同下一句动笔那一镜）的右边外面，停在那里；下一句动笔时从那里和镜头一起飞进来。
+    // 回看句自己圈出、回描、划掉的（E02 第 63–65 句）不退场，照原来的做法和镜头同起同落。
+    // 回看镜头是普通缓动（x、y、z 同一个插值），offRight 在每一镜里都离右边 260px 以上，两镜之间插值出来的镜头也看不见这个点
+    const moves = (a, b) => a && b && (Math.hypot(a.x - b.x, a.y - b.y) >= 8 || Math.abs(a.z - b.z) >= 0.01);
+    if (p.revisit?.length && penPos !== OFF && !penAway && !p.actions.some((a) => !PENLESS.has(a.type)) && moves(targetCam[pi - 1], targetCam[pi])) {
+      const reach = (style.pencil.length + style.pencil.halfWidth) * style.pencil.scale * (Math.min(TGT.w, TGT.h) / 1080) + 40; // 笔身伸出笔尖多远
+      const seen = (c) => { const sx = (penPos[0] - c.x) * c.z + VIEW.cx, sy = (penPos[1] - c.y) * c.z + VIEW.cy, m = reach * c.z; return sx > -m && sx < TGT.w + m && sy > -m && sy < TGT.h + m; };
+      let k = pi; while (k < phrases.length && !phrases[k].actions.some((a) => !PENLESS.has(a.type))) k++; // 下一句动笔的
+      const cams = targetCam.slice(pi - 1, Math.min(k, phrases.length - 1) + 1).filter(Boolean);
+      if ([targetCam[pi - 1], targetCam[pi]].filter(Boolean).some(seen)) {
+        // 镜头起飞前就水平退出去（和镜头一起走时，镜头起步快、笔是对称缓动，笔在屏幕上先往下掉，竖穿字幕区：E06 试编 838.9 秒）。
+        // 退到的点在这一段每一镜的右边外面，高度不变；起点取「这句开口前退完」和「上一笔写完」里晚的那个
+        const off = offRight(cams, penPos[1]);
+        const z = Math.max(...cams.map((c) => c.z)), d = moveDur(dist(penPos, off), 0.12, z);
+        const t0 = Math.max(penFree, T - d - 0.1);
         if (t0 > penFree + 1e-6) penTrack.push({ kind: 'rest', t0: penFree, t1: t0, at: penPos });
-        penTrack.push({ kind: 'move', t0, t1: t0 + d, from: penPos, to: off });
-        penPos = off; penFree = t0 + d; penAway = true;
+        penTrack.push({ kind: 'move', t0, t1: t0 + d, from: penPos, to: off, exit: true });
+        penPos = off; penAway = true; awayUntil = t0 + d; // 不改 penFree：看不见的退场不该让旁白停下来等它
       }
     }
     // 一支笔按提示词在旁白里出现的先后来写（同一个词上的按分镜里的顺序）：分镜里排反了，后说到的先写，先说到的要等它写完
@@ -553,15 +561,16 @@ function schedule(boost) {
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
       // 回看时退到画外的笔（penAway）：回看之后不管隔了几句不画的，第一笔都照这条从这一镜右上方画外飞进来
       const backFromAway = pi > 0 && (phrases[pi - 1].revisit?.length || penAway);
-      if (penPos !== OFF && backFromAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
+      if (penPos !== OFF && backFromAway && !penAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
-        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z]; penAway = true; }
+        // 画外的入场点：右边外面 260px（原来是 rc.x + 1000/rc.z，取景中心偏左的横版 view.cx 815 时它落在画面里，屏幕 x 1815）
+        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + (TGT.w + 260 - VIEW.cx) / rc.z, rc.y - 350 / rc.z]; penAway = true; }
       }
       // 全片第一笔：片子一开头笔就在纸上落笔处，不先从画外飞进来（审片 E01 v9：飞进来要 0.76 秒，开场钩子的灯晚亮）
       const opening = penPos === OFF && !strokes.length && cue - (a.lead ?? PEN.cueLead) < 1;
       const fromPos = opening ? [first.x, first.y] : penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
       const travel = opening ? 0 : moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
-      let t = Math.max(cue - (a.lead ?? PEN.cueLead), penFree + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）
+      let t = Math.max(cue - (a.lead ?? PEN.cueLead), Math.max(penFree, awayUntil) + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）
       // 要停一会儿时先退开：笔尖往右下（笔身朝向）退一点，别压着刚写的东西；退开的点不出取景框
       // ---- 落笔前等多久、在哪儿等：停笔不压正在讲的东西（审片：笔停在刚写的「0」、刚画的灯、x₁ 的下标上） ----
       // 等不到 0.5 秒就原地等；再久就在候选位置里挑：原地、当前位置四周、下一笔起点四周、等得够久时还有画面外。
@@ -577,7 +586,7 @@ function schedule(boost) {
       // 也不早于上一句说完（最多提前 motion.takeoffEarly 秒）：原来笔一空就起飞，上一句最后一笔落在句中时，句尾还在讲、镜头已经飞到下一节，
       // 观众对着空纸听完上一句（审片 E05 v1：五处提前离场，205 秒那处空纸 7 秒；E04 复盘同一类）
       const prevEnd = pi > 0 ? report.phrases[pi - 1].audioEnd - (M.takeoffEarly ?? 0.3) : 0;
-      const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0, prevEnd) : 0;
+      const takeoff = flight ? Math.max(penFree, awayUntil, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0, prevEnd) : 0;
       // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
       // 距离取笔和镜头里飞得远的那个：镜头是在两个取景中心之间飞，常比笔飞得远（审片 v9：进尾卡那次镜头平均 1350–1455px/s，超过上限）
       const camFar = targetCam[pi - 1] && targetCam[pi] ? Math.hypot(targetCam[pi].x - targetCam[pi - 1].x, targetCam[pi].y - targetCam[pi - 1].y) : 0;
@@ -795,7 +804,8 @@ phrases.forEach((p, pi) => {
     const focusIds = [...new Set([...p.actions.map((a) => a.id), ...(p.focus || [])])]; // 推近镜头记下焦点元素（安全区检查用）
     // 一节以顿悟句开头（或回看之后接顿悟句）：镜头要飞到另一块纸面，和铅笔的换节飞行同起同落，直接落在推近的取景上。
     // 按推近只走 AHA.moveDur 秒时，E02 v4 进第 5 节 1.3 秒平移约 2500px，机器 0.4 秒就出画，之后对着空纸等笔飞到 1.6 秒（审片）
-    const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
+    // 笔这句在换节飞（换节、回看之后、回看时退场后飞回来）就和它同起同落：认笔轨迹上的标记，判断只留在排笔那一处
+    const fly = penTrack.find((m) => m.chapter && m.phrase === pi) ?? ((p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) { pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc, focusIds); newChapter.add(camera[camera.length - 1]); }
     else {
       const t0 = Math.max(Math.min(cue - AHA.lead, first.t0) - AHA.moveDur, holdUntil, prevDraw);
@@ -806,7 +816,8 @@ phrases.forEach((p, pi) => {
     // 顿悟后的第一句例外：要从推近的取景拉回来，第一笔可能远在画外（实测划 ×4 时还在画面外），所以第一笔前就要拉远到位
     // 换节：镜头和铅笔的飞行同起同落（见排程里的 flight）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
-    const fly = (p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && (m.phrase === pi || Math.abs(m.t1 - first.t0) < 0.02));
+    // 笔这句在换节飞（换节、回看之后、回看时退场后飞回来）就和它同起同落：认笔轨迹上的标记，判断只留在排笔那一处
+    const fly = penTrack.find((m) => m.chapter && m.phrase === pi) ?? ((p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
     else if (tc.overview) {
       // 全景：连着几句都是 overview 时只走一次——从第一句开头起，一直在动、不在中途停，到最后一句说完时拉到整张纸。

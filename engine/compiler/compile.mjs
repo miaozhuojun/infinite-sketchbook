@@ -707,7 +707,8 @@ function schedule(boost) {
     } else release = 0;
     T = nextT;
   });
-  return { strokes, penTrack, effects, stickers, audioClips, report, penFree, penPos };
+  // 回看时退了场、之后再没动笔（回顾一路讲到片尾）：笔已经停在整段每一镜的画外，片尾不用再离场（awayAt 记它什么时候到的）
+  return { strokes, penTrack, effects, stickers, audioClips, report, penFree, penPos, awayAt: penAway && awayUntil > 0 ? awayUntil : null };
 }
 // 写字要跟着旁白：文字类动作（文字、带标签的量表）必须在本句说完前起笔，且书写时间至少一半和本句旁白重叠
 // （审片发现「门槛 5」「7」都是旁白说完后才写）。不满足时先给该动作提速重排（不插静音），提到上限仍不行再报给分镜。
@@ -731,6 +732,7 @@ for (let it = 0; it < 8 && AUTOFIX; it++) {
 for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`), console.log(`  提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`);
 const { strokes, penTrack, effects, stickers, audioClips, report } = sched;
 let { penFree, penPos } = sched;
+const awayAt = sched.awayAt;
 const problems = [...layoutProblems], advice = [...layoutAdvice], flag = flagTo(problems, advice);
 // 写出来的字，旁白要在同一句里说到：写在别的句子里、要过一秒多才说到的，就是音画不同步（用户看 E02 v5「开头有点音画不同步」：
 // 「上一集说好了……」时先写了「规则」、还划掉了，旁白下一句「它不背规则」才说到）。有意先写的（比如先抛个词再解释），动作上写 ahead: true
@@ -926,9 +928,12 @@ const exitTo = (() => {
   for (let k = 0; k < 6 && later.some((cam) => { const [x, y] = S(w, cam); return x > -reach && x < TGT.w + reach && y > -reach && y < TGT.h + reach; }); k++) w = [penPos[0] + (w[0] - penPos[0]) * 1.5, penPos[1] + (w[1] - penPos[1]) * 1.5];
   return w;
 })();
-const exitDur = moveDur(Math.hypot(exitTo[0] - penPos[0], exitTo[1] - penPos[1]), 0.5, camAt(penFree).z);
-penTrack.push({ kind: 'move', t0: penFree, t1: penFree + exitDur, from: penPos, to: exitTo });
-penTrack.push({ kind: 'rest', t0: penFree + exitDur, t1: end + 1, at: exitTo });
+if (awayAt != null) penTrack.push({ kind: 'rest', t0: awayAt, t1: end + 1, at: penPos }); // 已经在画外，停到片尾
+else {
+  const exitDur = moveDur(Math.hypot(exitTo[0] - penPos[0], exitTo[1] - penPos[1]), 0.5, camAt(penFree).z);
+  penTrack.push({ kind: 'move', t0: penFree, t1: penFree + exitDur, from: penPos, to: exitTo });
+  penTrack.push({ kind: 'rest', t0: penFree + exitDur, t1: end + 1, at: exitTo });
+}
 
 // ---------- 自检（可失败） ----------
 const downs = penTrack.filter((s) => s.kind === 'down').sort((a, b) => a.t0 - b.t0);

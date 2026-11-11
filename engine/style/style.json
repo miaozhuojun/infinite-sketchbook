@@ -9,7 +9,7 @@
   "type.scale": "advice", "type.minCjk": "advice", "type.minScreen": "advice", "layout.textGap": "advice", "layout.shapeGap": "advice",
   "camera.ahaPush": "advice", "camera.ahaNoZoomOut": "advice", "camera.ahaCentered": "advice", "framing.shapeCut": "advice",
   "sync.trail": "advice", "sync.lag": "advice", "sync.silent": "advice", "pace.pause": "advice",
-  "pencil.park": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
+  "pencil.park": "advice", "camera.idle": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
   "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
   "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice", "script.retrace": "advice"
  },
@@ -88,7 +88,7 @@
   "overviewMaxSec": null, "overviewNote": "片尾全景（camera=overview）从近景拉到整张纸最多走多少秒，落在这段时间里最后一句说完的地方，之后停在整张纸上；null＝一直拉到最后一句说完",
   "minCameraGap": 1.2,
   "easeAccel": 0.35, "easeNote": "0.7.0：镜头移动的缓动，加速段占 easeAccel（0.5 是原来对称的二次缓动）；0.35 起步快、刹车长，像人推镜头。峰值速度和对称时一样，都是平均速度的 2 倍",
-  "chapterMoveMin": 1.8, "chapterMoveNote": "换节时镜头沿纸面移过去至少这么久（秒），前一句太短时让第一笔晚一点落；审片 E01 v1：一次换节只用 1.05 秒，像甩镜头"
+  "takeoffEarly": 0.3, "maxIdleAfterMove": 2.5, "idleNote": "换节起飞不早于上一句说完前 takeoffEarly 秒（原来笔一空就飞，句尾对着空纸；审片 E05 v1 五处、205 秒空纸 7 秒）。换取景到位后、下一笔之前旁白讲了超过 maxIdleAfterMove 秒，铅笔检查报「镜头到位后不对着空纸讲」（camera.idle，建议级）", "chapterMoveMin": 1.8, "chapterMoveNote": "换节时镜头沿纸面移过去至少这么久（秒），前一句太短时让第一笔晚一点落；审片 E01 v1：一次换节只用 1.05 秒，像甩镜头"
  },
 
  "pencil": {

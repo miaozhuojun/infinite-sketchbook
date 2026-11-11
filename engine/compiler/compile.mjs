@@ -456,7 +456,7 @@ const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l &
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
   const strokes = [], penTrack = [], effects = [], audioClips = [], report = { phrases: [], actions: [] };
-  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
+  let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
     const clipIn = p.cutIn, clipOut = p.cutOut;
@@ -493,7 +493,7 @@ function schedule(boost) {
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
       if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered[0]) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
-        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z];
+        if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z]; penAway = true; }
       }
       // 全片第一笔：片子一开头笔就在纸上落笔处，不先从画外飞进来（审片 E01 v9：飞进来要 0.76 秒，开场钩子的灯晚亮）
       const opening = penPos === OFF && !strokes.length && cue - (a.lead ?? PEN.cueLead) < 1;
@@ -511,17 +511,22 @@ function schedule(boost) {
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
       const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === ordered.find((x) => x.type !== 'off' && x.type !== 'glow');
-      // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔
-      const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0) : 0;
+      // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔。
+      // 也不早于上一句说完（最多提前 motion.takeoffEarly 秒）：原来笔一空就起飞，上一句最后一笔落在句中时，句尾还在讲、镜头已经飞到下一节，
+      // 观众对着空纸听完上一句（审片 E05 v1：五处提前离场，205 秒那处空纸 7 秒；E04 复盘同一类）
+      const prevEnd = pi > 0 ? report.phrases[pi - 1].audioEnd - (M.takeoffEarly ?? 0.3) : 0;
+      const takeoff = flight ? Math.max(penFree, release ? release - M.cameraMove[0] - M.cameraMove[1] : 0, prevEnd) : 0;
       // 飞得远时按距离放慢：屏幕上不超过 flightSpeed px/s（审片 v8：回顾第一次回看 2.6 秒平移约 6500px，是普通换节的 3 倍快）
       // 距离取笔和镜头里飞得远的那个：镜头是在两个取景中心之间飞，常比笔飞得远（审片 v9：进尾卡那次镜头平均 1350–1455px/s，超过上限）
       const camFar = targetCam[pi - 1] && targetCam[pi] ? Math.hypot(targetCam[pi].x - targetCam[pi - 1].x, targetCam[pi].y - targetCam[pi - 1].y) : 0;
       const flyDur = Math.max(M.chapterMoveMin ?? 0, (Math.max(dist(fromPos, st), camFar) * z) / (M.flightSpeed ?? V_MOVE));
-      if (flight) t = Math.max(t, takeoff + flyDur);
+      // 不早于 takeoff 起飞：飞行时长取镜头飞行和笔自己移过去里长的那个（只按 flyDur 算时，笔移得更久就会提前起飞，绕过句末约束）
+      if (flight) t = Math.max(t, takeoff + Math.max(flyDur, travel));
       // 起飞后离落笔还早（提示词在句尾）：按正常时长飞到，到了先停着等，不把整句都拉成一次慢吞吞的飞行（审片 v10：回顾第一站飞了 6.3 秒）
       const slack = flight ? t - takeoff - Math.max(flyDur, travel) : 0;
       // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
-      const pickRest = (from, freeAt, views, allowOff = true) => {
+      // until/goal：停到什么时候、停完去哪（默认停到这一笔落笔、去落笔处；等上一句说完再起飞时停到起飞、不用回来）
+      const pickRest = (from, freeAt, views, allowOff = true, until = t, goal = st) => {
         const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
         const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
@@ -544,29 +549,42 @@ function schedule(boost) {
         const around = (o) => [[0, 0], [1, 1], [1.4, 0], [1, -0.7], [0, 1.3], [-0.8, 1.1], [2, 2], [2.4, 0], [0, 2.4], [-1.6, 2], [2, -1.2]].map(([dx, dy]) => [o[0] + (dx * PK.dist) / z, o[1] + (dy * PK.dist) / z]);
         // 再加一张覆盖整个取景框的粗网格：内容密的地方（16x9 左边一列输入、声波、权重），这两处四周笔身朝右下都会压到字，
         // 只在附近找就只能挑「压得最少」的；有时间的话应该去空白处等
-        const grid = [];
+        const grid = [], gc = views.at(-1) ?? cam; // 网格铺在最后一个取景上（普通停笔、换节落地都是这一句的取景；等起飞时是上一句的）
         for (let gx = 0; gx <= 6; gx++) for (let gy = 0; gy <= 4; gy++) {
           const sx = fr.l + 60 + ((fr.r - 260 - fr.l - 60) * gx) / 6, sy = fr.t + 60 + ((fr.b - 260 - fr.t - 60) * gy) / 4;
-          grid.push([cam.x + (sx - VIEW.cx) / cam.z, cam.y + (sy - VIEW.cy) / cam.z]);
+          grid.push([gc.x + (sx - VIEW.cx) / gc.z, gc.y + (sy - VIEW.cy) / gc.z]);
         }
-        const cands = [...around(from), ...around(st), ...grid].filter(inNext).map((q) => ({ q, c: cost(q) + dist(q, from) / 400 }));
+        const cands = [...around(from), ...(goal ? around(goal) : []), ...grid].filter(inNext).map((q) => ({ q, c: cost(q) + dist(q, from) / 400 }));
         const off = allowOff ? offRight([targetCam[pi - 1], targetCam[pi], focusCam[pi - 1]], from[1]) : null;
         if (off) cands.push({ q: off, c: 60, off: true });
         // 时间够不够：过去、至少停 0.2 秒、再回到下一笔起点
-        const fits = ({ q }) => freeAt + moveDur(dist(from, q), 0.12, z) + 0.2 <= t - moveDur(dist(q, st), 0.12, z);
+        const fits = ({ q }) => freeAt + moveDur(dist(from, q), 0.12, z) + 0.2 <= until - (goal ? moveDur(dist(q, goal), 0.12, z) : 0);
         const best = cands.filter(fits).sort((x, y) => x.c - y.c)[0];
         return best;
       };
+      // 换节要等上一句说完才起飞（见 takeoff）：等够 minRest 秒就先退到不压东西的地方停着，从那里起飞（原来手一空就飞，不用等）。
+      // 只在笔上一句刚写过、还在原处时停：上一句是不画的回看时笔已被当成在画外（penAway），上一句不画时取景也还没到那一镜
+      let flyFrom = fromPos;
+      const flyT0 = flight ? takeoff : 0;
+      if (flight && penPhrase === pi - 1 && !penAway && targetCam[pi - 1] && flyT0 - penFree >= PK.minRest) {
+        const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1]].filter(Boolean), false, flyT0, null);
+        if (best && dist(best.q, penPos) > 2) {
+          const go = moveDur(dist(penPos, best.q), 0.12, z);
+          penTrack.push({ kind: 'move', t0: penFree, t1: penFree + go, from: penPos, to: best.q });
+          penTrack.push({ kind: 'rest', t0: penFree + go, t1: flyT0, at: best.q });
+          flyFrom = best.q;
+        }
+      }
       if (flight && slack > 1) {
         // 飞到新纸面上先找空白处停着（审片 v11：落在要圈的「写不完」上等了 3 秒，笔身压着「不完」），快到提示词再挪到落笔处
         const best = pickRest(st, takeoff + flyDur, [cam], false);
         const land = best ? best.q : st, back = best ? moveDur(dist(land, st), 0.12, z) : 0;
-        penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: fromPos, to: land, chapter: true, phrase: pi });
+        penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: flyFrom, to: land, chapter: true, phrase: pi });
         penTrack.push({ kind: 'rest', t0: takeoff + flyDur, t1: t - back, at: land });
         if (back > 0.01) penTrack.push({ kind: 'move', t0: t - back, t1: t, from: land, to: st });
       } else if (penPos === OFF || wait - travel < PK.minRest || flight) {
         if (penPos !== OFF && t - travel > penFree && !flight) penTrack.push({ kind: 'rest', t0: penFree, t1: t - travel, at: penPos });
-        penTrack.push({ kind: 'move', t0: flight ? Math.min(t - travel, takeoff) : t - travel, t1: t, from: fromPos, to: st, ...(flight ? { chapter: true, phrase: pi } : {}) });
+        penTrack.push({ kind: 'move', t0: flight ? flyT0 : t - travel, t1: t, from: flyFrom, to: st, ...(flight ? { chapter: true, phrase: pi } : {}) });
       } else {
         const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1], cam].filter(Boolean));
         if (!best) {
@@ -594,7 +612,7 @@ function schedule(boost) {
         penTrack.push({ kind: 'down', t0: t, t1: t + dur, stroke: idx });
         t += dur;
         penPos = [en.x, en.y];
-        penPhrase = pi;
+        penPhrase = pi; penAway = false;
       });
       penFree = t;
       report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(start), end: r2(t), lag: r2(start - cue), pen: true, audioStart: r2(audioStart), audioEnd: r2(audioEnd), speed: r2(speed) });

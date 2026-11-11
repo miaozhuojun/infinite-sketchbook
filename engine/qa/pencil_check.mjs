@@ -5,6 +5,7 @@
 //   4. 笔身不出画：笔尖在画面里时，整支铅笔都要在画布内（审片发现方版铅笔被右边缘切掉）；从画外飞入、飞出画外的那两段移动不算
 //   5. 顿悟时镜头不拉远：role=aha 的句子说完后再停 aha.holdAfter 秒之前，镜头只能推近或保持（审片发现顿悟时反而拉远）
 //   5b. 镜头不甩：每次镜头移动的屏幕平均平移速度不超过 motion.flightSpeed（留 15%）
+//   5c. 镜头到位后不对着空纸讲：换取景到位后、下一笔（或发光、下一次镜头移动）之前，旁白在讲的时间不超过 motion.maxIdleAfterMove 秒（E05 v1：空纸 7 秒）
 // 笔身、影子、字幕框的几何和编译器的避让共用 src/timeline.ts 里的同一份定义。
 //   6. 停笔不压正在讲的东西：笔停够 0.5 秒时，笔身不压已写出的文字、刚画完的元素，推近镜头里还有焦点元素
 //   7. 写字时笔身不长时间压住别的字：写字、抬笔移动时，笔身连续压住别的元素已写出的文字不超过 pencil.maxCoverSec 秒，
@@ -13,7 +14,7 @@
 //   8. 片尾不带笔：最后一帧整支笔都在画外（审片 v9：16x9 笔扫过算式和灯后停在右缘，终帧带着铅笔）
 // 用法：node qa/pencil_check.mjs build/<id>.timeline.json
 import fs from 'node:fs';
-import { pencilPose, cameraAt, pencilBodyPts, pencilFootprint, subtitleBox, inBox, isFlight, SUB_MARGIN } from '../src/timeline.ts';
+import { pencilPose, cameraAt, pencilBodyPts, pencilFootprint, subtitleBox, inBox, isFlight, idleAfterCamera, SUB_MARGIN } from '../src/timeline.ts';
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];
@@ -110,6 +111,15 @@ if (vMax) for (const m of tl.camera ?? []) {
   if (v > vMax * 1.15) fast.push(`${m.t0.toFixed(2)}–${m.t1.toFixed(2)}s 平均 ${v.toFixed(0)}px/s${m.focus ? '（推近）' : ''}`);
 }
 check('镜头不甩', !fast.length, fast.length ? `${fast.length} 次镜头移动太快（上限 ${vMax}px/s）：` + fast.slice(0, 5).join('、') : vMax ? `每次镜头移动平均平移不超过 ${vMax}px/s` : '风格里没写 flightSpeed，不查', 'camera.flightSpeed');
+
+// 5c. 镜头到位后不对着空纸讲（判定在 src/timeline.ts 的 idleAfterCamera，自测也用它挑注入点）：换取景（不算推近、回看、全景长镜头）到位以后，
+//     到下一笔、发光或下一次镜头移动之前，旁白在讲的时间超过 motion.maxIdleAfterMove 秒。
+//     审片 E05 v1：换节镜头在上一句说完前就飞走，五处提前离场，205 秒那处对着空纸讲了 7 秒（E04 复盘同一类，第二次出现做成检查）
+const maxIdle = tl.style?.motion?.maxIdleAfterMove ?? 2.5;
+const idle = idleAfterCamera(tl).filter((x) => x.idle > maxIdle);
+const sayAt = (t) => (tl.report?.phrases ?? []).findLast((p) => p.at <= t + 1e-6)?.text ?? '';
+check('镜头到位后不对着空纸讲', !idle.length, idle.length ? `${idle.length} 处镜头到位后旁白讲了很久才有新笔画（上限 ${maxIdle}s）：` + idle.slice(0, 6).map((x) => `${x.arrive.toFixed(2)}s 到位、${x.next.toFixed(2)}s 才动，讲了 ${x.idle.toFixed(1)}s（「${sayAt(x.arrive).slice(0, 12)}」）`).join('；') + '。把这句的第一个动作提到更早的词上，或这一句先画点什么' : `每次换取景到位后 ${maxIdle}s 旁白内就有新笔画`, 'camera.idle');
+
 
 // 6. 停笔不压正在讲的东西：凡是停够 0.5 秒（写字、笔画之间的移动、等下一个词的短停都不算），
 //    笔身不能压在已经写出来的文字上、刚画完的那个元素上，推近镜头里还有焦点元素

@@ -500,6 +500,22 @@ function schedule(boost) {
     const toTL = (srcT) => T + (srcT - clipIn);
     audioClips.push({ phrase: p.text, at: r2(T), srcIn: clipIn, srcOut: clipOut });
     const audioStart = T, audioEnd = T + (clipOut - clipIn), phraseStartFree = penFree;
+    // 回看（片尾回顾）：这句镜头飞回前面某一节，铅笔不写。原来笔就停在最后写字的地方，镜头一飞，它在屏幕上被拖着扫过字幕区和画面边
+    // （E06 试编：回顾第一句镜头往右上飞、最后一句飞回来，笔尖各贴着字幕和抖音按钮列过去一次）。
+    // 改成：笔停的地方在上一镜或这一镜里看得见，就在镜头起飞时先退到两镜的右边外面；之后第一句落笔照「回看之后」从画外飞进来
+    if (p.revisit?.length && penPos !== OFF) {
+      const cams = [targetCam[pi - 1], targetCam[pi]].filter(Boolean);
+      const seen = (c) => { const sx = (penPos[0] - c.x) * c.z + VIEW.cx, sy = (penPos[1] - c.y) * c.z + VIEW.cy; return sx > -60 && sx < TGT.w + 60 && sy > -60 && sy < TGT.h + 60; };
+      // 退到的点：两镜的右边外面，高度取这一镜的中心（镜头上下飞时笔跟着往同一个方向走，不被拖着竖穿字幕区）
+      const off = cams.some(seen) ? offRight(cams, cams.at(-1).y) : null;
+      if (off) {
+        const t0 = Math.max(penFree, T), z = Math.max(...cams.map((c) => c.z));
+        const d = moveDur(dist(penPos, off), 0.12, z);
+        if (t0 > penFree + 1e-6) penTrack.push({ kind: 'rest', t0: penFree, t1: t0, at: penPos });
+        penTrack.push({ kind: 'move', t0, t1: t0 + d, from: penPos, to: off });
+        penPos = off; penFree = t0 + d; penAway = true;
+      }
+    }
     // 一支笔按提示词在旁白里出现的先后来写（同一个词上的按分镜里的顺序）：分镜里排反了，后说到的先写，先说到的要等它写完
     // （E02 v5「就把权重，像拧旋钮一样」把旋钮排在「权重」标签前面，标签落后 3.3 秒）
     const cueAt = (a) => fullText.indexOf(strip(a.at), p.i0);
@@ -535,7 +551,9 @@ function schedule(boost) {
       const first = new svgPathProperties(ss[0].d).getPointAtLength(0);
       // 回看之后：镜头停在前面某一节，铅笔还留在最后写字的地方（多半在这一镜画外）。按原处起飞，镜头和笔从不同的地方出发，
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
-      if (penPos !== OFF && pi > 0 && phrases[pi - 1].revisit?.length && a === ordered.find((x) => !PENLESS.has(x.type))) {
+      // 回看时退到画外的笔（penAway）：回看之后不管隔了几句不画的，第一笔都照这条从这一镜右上方画外飞进来
+      const backFromAway = pi > 0 && (phrases[pi - 1].revisit?.length || penAway);
+      if (penPos !== OFF && backFromAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + 1000 / rc.z, rc.y - 350 / rc.z]; penAway = true; }
       }
@@ -554,7 +572,7 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
-      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === ordered.find((x) => !PENLESS.has(x.type));
+      const flight = penPos !== OFF && (p.chapter || backFromAway) && a === ordered.find((x) => !PENLESS.has(x.type));
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔。
       // 也不早于上一句说完（最多提前 motion.takeoffEarly 秒）：原来笔一空就起飞，上一句最后一笔落在句中时，句尾还在讲、镜头已经飞到下一节，
       // 观众对着空纸听完上一句（审片 E05 v1：五处提前离场，205 秒那处空纸 7 秒；E04 复盘同一类）

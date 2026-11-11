@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getStroke } from 'perfect-freehand';
+import { STICKER, stickerCard, stickerOutline } from '../src/timeline.ts';
 
 const args = process.argv.slice(2);
 const tlPath = args[0], opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
@@ -36,11 +37,14 @@ const box = (s) => {
 const union = (bs) => bs.reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
 const hit = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 const strokes = tl.strokes.filter((s) => s.pts?.length).map((s) => ({ ...s, box: box(s) }));
+// 贴图的外轮廓也算进每节插图的范围（不切半截）
+const stickerBoxes = (tl.stickers ?? []).map((k) => { const o = stickerOutline(k), xs = o.map((q) => q[0]), ys = o.map((q) => q[1]); return { t1: k.t1, box: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } }; });
 
 function svg(b, tEnd, title) {
   const x = b.x0 - PAD, y = b.y0 - PAD, w = b.x1 - b.x0 + 2 * PAD, h = b.y1 - b.y0 + 2 * PAD, g = st.paper.gridSize;
   const shown = strokes.filter((s) => s.t1 <= tEnd + 1e-6 && hit(s.box, { x0: x, y0: y, x1: x + w, y1: y + h }));
   const fx = (tl.effects ?? []).filter((e) => e.t1 <= tEnd + 1e-6 && (e.t2 === undefined || e.t2 > tEnd));
+  const sk = (tl.stickers ?? []).filter((k) => k.t1 <= tEnd + 1e-6); // 贴图（被依赖那一集的封面），按落定的样子画
   // 同一种墨色的笔画合成一层再整体上透明度（和成片一样，交叉处不叠黑）；墨色在最下
   const layers = new Map([[st.palette.ink, []]]);
   for (const s of shown) { if (!layers.has(s.color)) layers.set(s.color, []); layers.get(s.color).push(s); }
@@ -56,6 +60,10 @@ ${fx.map((e) => `<circle cx="${e.cx}" cy="${e.cy}" r="${e.r}" fill="url(#g-${e.i
     const r = (deg * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r), a = e.r * 0.5, bb = e.r * 0.75;
     return `<line x1="${f2(e.cx + a * c)}" y1="${f2(e.cy + a * sn)}" x2="${f2(e.cx + bb * c)}" y2="${f2(e.cy + bb * sn)}" stroke="${e.color}" stroke-width="${f2(e.r * 0.07)}" stroke-linecap="round" opacity="0.9"/>`;
   }).join('')).join('\n')}
+${sk.map((k) => { const { W, H } = stickerCard(k), b = STICKER.border * k.w, tw = STICKER.tapeW * k.w, th = STICKER.tapeH * k.w;
+    const tape = (x, ang) => `<rect x="${f2(x - tw / 2)}" y="${f2(-H / 2 - th / 2)}" width="${f2(tw)}" height="${f2(th)}" fill="${k.tape}" opacity="0.78" transform="rotate(${ang} ${f2(x)} ${f2(-H / 2)})"/>`;
+    return `<g transform="translate(${f2(k.cx)} ${f2(k.cy)}) rotate(${k.tilt})"><rect x="${f2(-W / 2)}" y="${f2(-H / 2)}" width="${f2(W)}" height="${f2(H)}" rx="3" fill="${k.card}" stroke="${k.shade}" stroke-opacity="0.15"/><image href="${k.href}" x="${f2(-W / 2 + b)}" y="${f2(-H / 2 + b)}" width="${f2(k.w)}" height="${f2(k.h)}" preserveAspectRatio="xMidYMid slice"/>${tape(-W / 2 + tw * 0.3, -32)}${tape(W / 2 - tw * 0.3, 32)}</g>`;
+  }).join('\n')}
 ${[...layers].filter(([, l]) => l.length).map(([color, l]) => `<g fill="${color}" opacity="${st.ink.opacity}">\n${l.map(inkPath).join('\n')}\n</g>`).join('\n')}
 </svg>\n`;
 }
@@ -69,16 +77,16 @@ chapters.forEach((c, i) => {
   const file = `${String(i + 1).padStart(2, '0')}.svg`;
   // 范围再放一圈：这一节的范围切到了前面画的东西（比如上一节写的标签），就把它整段框进来，不切半截
   const glow = (tl.effects ?? []).filter((e) => e.t1 <= tEnd + 1e-6 && (e.t2 === undefined || e.t2 > tEnd)).map((e) => ({ x0: e.cx - e.r, y0: e.cy - e.r, x1: e.cx + e.r, y1: e.cy + e.r }));
-  let b = union(mine.map((s) => s.box));
+  let b = union([...mine.map((s) => s.box), ...stickerBoxes.filter((k) => k.t1 > c.t && k.t1 <= tEnd + 1e-6).map((k) => k.box)]);
   for (let k = 0; k < 10; k++) { // 一直放到不再切到任何笔画、光晕为止
     const pad = { x0: b.x0 - PAD, y0: b.y0 - PAD, x1: b.x1 + PAD, y1: b.y1 + PAD };
-    const nb = union([b, ...strokes.filter((s) => s.t1 <= tEnd + 1e-6 && hit(s.box, pad)).map((s) => s.box), ...glow.filter((g) => hit(g, pad))]);
+    const nb = union([b, ...strokes.filter((s) => s.t1 <= tEnd + 1e-6 && hit(s.box, pad)).map((s) => s.box), ...glow.filter((g) => hit(g, pad)), ...stickerBoxes.filter((k) => k.t1 <= tEnd + 1e-6 && hit(k.box, pad)).map((k) => k.box)]);
     if (nb.x0 === b.x0 && nb.y0 === b.y0 && nb.x1 === b.x1 && nb.y1 === b.y1) break;
     b = nb;
   }
   fs.writeFileSync(path.join(outDir, file), svg(b, tEnd, c.title));
   index.push({ n: i + 1, title: c.title, file, t0: c.t, t1: tEnd });
 });
-fs.writeFileSync(path.join(outDir, 'all.svg'), svg(union(strokes.map((s) => s.box)), tl.duration, tl.id));
+fs.writeFileSync(path.join(outDir, 'all.svg'), svg(union([...strokes.map((s) => s.box), ...stickerBoxes.map((k) => k.box)]), tl.duration, tl.id));
 fs.writeFileSync(path.join(outDir, 'index.json'), JSON.stringify({ timeline: path.basename(tlPath), figures: index, all: 'all.svg' }, null, 1));
 console.log(`讲义插图：${index.length} 节 + 全集纸面 → ${outDir}`);

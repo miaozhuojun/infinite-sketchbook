@@ -128,6 +128,7 @@
   }
  },
 
+ "sticker": { "note": "贴图（sticker，被依赖那一集的封面）：印出来的小卡片。card 白边颜色，tape 胶带颜色，drop 落下放好用几秒", "card": "#fbf8f1", "tape": "#e6d7ad", "drop": 0.5 },
  "audio": {
   "voiceLufs": -16,
   "truePeak": -1.5,

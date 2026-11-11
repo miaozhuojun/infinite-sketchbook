@@ -19,6 +19,7 @@ export type EndCard = { t0: number; t1: number; fade: number; title: string; ref
 export type Timeline = {
   id: string; canvas: { w: number; h: number; fps: number }; fps: number; durationInFrames: number; duration: number;
   narration: string; audio?: string; strokes: Stroke[]; penTrack: PenSeg[]; effects: Effect[];
+  stickers?: Sticker[]; // 贴图（被依赖那一集的封面），分镜用了 sticker 才有
   subtitles: { text: string; lines: string[]; t0: number; t1: number; join?: boolean; joinNext?: boolean; speaker?: string; label?: string; color?: string }[]; // join/joinNext：同一句拆出的几张，换卡时不淡出淡入；speaker/label/color：对话里不是主讲说的句子（compiler/speakers.mjs）
   style: Style; platforms: string[];
   camera: CamMove[]; view: { cx: number; cy: number };
@@ -243,10 +244,10 @@ export function isFlight(tl: Timeline, m: PenSeg): boolean {
 // 有多少秒旁白在讲。超过 motion.maxIdleAfterMove 秒，观众就是对着一块空纸（或没变的画面）听讲。
 // 审片 E05 v1：五处换节镜头在上一句说完前就飞到下一节，205 秒那处对着空纸讲了 7 秒（E04 复盘也有）
 export type IdleAfterMove = { arrive: number; next: number; idle: number };
-export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effects'> & { audioClips?: { at: number; srcIn: number; srcOut: number }[] }): IdleAfterMove[] {
+export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effects' | 'stickers'> & { audioClips?: { at: number; srcIn: number; srcOut: number }[] }): IdleAfterMove[] {
   const talk = (tl.audioClips ?? []).map((c) => [c.at, c.at + c.srcOut - c.srcIn] as const);
   const said = (a: number, b: number) => talk.reduce((s, [x, y]) => s + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0);
-  const events = [...tl.strokes.map((s) => [s.t0, s.t1] as const), ...(tl.effects ?? []).map((e) => [e.t0, e.t1] as const)];
+  const events = [...tl.strokes.map((s) => [s.t0, s.t1] as const), ...(tl.effects ?? []).map((e) => [e.t0, e.t1] as const), ...(tl.stickers ?? []).map((k) => [k.t0, k.t1] as const)];
   const out: IdleAfterMove[] = [];
   tl.camera.forEach((m, i) => {
     const to = m.to as Cam & { revisit?: boolean; overview?: boolean };
@@ -258,4 +259,27 @@ export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effec
     out.push({ arrive, next, idle: said(arrive, next) });
   });
   return out;
+}
+
+// ---------- 贴图（sticker）：被依赖那一集的封面贴在纸面上（每集能单独看，用户 2026-11-11） ----------
+// 一张印出来的小卡片：图外留一圈白边，略歪，上边两角各一条胶带；0.5 秒从上方落下放好（不是淡入）。铅笔不画它。
+// 编译器的版面检查和取景、安全区检查、水印避让都用这里的外轮廓，把它当一块图形。
+export type Sticker = { id: string; href: string; cx: number; cy: number; w: number; h: number; tilt: number; t0: number; t1: number; card: string; tape: string; shade: string };
+export const STICKER = { border: 0.035, tapeW: 0.24, tapeH: 0.07, tapeOut: 0.045, rise: 34, scale0: 1.05, turn: 2.5, shadow: 0.2 };
+type StickerGeo = Pick<Sticker, 'cx' | 'cy' | 'w' | 'h' | 'tilt'>;
+// 卡片（含白边）的宽高
+export const stickerCard = (s: StickerGeo) => ({ W: s.w * (1 + 2 * STICKER.border), H: s.h + 2 * STICKER.border * s.w });
+// 外轮廓（世界坐标，闭合）：卡片四角，上边再加胶带伸出去的那一截，按 tilt（度）绕中心转
+export function stickerOutline(s: StickerGeo): [number, number][] {
+  const { W, H } = stickerCard(s), up = STICKER.tapeOut * s.w, r = (s.tilt * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r);
+  const loc: [number, number][] = [[-W / 2, -H / 2 - up], [W / 2, -H / 2 - up], [W / 2, H / 2], [-W / 2, H / 2], [-W / 2, -H / 2 - up]];
+  return loc.map(([x, y]) => [s.cx + x * c - y * sn, s.cy + x * sn + y * c]);
+}
+// 当成一笔墨迹交给按笔画查的检查（安全区、水印避让、镜头到位后的动静）：外轮廓每条边上取几个点
+export function stickerInk(s: Sticker): Stroke {
+  const o = stickerOutline(s), pts: Pt[] = [];
+  for (let i = 0; i + 1 < o.length; i++) for (let k = 0; k < 8; k++) pts.push([o[i][0] + ((o[i + 1][0] - o[i][0]) * k) / 8, o[i][1] + ((o[i + 1][1] - o[i][1]) * k) / 8, 0.5]);
+  pts.push([...o[0], 0.5]);
+  const d = 'M' + o.map(([x, y]) => `${Math.round(x * 100) / 100} ${Math.round(y * 100) / 100}`).join(' L');
+  return { id: `${s.id}#sticker`, action: s.id, kind: 'shape', color: s.card, width: 0, d, len: 0, t0: s.t0, t1: s.t1, pts };
 }

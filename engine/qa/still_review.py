@@ -108,6 +108,9 @@ L = [f"# 静帧审稿材料：{m['id']}", "",
 for k, name in [("question", "回答的问题"), ("audience", "面向"), ("fromPrev", "接着上一集")]:
     if b.get(k):
         L.append(f"- {name}：{b[k]}")
+# 前向依赖（每集能单独看）：片中贴了那一集的封面、用一句话复述。审稿时看这句复述够不够没看过那一集的人往下听
+for d in b.get("dependsOn") or []:
+    L.append(f"- 依赖 {d.get('ep')}（片中贴它的封面）：{d.get('what')}；片中复述：「{d.get('recap')}」")
 L += [f"- 学习目标 {i + 1}：{o}" for i, o in enumerate(b.get("objectives", []))]
 if b.get("next"):
     L.append(f"- 留给下一集：{b['next']}")

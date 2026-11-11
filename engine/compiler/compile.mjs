@@ -6,7 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { svgPathProperties } from 'svg-path-properties';
-import { loadLibrary } from '../library/index.mjs';
+import { loadLibrary, PENLESS } from '../library/index.mjs';
+import { loadSticker } from './stickers.mjs';
+import { stickerOutline } from '../src/timeline.ts';
 import { makeKit, samplePts, offsetPath, r2, dist } from '../library/kit.mjs';
 import { validateBeats, loadStyle, gateLevel, strip, breakLines, styleSubset } from './validate.mjs';
 
@@ -131,8 +133,15 @@ const VIEW = TGT.view;
 const geo = new Map();
 const allActions = phrases.flatMap((p) => p.actions);
 const actionsById = new Map(allActions.map((a) => [a.id, a]));
+// 贴图：图的宽高按图的比例（w 是图宽，不含白边）
+const stickerOf = (a) => { const im = loadSticker(a.src); return { cx: a.cx, cy: a.cy, w: a.w, h: (a.w * im.h) / im.w, tilt: a.tilt ?? -3, href: im.href }; };
 const buildOne = (a) => {
   if (a.type === 'glow' || a.type === 'off') return;
+  if (a.type === 'sticker') {
+    // 贴图不动笔，但版面检查（留空、压线、避让）和取景要把它当一块图形：外轮廓当成一笔「图形」放进 geo，排笔时跳过它
+    geo.set(a.id, [{ kind: 'shape', color: style.palette.ink, width: style.ink.penWidth, d: 'M' + stickerOutline(stickerOf(a)).map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' L') }]);
+    return;
+  }
   if (a.type === 'retrace') {
     // 回描：同一支笔沿原路径错开零点几到两个像素再描几遍（不换粗笔，不另起一块墨迹）
     const offs = style.ink.retraceOffsets.slice(0, a.passes || 2);
@@ -478,7 +487,7 @@ const offRight = (cams, y) => { const cs = cams.filter(Boolean); return cs.lengt
 const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l && f === l[1] + 1) l[1] = f; else r.push([f, f]); return r; }, []);
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
-  const strokes = [], penTrack = [], effects = [], audioClips = [], report = { phrases: [], actions: [] };
+  const strokes = [], penTrack = [], effects = [], stickers = [], audioClips = [], report = { phrases: [], actions: [] };
   let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false; // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
@@ -498,6 +507,13 @@ function schedule(boost) {
         const e = effects.find((x) => x.id === a.target);
         Object.assign(e, { t2: cue, t3: cue + 0.6 });
         report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(cue + 0.6), lag: 0, pen: false });
+        continue;
+      }
+      if (a.type === 'sticker') {
+        // 贴图：提示词那一刻开始落下，0.5 秒放好（style.sticker.drop）；铅笔不去画它
+        const SK = style.sticker ?? {}, drop = SK.drop ?? 0.5;
+        stickers.push({ id: a.id, ...stickerOf(a), t0: r2(cue), t1: r2(cue + drop), card: SK.card ?? '#fbf8f1', tape: SK.tape ?? '#e6d7ad', shade: style.palette.shade });
+        report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(cue + drop), lag: 0, pen: false });
         continue;
       }
       if (a.type === 'glow') {
@@ -533,7 +549,7 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
-      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === ordered.find((x) => x.type !== 'off' && x.type !== 'glow');
+      const flight = penPos !== OFF && (p.chapter || phrases[pi - 1]?.revisit?.length) && a === ordered.find((x) => !PENLESS.has(x.type));
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔。
       // 也不早于上一句说完（最多提前 motion.takeoffEarly 秒）：原来笔一空就起飞，上一句最后一笔落在句中时，句尾还在讲、镜头已经飞到下一节，
       // 观众对着空纸听完上一句（审片 E05 v1：五处提前离场，205 秒那处空纸 7 秒；E04 复盘同一类）
@@ -550,9 +566,10 @@ function schedule(boost) {
       // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
       // until/goal：停到什么时候、停完去哪（默认停到这一笔落笔、去落笔处；等上一句说完再起飞时停到起飞、不用回来）
       const pickRest = (from, freeAt, views, allowOff = true, until = t, goal = st) => {
-        const drawn = new Set(strokes.map((s) => s.action)), lastId = strokes.at(-1)?.action;
+        // 贴好的封面也算画过的东西，而且和文字一样要护着：笔身不压在封面上
+        const drawn = new Set([...strokes.map((s) => s.action), ...stickers.map((k) => k.id)]), lastId = strokes.at(-1)?.action, stuck = new Set(stickers.map((k) => k.id));
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
-        const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
+        const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id) || stuck.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
         const other = [...drawn].map((id) => bboxOf(geo.get(id)));
         // 铅笔随镜头缩放，所以它在世界坐标里的长度是常数（不随 z 变）
         const kk = style.pencil.scale * (Math.min(TGT.w, TGT.h) / 1080), Lw = style.pencil.length * kk, hw = style.pencil.halfWidth * kk + 8, ra = (style.pencil.base * Math.PI) / 180;
@@ -658,7 +675,7 @@ function schedule(boost) {
     } else release = 0;
     T = nextT;
   });
-  return { strokes, penTrack, effects, audioClips, report, penFree, penPos };
+  return { strokes, penTrack, effects, stickers, audioClips, report, penFree, penPos };
 }
 // 写字要跟着旁白：文字类动作（文字、带标签的量表）必须在本句说完前起笔，且书写时间至少一半和本句旁白重叠
 // （审片发现「门槛 5」「7」都是旁白说完后才写）。不满足时先给该动作提速重排（不插静音），提到上限仍不行再报给分镜。
@@ -680,7 +697,7 @@ for (let it = 0; it < 8 && AUTOFIX; it++) {
   sched = schedule(boost);
 }
 for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`), console.log(`  提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`);
-const { strokes, penTrack, effects, audioClips, report } = sched;
+const { strokes, penTrack, effects, stickers, audioClips, report } = sched;
 let { penFree, penPos } = sched;
 const problems = [...layoutProblems], advice = [...layoutAdvice], flag = flagTo(problems, advice);
 // 写出来的字，旁白要在同一句里说到：写在别的句子里、要过一秒多才说到的，就是音画不同步（用户看 E02 v5「开头有点音画不同步」：
@@ -936,7 +953,7 @@ chapters.forEach((c, i) => {
 });
 const out = {
   id: OUT_ID, target: targetName, canvas: { w: TGT.w, h: TGT.h, fps: FPS }, fps: FPS, durationInFrames: Math.ceil(end * FPS), duration: r2(end),
-  narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
+  narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, ...(stickers.length ? { stickers } : {}), camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
   subtitles, chapters, style: styleSubset(style), ...(endCard ? { endCard } : {}),
   platforms: TGT.platforms, platformUI: Object.fromEntries(TGT.platforms.map((pf) => [pf, style.platformUI[pf]])),
   report: { ...report, problems, advice, fixes },
@@ -948,7 +965,8 @@ const out = {
   const WM = style.watermark, slots = WM?.slots?.[targetName];
   const brand = fs.existsSync('brand.local.json') ? JSON.parse(fs.readFileSync('brand.local.json', 'utf8')) : null;
   if (brand?.watermark?.text && slots?.length) {
-    const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox } = await import('../src/timeline.ts');
+    const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } = await import('../src/timeline.ts');
+    const stickerInks = stickers.map(stickerInk); // 水印也不压贴图
     const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, contentMargin: WM.contentMargin, spans: [] };
     // 和安全区检查同样每 0.1 秒看一次，框再多留 4px，保证检查一定过
     const clashes = (slot, t0, t1) => {
@@ -957,7 +975,7 @@ const out = {
       if (subtitles.some((s) => s.t0 < t1 && s.t1 > t0 && boxesOverlap(box, subtitleBox(out, s.lines)))) return true;
       for (const t of watermarkSampleTimes(t0, t1)) {
         const c = cameraAt(camera, t);
-        if (strokes.some((s) => s.t0 <= t && boxesOverlap(far, strokeScreenBox(out, s, c)))) return true;
+        if ([...strokes, ...stickerInks].some((s) => s.t0 <= t && boxesOverlap(far, strokeScreenBox(out, s, c)))) return true;
       }
       return false;
     };

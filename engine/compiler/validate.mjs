@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BUILTINS, loadLibrary } from '../library/index.mjs';
 import { CJK, glyphData, makeKit } from '../library/kit.mjs';
+import { loadSticker } from './stickers.mjs';
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROJECT = path.resolve(ENGINE, '../..');
@@ -235,6 +236,11 @@ export function validateBeats(beats, style, reg) {
       cjkSize({}, A);
       for (const [keys, ov] of Object.entries(a.layout || {})) cjkSize(ov, `${A}.layout.${keys}`);
       if (a.on !== undefined && !ids.has(a.on)) E(`${A}.on`, `从属的「${a.on}」不存在或在它之后才画`);
+      // 贴图：图要在 public/stickers/ 里、读得出尺寸（编译时嵌进时间线）；宽要是正数
+      if (a.type === 'sticker') {
+        try { loadSticker(a.src); } catch (e) { E(`${A}.src`, e.message); }
+        if (!(a.w > 0)) E(`${A}.w`, '图的宽要是正数（纸面像素）');
+      }
       if (a.type === 'off') {
         const g = beats.phrases.flatMap((p) => p.actions).find((x) => x.id === a.target);
         if (g && g.type !== 'glow') E(`${A}.target`, `off 只能熄灭光晕（glow），「${a.target}」是 ${g.type}`);
@@ -257,6 +263,32 @@ export function validateBeats(beats, style, reg) {
 
   // 剧集里接着上一集：第 2 集起要写明上一集结尾答应了什么（brief.fromPrev），这一集要接住（E02 v1–v3 把 E01 说好的灯泡换成了红绿灯）
   if (beats.series?.serial && (beats.series.episode ?? 1) > 1 && !beats.brief?.fromPrev) E('brief.fromPrev', `剧集「${beats.series.serialTitle ?? beats.series.serial}」第 ${beats.series.episode} 集：写明上一集结尾答应了什么（照抄上一集 next 那几句），这一集要接住`);
+  // 前向依赖（每集能单独看，用户 2026-11-11）：一句交代不清、又是这一集前提的，写进 brief.dependsOn，
+  // 片中第一次用到的地方贴被依赖那一集的封面（sticker，ep 写那一集），同一句或前后一句用 recap 那句话复述它。
+  // 没有依赖写空数组，表示这一集单独可看；剧集第 2 集起没写，提醒一句（不拦：E02–E05 写于这条规定之前）
+  {
+    const dep = beats.brief?.dependsOn, stickers = beats.phrases.flatMap((p, pi) => (p.actions || []).filter((a) => a.type === 'sticker').map((a) => ({ a, pi })));
+    if (dep === undefined) {
+      if (beats.series?.serial && (beats.series.episode ?? 1) > 1) advice.push(`brief.dependsOn：剧集第 ${beats.series.episode} 集，写明这一集依赖前面哪一集的什么（一句交代不清的前提；片中贴那一集的封面），没有就写 []`);
+    } else if (!Array.isArray(dep)) E('brief.dependsOn', '要写成数组：[{ ep, what, recap }]，没有依赖写 []');
+    else {
+      if (dep.length > 2) advice.push(`brief.dependsOn：依赖了 ${dep.length} 条，一集最多一两条；多了说明这一集该拆，或者换个讲法`);
+      const sayOf = (pi) => strip(beats.phrases[pi]?.text ?? '');
+      dep.forEach((d, k) => {
+        const W = `brief.dependsOn[${k}]`;
+        if (!isObj(d) || typeof d.ep !== 'string' || !d.ep || typeof d.what !== 'string' || !d.what.trim() || typeof d.recap !== 'string' || !d.recap.trim()) {
+          E(W, '每条写 ep（被依赖的那一集，如 e04-xor）、what（依赖它的什么）、recap（片中复述它的那句话）'); return;
+        }
+        const own = stickers.filter((x) => x.a.ep === d.ep);
+        if (!own.length) { E(W, `片中要在第一次用到它的地方贴「${d.ep}」的封面：加一个 sticker 动作，写 ep: "${d.ep}"`); return; }
+        // 复述就在贴图的那一句或前后一句里（旁白里一字不差地有 recap 这句话，去掉标点比）
+        const pi = own[0].pi, r = strip(d.recap);
+        if (![pi - 1, pi, pi + 1].some((q) => sayOf(q).includes(r) || (sayOf(q) + sayOf(q + 1)).includes(r)))
+          E(`${W}.recap`, `「${d.recap}」不在贴封面那一句（phrases[${pi}]）或前后一句的旁白里：贴封面的同时，用这句话把它复述出来`);
+      });
+      for (const { a } of stickers) if (a.ep && !dep.some((d) => d.ep === a.ep)) E(`sticker ${a.id}.ep`, `贴了「${a.ep}」的封面，brief.dependsOn 里没写这条依赖`);
+    }
+  }
   // 叙事结构（创意自由，但完整一集必须有这些骨架）
   const rules = style.narrative[beats.kind] || { requireRoles: [], minQuiz: 0 };
   const roles = beats.phrases.map((p) => p.role).filter(Boolean);

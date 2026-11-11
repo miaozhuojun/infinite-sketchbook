@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { cameraAt } from '../src/timeline.ts';
+import { cameraAt, idleAfterCamera } from '../src/timeline.ts';
 import { PY_QA, PY_MLX } from './pyenv.mjs';
 
 const basePath = process.argv[2];
@@ -122,6 +122,22 @@ expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (t
   const m = tl.camera.filter((x) => x.t1 > x.t0).sort((a, b) => far(b) - far(a))[0];
   m.t1 = m.t0 + Math.max(0.05, far(m) / (2 * (tl.style.motion.flightSpeed ?? tl.style.motion.moveSpeed))); // 压到上限的 2 倍速（固定 0.8 秒时，演示片最远一次也才 600px，压完仍不超速）
 }, pencil, '[失败] 镜头不甩');
+// 镜头到位后对着空纸讲（camera.idle，默认建议级；私有配置可能升成 hard，所以只认点名，不认级别）：挑一次到位时没在写、之后旁白还要讲一阵的换取景，
+// 把到位以后的画面（笔画、笔的轨迹、发光、后面的镜头）整体往后推，旁白不动——就是 E05 v1 换节镜头提前飞走、对着空纸讲 7 秒的样子
+{
+  const MAXI = base.style?.motion?.maxIdleAfterMove ?? 2.5, D = MAXI + 1;
+  const talk = (a, b) => (base.audioClips ?? []).reduce((s, c) => s + Math.max(0, Math.min(b, c.at + c.srcOut - c.srcIn) - Math.max(a, c.at)), 0);
+  const cand = idleAfterCamera(base).find((x) => x.idle <= MAXI && talk(x.arrive, x.arrive + D) > MAXI + 0.3);
+  if (!cand) skip('镜头到位后画面晚了几秒才动（对着空纸讲）', '基线里没有到位后旁白还要讲几秒的换取景');
+  else expectFail('镜头到位后画面晚了几秒才动（对着空纸讲）', (tl) => {
+    // 到位那一刻起的都推后（时间线里的时刻是取整过的，第一笔常和到位同一个数，留 0.01 秒余量）；到位的那次镜头移动本身不动
+    const t = cand.arrive - 0.01, sh = (o, ...ks) => { for (const k of ks) if (o[k] !== undefined && o[k] >= t) o[k] += D; };
+    for (const s of tl.strokes) sh(s, 't0', 't1');
+    for (const m of tl.penTrack) sh(m, 't0', 't1');
+    for (const e of tl.effects ?? []) sh(e, 't0', 't1', 't2', 't3');
+    for (const m of tl.camera) if (m.t1 !== cand.arrive) sh(m, 't0', 't1');
+  }, pencil, `${cand.arrive.toFixed(2)}s 到位`);
+}
 expectFail('铅笔轨迹中间断了一截（笔在那段时间没有位置，渲染时会一帧闪出画外）', (tl) => {
   // 删掉轨迹正中的一段：审片 E02 v9 发现的笔闪，原因是轨迹有空档
   const i = Math.floor(tl.penTrack.length / 2);
@@ -610,6 +626,37 @@ expectBeats('顿悟句推不近又没声明', (b) => {
   fs.rmSync('data/_selftest.beats.json', { force: true });
   for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
 }
+// 换节起飞不早于上一句说完（排程，不是检查；这里防它退回去）：原来笔一空就起飞，上一句最后一笔落在句中时句尾对着空纸（审片 E05 v1 五处）。
+// 注入：最后一句有画的句子改成新的一节、挪到右边很远的纸面上；上一句的动作全挪到句首、写快，笔早早就空了
+if (SKIP.has('compile')) skip('换节镜头等上一句说完才起飞', '这次没改编译器和分镜校验（--skip compile）');
+else {
+  const b = structuredClone(beatsSrc); b.id = '_selftest';
+  for (const a of acts(b)) {
+    for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov);
+    delete a.layout;
+  }
+  const pi = b.phrases.findLastIndex((q, i) => i > 0 && q.actions?.length && b.phrases[i - 1].actions?.some((a) => a.type !== 'off' && a.type !== 'glow') && !b.phrases[i - 1].revisit?.length && b.phrases[i - 1].role !== 'aha' && b.phrases[i - 1].camera !== 'focus');
+  if (pi < 0) skip('换节镜头等上一句说完才起飞', '基线分镜里找不到前后两句都画东西的地方');
+  else {
+    const p = b.phrases[pi], prev = b.phrases[pi - 1];
+    p.chapter = '_换节';
+    for (const a of p.actions) for (const k of ['x', 'cx']) if (typeof a[k] === 'number') a[k] += 2400;
+    for (const a of p.actions) for (const k of ['from', 'to']) if (Array.isArray(a[k])) a[k] = [a[k][0] + 2400, a[k][1]];
+    const head = prev.text.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '').slice(0, 2);
+    for (const a of prev.actions) { a.at = head; a.speed = 3; }
+    fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+    const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT, '--no-validate'], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+    const tlp = `build/_selftest-${TGT}.timeline.json`, tl = fs.existsSync(tlp) ? JSON.parse(fs.readFileSync(tlp, 'utf8')) : null;
+    const fly = tl?.penTrack.find((m) => m.chapter && m.phrase === pi), said = tl?.report.phrases[pi - 1].audioEnd, early = tl?.style?.motion?.takeoffEarly ?? 0.3;
+    const cam = fly && tl.camera.find((m) => Math.abs(m.t1 - fly.t1) < 0.02);
+    const freed = tl?.report.phrases[pi - 1].drawEnd;
+    if (tl && freed > said - early - 0.2) skip('换节镜头等上一句说完才起飞', `注入后上一句的笔还是到句末才空（${freed}s，句末 ${said}s），测不出`);
+    else record('换节镜头等上一句说完才起飞（笔和镜头都不早于句末前 takeoffEarly 秒）', !!fly && !!cam && fly.t0 >= said - early - 0.01 && cam.t0 >= said - early - 0.01,
+      out + `\n上一句说完 ${said}s、笔 ${freed}s 就空了，笔起飞 ${fly?.t0}s，镜头起飞 ${cam?.t0}s`);
+    fs.rmSync('data/_selftest.beats.json', { force: true });
+    for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+  }
+}
 expectBeats('标签压线（关闭自动修复）', (b) => { const v = firstText(b), c = acts(b).find((a) => a.type === 'circle'); v.x = c.cx; v.y = c.cy - c.r; }, compileNoFix(TGT), /离 .* 只有/, { advice: true });
 expectBeats('两段文字压在一起（关闭自动修复，仍判错误）', (b) => {
   const t = firstText(b);
@@ -790,6 +837,24 @@ print(json.dumps(cases, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts
   record('配音逐句验收：掉嗓子、破音、硬切、语速（单元检查）', ok, (r.stdout || '') + (r.stderr || ''));
 }
 
+// ---------- 旁白检查按时刻点名到句（tts/sentence_map.py，单元检查）：一个片段里有两句时，前一句句尾的收音硬切要点名前一句，
+// 后一句句首的起音硬切点名后一句；两句都要有范围（E05 558 秒：「回到那三条规则。第二条说，听到咳嗽就算有人。」同一片段，
+// 原来按片段归句，前一句没有范围，硬切点名到「第二条说……」，自动换种子换错了句）。时间取自 E05 的真实时间线 ----------
+{
+  const r = spawnSync(PY_QA, ['-c', `
+import sys, json
+sys.path.insert(0, '../tts')
+from sentence_map import sentence_spans, sentence_at
+clips = [{'at': 557.23, 'srcIn': 495.4680, 'srcOut': 498.4255}, {'at': 560.18, 'srcIn': 498.4255, 'srcOut': 504.0780}]
+S = [{'start': 495.40, 'end': 498.403}, {'start': 498.403, 'end': 500.683}, {'start': 500.683, 'end': 504.073}]
+sp = sentence_spans(clips, S)
+end1 = [b for k, a, b in sp if k == 1][0]
+print(json.dumps({'ks': [k for k, a, b in sp], 'shou': sentence_at(end1 - 0.05, sp, -0.02), 'qi': sentence_at(end1 + 0.03, sp, 0.02),
+                  'edge': sentence_at(end1, sp, -0.02), 'mid': sentence_at(558.5, sp), 'far': sentence_at(9999, sp)}))`], { encoding: 'utf8' });
+  let o = null;
+  try { o = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch { /* 下面按漏掉记 */ }
+  record('旁白检查点名：同一片段里两句，硬切按时刻落到具体句子（单元检查）', !!o && o.ks.join() === '0,1,2' && o.shou === 1 && o.qi === 2 && o.edge === 1 && o.mid === 0 && o.far === null, (r.stdout || '') + (r.stderr || ''));
+}
 // ---------- 配音断句（tts/voice.py 的 phrasing，单元检查）：没标点却停、字拖长（E04「天黑不天黑」：没有静音，「黑」拖了 0.56 秒）都要报；
 // 逗号前、句末的字拖长是正常停顿和收尾，不报。合成的音频：每个字一段连续的浊音，标点处留静音。voice.py 顶上要 mlx，这里换成空模块 ----------
 {

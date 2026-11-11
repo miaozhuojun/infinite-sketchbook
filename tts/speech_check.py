@@ -47,16 +47,12 @@ voice = load_voice()
 x0, sr0 = mono(root / "public" / tl["narration"])
 _tts = load_model(str(Path(__file__).parent / "models/Qwen3-TTS-12Hz-1.7B-Base"))  # 只载一次，后面每句音色一致也用它（原来载两遍）
 timing0 = json.loads((root / "data" / beats["narration"]["timing"]).resolve().read_text())
-# 每句在成片旁白上的范围 = 这句配音（timing 的 sentences）切出来的所有片段，从第一段开头到最后一段结尾。
-# 片段在句间停顿中间切开，起止会伸出这句配音 0.2 秒左右，所以按重叠最多归句（只认「完全落在句内」的话一个都对不上）
+# 每句在成片旁白上的范围：这句配音（timing 的 sentences）在源配音上的起止，经过每个片段映射到成片上（sentence_map.py）。
+# 原来按「片段归句」，一个片段含两句时短的那句没有范围（E05 132 句里 18 句），按句的检查查不到它，点名也落到同一片段的另一句上
+from sentence_map import sentence_spans, sentence_at
+_spans = sentence_spans(tl["audioClips"], timing0.get("sentences", []))
 def sentence_ranges():
-    S = timing0.get("sentences", [])
-    overlap = lambda c, s: min(c["srcOut"], s["end"]) - max(c["srcIn"], s["start"])
-    owner = [max(range(len(S)), key=lambda k: overlap(c, S[k])) if S else None for c in tl["audioClips"]]
-    for k in range(len(S)):
-        cs = [c for c, o in zip(tl["audioClips"], owner) if o == k]
-        if cs:
-            yield k, min(c["at"] for c in cs), max(c["at"] + c["srcOut"] - c["srcIn"] for c in cs)
+    yield from _spans
 
 
 # 对话（engine/compiler/speakers.mjs）：一集里不止一个人说话时，和声音有关的检查按人分开查，各用各的音色配置（分镜 narration.voices）；
@@ -77,9 +73,13 @@ for sp in speakers:
 # 0b. 掉嗓子：浊音连续 60ms 以上掉到这个人最低自然音高以下（用户两次听出「学会」畸变就是这个，配音生成时已经拦一次，这里在拼好的成片旁白上再查一遍）
 # 掉嗓子、破音落在的时刻：最后归到句子，写进 <时间线>.revoice.json，流水线据此给这几句自动换种子重配一轮（不用人手动 reseed）。
 # E02 v5：配音那边拼好后查过没问题，成片旁白（48k、插了停顿、片段两头 3ms 淡入淡出）上又查出一句掉嗓子
+# 点名按时刻落到具体句子（sentence_at）：(时刻, 往哪边看)。收音硬切属于前一句（往前看），起音硬切属于后一句（往后看），其余看时刻本身
 revoice_at = []
-def phrase_at(t):
-    c = next((c for c in tl["audioClips"] if c["at"] <= t < c["at"] + c["srcOut"] - c["srcIn"]), None)
+def phrase_at(t, side=0.0):
+    k = sentence_at(t, _spans, side)
+    if k is not None:
+        return f"「{timing0['sentences'][k]['text'][:10]}」"
+    c = next((c for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), None)  # 旧的 timing 没有 sentences：报片段
     return f"「{c['phrase'][:10]}」" if c else ""
 
 
@@ -91,7 +91,7 @@ for sp in speakers:
     # 一句话里偏轻的嘎裂声在单句里算听不见、在整段里又算进去，同一处一边过一边不过（E01 v7「主」）。
     ranges = [(a, b) for k, a, b in sentence_ranges() if mine(sp, k)] or ([] if dialogue else [(0.0, len(x0) / sr0)])  # 旧的 timing 没有 sentences：整段量
     drops = [(a + s0, b + s0, f) for s0, s1 in ranges for a, b, f in pitch_drops(x0[int(s0 * sr0):int(s1 * sr0)], sr0, floor)]
-    revoice_at.extend(a for a, _, _ in drops)
+    revoice_at.extend((a, 0.0) for a, _, _ in drops)
     check("没有掉嗓子" + who(sp), not drops, f"{len(drops)} 处：" + "；".join(f"{a:.2f}–{b:.2f}s{phrase_at(a)} 低到 {f:.0f}Hz" for a, b, f in drops[:5]) + f"（下限 {floor}Hz）" if drops else f"浊音都在这个声音的最低自然音高 {floor}Hz 以上")
 
 # 0c. 语气起伏（建议，不判失败：语气是创作取舍）：在源配音上逐句量，和这个孩子真实说话比。
@@ -192,15 +192,14 @@ if any("maxBreaks" in voices[sp] for sp in speakers):
     from voice import pitch_breaks
     xs5, ssr5 = mono(root / "public" / tl["narration"])
     bk_all = pitch_breaks(xs5, ssr5)
-    near = lambda t: next((c["phrase"][:10] for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), "")
-    rng5 = list(sentence_ranges())
-    spk_at = lambda t: next((SP[k] for k, a, b in rng5 if a - 0.05 <= t <= b + 0.05), "")
+    near = lambda t: phrase_at(t)[1:-1]
+    spk_at = lambda t: SP[k] if (k := sentence_at(t, _spans)) is not None else ""
 for sp in speakers:
     if "maxBreaks" not in voices[sp]:
         continue
     bk5 = [(t, j) for t, j in bk_all if not dialogue or spk_at(t) == sp]
     if len(bk5) > voices[sp]["maxBreaks"]:
-        revoice_at.extend(t for t, _ in bk5)
+        revoice_at.extend((t, 0.0) for t, _ in bk5)
     check("没有破音" + who(sp), len(bk5) <= voices[sp]["maxBreaks"], f"{len(bk5)} 处（上限 {voices[sp]['maxBreaks']}）" + ("：" + "；".join(f"{t:.2f}s「{near(t)}」跳 {j:.0f} 半音" for t, j in bk5[:6]) if bk5 else ""))
 
 # 0i. 连贯（建议，不拦）：句与句之间音高重新起头多大、语速稳不稳、成片里句间长停顿有几处，和上一集（voice.json 的 flowBaseline）比。
@@ -355,11 +354,10 @@ if tl.get("audio"):
 #     用户听 E02 v5「1:20 有个突兀的声音」：「权重越大」的「权」2ms 里从静音跳到 -20dB，剪开头串进来的字时切在了发声处
 from voice import hard_edges, art_rate
 he = hard_edges(x0, sr0)
-revoice_at.extend(t for _, t, _ in he)
-def clip_at(t):
-    c = next((c for c in tl["audioClips"] if c["at"] <= t <= c["at"] + c["srcOut"] - c["srcIn"]), None)
-    return f"「{c['phrase'][:10]}」" if c else ""
-check("起音收音不硬切", not he, f"{len(he)} 处：" + "；".join(f"{t:.2f}s{clip_at(t)}{k}音 {d:.0f}dB" for k, t, d in he[:6]) if he else "每个字头字尾都是渐起渐落")
+# 时刻落到具体句子：收音硬切往前看、起音硬切往后看（E05 558 秒「回到那三条规则。」句尾收音硬切，原来按整个片段点名，换种子换成了同一片段里的「第二条说……」）
+EDGE_SIDE = {"收": -0.02, "起": 0.02}
+revoice_at.extend((t, EDGE_SIDE.get(k, 0.0)) for k, t, _ in he)
+check("起音收音不硬切", not he, f"{len(he)} 处：" + "；".join(f"{t:.2f}s{phrase_at(t, EDGE_SIDE.get(k, 0.0))}{k}音 {d:.0f}dB" for k, t, d in he[:6]) if he else "每个字头字尾都是渐起渐落")
 
 # 0l. 语速一致：每句只算嘴在动的时间的语速（voice.py 的 art_rate），离这个声音的语速 rate.target 不超过 rate.maxDev。
 #     用户听 E02 v5「有的地方突然加快语速，语速要基本保持一致，情绪、音调可以随内容自然变化」：各句 3.1–5.0 字/秒，相邻两句差到 20%
@@ -374,7 +372,7 @@ for spk in speakers:
             rates.append((k, art_rate(ws), sp))
     off = [(k, r, sp) for k, r, sp in rates if abs(r / RATE["target"] - 1) > RATE.get("maxDev", 0.10)]
     for k, r, sp in off:
-        revoice_at.extend(a + 0.01 for kk, a, b in sentence_ranges() if kk == k)
+        revoice_at.extend((a + 0.01, 0.0) for kk, a, b in sentence_ranges() if kk == k)
     rs = [r for _, r, _ in rates]
     check("语速一致" + who(spk), not off, (f"{len(off)} 句离 {RATE['target']} 字/秒超过 {RATE.get('maxDev', 0.10):.0%}：" + "；".join(f"「{sp['text'][:10]}」{r:.2f}" for _, r, sp in off[:6]) + "；")
           * bool(off) + f"全片每句 {min(rs):.2f}–{max(rs):.2f} 字/秒，波动 {np.std(rs) / np.mean(rs):.2f}")
@@ -451,7 +449,7 @@ for spk in speakers:
                   f"音区 {dr_st:+.1f} 半音、响度 {dr_lu:+.1f} LU、语速 {dr_rate:+.0%}、音色（CAM++ 平均）{dr_cam:.3f}"))
 
 rv_path = Path(sys.argv[1]).with_suffix(".revoice.json")
-rv = sorted({timing0["sentences"][k]["text"] for k, a, b in sentence_ranges() for t in revoice_at if a - 0.05 <= t <= b + 0.05}) if timing0.get("sentences") else []
+rv = sorted({timing0["sentences"][k]["text"] for t, side in revoice_at if (k := sentence_at(t, _spans, side)) is not None}) if timing0.get("sentences") else []
 if rv:
     rv_path.write_text(json.dumps(rv, ensure_ascii=False, indent=1))
     print(f"要换种子重配的句子：{len(rv)} 句（{rv_path.name}）")

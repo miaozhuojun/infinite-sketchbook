@@ -237,3 +237,25 @@ export function isFlight(tl: Timeline, m: PenSeg): boolean {
   };
   return off(m.from, m.t0) || off(m.to, m.t1);
 }
+
+// ---------- 镜头到位后对着空纸讲：编译和铅笔检查共用 ----------
+// 每次换取景（不算顿悟推近、回看、全景长镜头：那几种本来就是看已有的东西）到位以后，到下一个画面变化（新一笔、发光、下一次镜头移动）之前，
+// 有多少秒旁白在讲。超过 motion.maxIdleAfterMove 秒，观众就是对着一块空纸（或没变的画面）听讲。
+// 审片 E05 v1：五处换节镜头在上一句说完前就飞到下一节，205 秒那处对着空纸讲了 7 秒（E04 复盘也有）
+export type IdleAfterMove = { arrive: number; next: number; idle: number };
+export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effects'> & { audioClips?: { at: number; srcIn: number; srcOut: number }[] }): IdleAfterMove[] {
+  const talk = (tl.audioClips ?? []).map((c) => [c.at, c.at + c.srcOut - c.srcIn] as const);
+  const said = (a: number, b: number) => talk.reduce((s, [x, y]) => s + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0);
+  const events = [...tl.strokes.map((s) => [s.t0, s.t1] as const), ...(tl.effects ?? []).map((e) => [e.t0, e.t1] as const)];
+  const out: IdleAfterMove[] = [];
+  tl.camera.forEach((m, i) => {
+    const to = m.to as Cam & { revisit?: boolean; overview?: boolean };
+    if (m.focus || m.curve === 'glide' || to.revisit || to.overview || m.t1 <= m.t0) return;
+    const arrive = m.t1;
+    if (events.some(([a, b]) => a < arrive && b > arrive)) return; // 到位时正在写
+    const later = Math.min(...events.map(([a]) => a).filter((a) => a >= arrive), ...tl.camera.slice(i + 1).map((n) => n.t0).filter((a) => a >= arrive));
+    const next = Number.isFinite(later) ? later : Math.max(arrive, ...talk.map(([, y]) => y)); // 之后再也没有动静：算到旁白讲完
+    out.push({ arrive, next, idle: said(arrive, next) });
+  });
+  return out;
+}

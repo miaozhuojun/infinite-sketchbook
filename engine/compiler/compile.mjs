@@ -596,22 +596,31 @@ function schedule(boost) {
       if (flight) t = Math.max(t, takeoff + Math.max(flyDur, travel));
       // 起飞后离落笔还早（提示词在句尾）：按正常时长飞到，到了先停着等，不把整句都拉成一次慢吞吞的飞行（审片 v10：回顾第一站飞了 6.3 秒）
       const slack = flight ? t - takeoff - Math.max(flyDur, travel) : 0;
-      // 换节飞行从 a 飞到 b 时，笔尖一路都在取景框里吗（镜头从上一镜飞到这一镜，同起同落，见 src/timeline.ts 的 flightTip）。
-      // 两头都在框里，中途也可能出框：镜头起步快、笔是对称缓动，笔在屏幕上先往飞行的反方向偏，推近时还被往外推。
-      // E06 试编：第 8 节收尾时笔退到右上角，下一节在右下方、镜头 0.8 → 1.15 倍，起飞 1.3 秒后笔尖到了画面最上沿，铅笔怎么转都出画。
-      // 起点本来就在框外的（回看时退到画外、从画外飞进来）不归这里管
-      const flightIn = (a, b) => {
+      // 停笔的舒适框（屏幕）：左、上离取景框 40px，右、下给朝右下伸的笔身留 200px（16:9 取景框下沿紧挨字幕，只看取景框时笔尖还在框里、笔身已经压上字幕，审 #68）
+      const comfy = { l: fr.l + 40, r: fr.r - 200, t: fr.t + 40, b: fr.b - 200 };
+      const outBy = ([x, y]) => [comfy.l - x, x - comfy.r, comfy.t - y, y - comfy.b].map((v) => Math.max(0, v)); // 左、右、上、下各出框多少
+      // 换节飞行从 a 飞到 b：笔尖比两头多出舒适框多少像素（0 = 没有比两头更出框）。镜头从上一镜飞到这一镜，同起同落（src/timeline.ts 的 flightTip）。
+      // 两头都在框里，中途也可能出框：镜头起步快、笔是对称缓动，笔在屏幕上先往飞行的反方向偏，推近时还被往外推
+      // （E06 试编：第 8 节收尾时笔退到右上角，下一节在右下方、镜头 0.8 → 1.15 倍，起飞 1.3 秒后笔尖到了画面最上沿，铅笔怎么转都出画）。
+      // 每条边各自比两头：落笔处本来就贴着下沿时，飞行可以和它一样低，不能更低。起点在画布外的（回看时退到画外、从画外飞进来）不管。
+      // 前提：镜头这段就是从上一镜飞到这一镜、和笔同起同落、缓动是 motion.easeAccel。连着两句顿悟时镜头起飞可能晚于笔（holdUntil）、
+      // 被相邻镜头合并时终点会变，这里都按同起同落估；真出了画布或压上字幕，编译末尾的铅笔角度规划照样报出来
+      const flightEx = (a, b) => {
         const c0 = targetCam[pi - 1];
-        if (!c0) return true;
-        const inFr = ([x, y]) => x >= fr.l && x <= fr.r && y >= fr.t && y <= fr.b, at = (u) => flightTip(a, b, c0, cam, u, VIEW, M.easeAccel);
-        if (!inFr(at(0))) return true;
-        for (let i = 1; i <= 32; i++) if (!inFr(at(i / 32))) return false;
-        return true;
+        if (!c0) return 0;
+        const at = (u) => flightTip(a, b, c0, cam, u, VIEW, M.easeAccel), s0 = at(0);
+        if (s0[0] < 0 || s0[0] > TGT.w || s0[1] < 0 || s0[1] > TGT.h) return 0;
+        const e0 = outBy(s0), e1 = outBy(at(1)), lim = e0.map((v, k) => Math.max(v, e1[k]));
+        let ex = 0;
+        for (let i = 1; i < 32; i++) { const o = outBy(at(i / 32)); for (let k = 0; k < 4; k++) ex = Math.max(ex, o[k] - lim[k]); }
+        return ex;
       };
+      // 换节飞行至少飞 flyDur 秒，笔在这段时间里按屏幕上不超过 flightSpeed 能飞多远：停笔挪到反方向太远，飞行就超速了（审 #68）
+      const flyFar = Math.max(dist(fromPos, st), camFar, (flyDur * (M.flightSpeed ?? V_MOVE)) / z) + 1;
       // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
       // until/goal：停到什么时候、停完去哪（默认停到这一笔落笔、去落笔处；等上一句说完再起飞时停到起飞、不用回来）
-      // keep：位置还要满足的条件（换节前后停笔：从这里起飞、或飞到这里，笔尖一路都在取景框里）
-      const pickRest = (from, freeAt, views, allowOff = true, until = t, goal = st, keep = () => true) => {
+      // fly：换节前后停笔时接下来（或刚才）那段飞行。{ ex(q)：从 q 起飞或飞到 q 多出舒适框多少，near(q)：飞行不超过 flyFar，stay：不挪时的 ex }
+      const pickRest = (from, freeAt, views, allowOff = true, until = t, goal = st, fly = null) => {
         // 贴好的封面也算画过的东西，而且和文字一样要护着：笔身不压在封面上
         const drawn = new Set([...strokes.map((s) => s.action), ...stickers.map((k) => k.id)]), lastId = strokes.at(-1)?.action, stuck = new Set(stickers.map((k) => k.id));
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
@@ -631,7 +640,7 @@ function schedule(boost) {
         }));
         // 等的这段时间里镜头可能推近再拉回（上一句是顿悟）：停的位置在这几个取景里都要看得到，
         // 只看下一镜的话，推近时笔会被镜头拖着滑出画面边（实测 9x16「灯就亮！」推近时笔停在 ×4 旁被推出上边）
-        const inNext = (q) => views.every((c) => { const sx = (q[0] - c.x) * c.z + VIEW.cx, sy = (q[1] - c.y) * c.z + VIEW.cy; return sx > fr.l + 40 && sx < fr.r - 200 && sy > fr.t + 40 && sy < fr.b - 200; });
+        const inNext = (q) => views.every((c) => { const sx = (q[0] - c.x) * c.z + VIEW.cx, sy = (q[1] - c.y) * c.z + VIEW.cy; return sx > comfy.l && sx < comfy.r && sy > comfy.t && sy < comfy.b; });
         const around = (o) => [[0, 0], [1, 1], [1.4, 0], [1, -0.7], [0, 1.3], [-0.8, 1.1], [2, 2], [2.4, 0], [0, 2.4], [-1.6, 2], [2, -1.2]].map(([dx, dy]) => [o[0] + (dx * PK.dist) / z, o[1] + (dy * PK.dist) / z]);
         // 再加一张覆盖整个取景框的粗网格：内容密的地方（16x9 左边一列输入、声波、权重），这两处四周笔身朝右下都会压到字，
         // 只在附近找就只能挑「压得最少」的；有时间的话应该去空白处等
@@ -640,21 +649,27 @@ function schedule(boost) {
           const sx = fr.l + 60 + ((fr.r - 260 - fr.l - 60) * gx) / 6, sy = fr.t + 60 + ((fr.b - 260 - fr.t - 60) * gy) / 4;
           grid.push([gc.x + (sx - VIEW.cx) / gc.z, gc.y + (sy - VIEW.cy) / gc.z]);
         }
-        const cands = [...around(from), ...(goal ? around(goal) : []), ...grid].filter((q) => inNext(q) && keep(q)).map((q) => ({ q, c: cost(q) + dist(q, from) / 400 }));
+        const cands = [...around(from), ...(goal ? around(goal) : []), ...grid].filter((q) => inNext(q) && (!fly || fly.near(q))).map((q) => ({ q, c: cost(q) + dist(q, from) / 400 }));
         const off = allowOff ? offRight([targetCam[pi - 1], targetCam[pi], focusCam[pi - 1]], from[1]) : null;
         if (off) cands.push({ q: off, c: 60, off: true });
         // 时间够不够：过去、至少停 0.2 秒、再回到下一笔起点
         const fits = ({ q }) => freeAt + moveDur(dist(from, q), 0.12, z) + 0.2 <= until - (goal ? moveDur(dist(q, goal), 0.12, z) : 0);
-        const best = cands.filter(fits).sort((x, y) => x.c - y.c)[0];
-        return best;
+        const pool = cands.filter(fits);
+        if (!fly) return pool.sort((x, y) => x.c - y.c)[0];
+        // 换节前后：先在飞行不多出舒适框的位置里挑代价最小的；一个都没有时挑多出最少、而且比不挪好的；还没有就不挪（原地起飞、直接落在落笔处）
+        for (const x of pool) x.ex = fly.ex(x.q);
+        const clean = pool.filter((x) => x.ex <= 1);
+        if (clean.length) return clean.sort((x, y) => x.c - y.c)[0];
+        return pool.filter((x) => x.ex < fly.stay - 1).sort((x, y) => x.ex - y.ex || x.c - y.c)[0];
       };
       // 换节要等上一句说完才起飞（见 takeoff）：等够 minRest 秒就先退到不压东西的地方停着，从那里起飞（原来手一空就飞，不用等）。
       // 只在笔上一句刚写过、还在原处时停：上一句是不画的回看时笔已被当成在画外（penAway），上一句不画时取景也还没到那一镜
-      // 停的位置还要看接下来的飞行：从那里飞到落笔处，笔尖一路都在取景框里（flightIn）；没有这样的位置就原地停着，直接起飞
+      // 停的位置还要看接下来的飞行（flightEx、flyFar）：从那里飞到落笔处，笔尖不比两头更出舒适框，飞行也不超速
       let flyFrom = fromPos;
       const flyT0 = flight ? takeoff : 0;
       if (flight && penPhrase === pi - 1 && !penAway && targetCam[pi - 1] && flyT0 - penFree >= PK.minRest) {
-        const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1]].filter(Boolean), false, flyT0, null, (q) => flightIn(q, st));
+        const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1]].filter(Boolean), false, flyT0, null,
+          { ex: (q) => flightEx(q, st), near: (q) => dist(q, st) <= flyFar, stay: flightEx(penPos, st) });
         if (best && dist(best.q, penPos) > 2) {
           const go = moveDur(dist(penPos, best.q), 0.12, z);
           penTrack.push({ kind: 'move', t0: penFree, t1: penFree + go, from: penPos, to: best.q });
@@ -664,8 +679,8 @@ function schedule(boost) {
       }
       if (flight && slack > 1) {
         // 飞到新纸面上先找空白处停着（审片 v11：落在要圈的「写不完」上等了 3 秒，笔身压着「不完」），快到提示词再挪到落笔处
-        // 飞过去的路上笔尖也要一直在取景框里（同上：只看落地那一镜时，中途会被甩出去）
-        const best = pickRest(st, takeoff + flyDur, [cam], false, t, st, (q) => flightIn(flyFrom, q));
+        // 飞过去的路上同样要看（只看落地那一镜时，中途会被甩出去）；不挪就是直接落在落笔处
+        const best = pickRest(st, takeoff + flyDur, [cam], false, t, st, { ex: (q) => flightEx(flyFrom, q), near: (q) => dist(flyFrom, q) <= flyFar, stay: flightEx(flyFrom, st) });
         const land = best ? best.q : st, back = best ? moveDur(dist(land, st), 0.12, z) : 0;
         penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: flyFrom, to: land, chapter: true, phrase: pi });
         penTrack.push({ kind: 'rest', t0: takeoff + flyDur, t1: t - back, at: land });

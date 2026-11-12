@@ -5,10 +5,11 @@
 // 每一节一张：取这一节画的笔画的范围（四周留白 pad），把到这一节结束时已画在这个范围里的笔画都画上（这一节接着上一节那块纸画时，前面画的也在）；
 // 光晕按那一刻亮着的画。另出一张全集纸面 all.svg。
 // 用法：node compiler/figures.mjs build/<id>-<画幅>.timeline.json --out <目录> [--pad 80] [--ink mono|kai]
+import './node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import path from 'node:path';
 import { getStroke } from 'perfect-freehand';
-import { STICKER, stickerCard, stickerOutline, stickerTapes } from '../src/timeline.ts';
+const { STICKER, stickerCard, stickerOutline, stickerTapes } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const args = process.argv.slice(2);
 const tlPath = args[0], opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);

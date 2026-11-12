@@ -62,8 +62,9 @@ def still(name):
     return np.asarray(Image.open(work / name).convert("RGB")).astype(np.int16)
 
 
-def ease(x):
-    return 2 * x * x if x < 0.5 else 1 - (-2 * x + 2) ** 2 / 2
+def ease(x, a=0.5):
+    """和 src/timeline.ts 的 ease 同一条：a 是加速段占几成；镜头按 style.motion.easeAccel（m["accel"]），笔用对称的 0.5"""
+    return x * x / a if x < a else 1 - (1 - x) ** 2 / (1 - a)
 
 
 def cam_at(t):
@@ -72,7 +73,9 @@ def cam_at(t):
         if t >= m["t1"]:
             c = m["to"]
         elif t > m["t0"]:
-            e = ease((t - m["t0"]) / (m["t1"] - m["t0"]))
+            if m.get("curve") == "glide":
+                return None  # 片尾长镜头的匀速曲线这里不复现；那段只拉镜头、不落笔，抽到了就跳过
+            e = ease((t - m["t0"]) / (m["t1"] - m["t0"]), m.get("accel", 0.5))
             c = {k: m["from"][k] + (m["to"][k] - m["from"][k]) * e for k in "xyz"}
     return c
 
@@ -93,7 +96,7 @@ a, b = still("det_a.png"), still("det_b.png")
 check("同帧确定性", np.array_equal(a, b), f"第 {f} 帧两次渲染最大像素差 {int(np.abs(a - b).max())}")
 
 # 5. 笔尖跟随：随机抽 12 个落笔时刻，隐藏铅笔渲染，检查预测笔尖处是否刚好有墨迹
-misses = []
+misses, checked = [], 0
 for s, fr in zip(samples, pen_frames):
     t = fr / tl["fps"]
     # 复现渲染端的笔尖位置：用渲染时同一套路径长度插值（在浏览器里求），这里直接读页面会更慢；
@@ -104,6 +107,9 @@ for s, fr in zip(samples, pen_frames):
     pts = subprocess.run(["node", "qa/point_at.mjs", stroke["d"], str(p)], capture_output=True, text=True, check=True).stdout.split()
     x, y = float(pts[0]), float(pts[1])
     c = cam_at(t)
+    if c is None:
+        continue
+    checked += 1
     sx, sy = (x - c["x"]) * c["z"] + tl["view"]["cx"], (y - c["y"]) * c["z"] + tl["view"]["cy"]
     r = 6
     patch = img[int(sy) - r:int(sy) + r + 1, int(sx) - r:int(sx) + r + 1]
@@ -112,7 +118,7 @@ for s, fr in zip(samples, pen_frames):
     ink = int((np.sqrt(((patch.astype(int) - paper) ** 2).sum(axis=2)) > 80).sum())
     if ink < 3:
         misses.append(f"帧{fr} {stroke['id']} 屏幕({sx:.0f},{sy:.0f}) 墨迹像素{ink}")
-check("笔尖落在正在画的笔迹上", not misses, f"抽检 {len(samples)} 处，未命中 {len(misses)}" + (("：" + "；".join(misses)) if misses else ""))
+check("笔尖落在正在画的笔迹上", not misses and checked > 0, f"抽检 {checked} 处（抽到片尾长镜头跳过 {len(samples) - checked} 处），未命中 {len(misses)}" + (("：" + "；".join(misses)) if misses else ""))
 
 # 运笔流畅、笔身晃动、压字幕：见 qa/pencil_check.mjs（直接复用渲染端的姿态函数）
 

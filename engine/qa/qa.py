@@ -62,8 +62,10 @@ def still(name):
     return np.asarray(Image.open(work / name).convert("RGB")).astype(np.int16)
 
 
-def ease(x):
-    return 2 * x * x if x < 0.5 else 1 - (-2 * x + 2) ** 2 / 2
+def ease(x, a=0.5):
+    """和 src/timeline.ts 的 ease 同一条：a 是加速段占几成。镜头按 style.motion.easeAccel（m["accel"]）缓动，
+    原来这里一律按对称的 0.5 算，镜头飞行中途抽到的笔尖位置会偏十来个像素，报成「笔尖没落在笔迹上」（E06 帧 505，accel 0.35）"""
+    return x * x / a if x < a else 1 - (1 - x) ** 2 / (1 - a)
 
 
 def cam_at(t):
@@ -72,7 +74,9 @@ def cam_at(t):
         if t >= m["t1"]:
             c = m["to"]
         elif t > m["t0"]:
-            e = ease((t - m["t0"]) / (m["t1"] - m["t0"]))
+            if m.get("curve") == "glide":
+                return None  # 片尾长镜头的匀速曲线这里不复现；那段只拉镜头、不落笔，抽到了就跳过
+            e = ease((t - m["t0"]) / (m["t1"] - m["t0"]), m.get("accel", 0.5))
             c = {k: m["from"][k] + (m["to"][k] - m["from"][k]) * e for k in "xyz"}
     return c
 
@@ -104,6 +108,8 @@ for s, fr in zip(samples, pen_frames):
     pts = subprocess.run(["node", "qa/point_at.mjs", stroke["d"], str(p)], capture_output=True, text=True, check=True).stdout.split()
     x, y = float(pts[0]), float(pts[1])
     c = cam_at(t)
+    if c is None:
+        continue
     sx, sy = (x - c["x"]) * c["z"] + tl["view"]["cx"], (y - c["y"]) * c["z"] + tl["view"]["cy"]
     r = 6
     patch = img[int(sy) - r:int(sy) + r + 1, int(sx) - r:int(sx) + r + 1]

@@ -4,6 +4,7 @@
 // 用法：node pipeline.mjs data/<id>.beats.json [--targets 9x16,16x9,1x1] [--out out/<目录>]（默认 out/<id>）[--draft]
 // --draft：改稿时用，配音、编译、查时间线（铅笔、安全区）、混音、旁白检查都跑（点名的句子自动换种子重配），只是不渲染、不做要看画面的检查；
 // 旁白检查过了再去掉 --draft 整片渲染一次。定稿时旁白检查也在渲染之前跑，没过就不渲染
+import './compiler/node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';

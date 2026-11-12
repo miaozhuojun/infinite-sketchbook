@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { cameraAt, idleAfterCamera } from '../src/timeline.ts';
+import { cameraAt, penAt, idleAfterCamera } from '../src/timeline.ts';
 import { PY_QA, PY_MLX } from './pyenv.mjs';
 import { strip } from '../compiler/validate.mjs';
 
@@ -660,6 +660,54 @@ else {
     if (tl && freed > said - early - 0.2) skip('换节镜头等上一句说完才起飞', `注入后上一句的笔还是到句末才空（${freed}s，句末 ${said}s），测不出`);
     else record('换节镜头等上一句说完才起飞（笔和镜头都不早于句末前 takeoffEarly 秒）', !!fly && !!cam && fly.t0 >= said - early - 0.01 && cam.t0 >= said - early - 0.01,
       out + `\n上一句说完 ${said}s、笔 ${freed}s 就空了，笔起飞 ${fly?.t0}s，镜头起飞 ${cam?.t0}s`);
+    fs.rmSync('data/_selftest.beats.json', { force: true });
+    for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+  }
+}
+// 换节起飞前停笔的地方要看接下来的飞行（排程，不是检查；这里防它退回去）。起飞前等够 park.minRest 秒时，笔先退到不压东西的空白处停着，
+// 原来只看上一镜：镜头起步快、笔是对称缓动，笔在屏幕上先往飞行的反方向偏，停在那一侧画边附近的笔飞到一半就出画
+// （E06 试编：第 8 节收尾时停在右上角，下一节在右下方，起飞 1.3 秒后笔尖到了画面最上沿）。
+// 注入：同上一条，最后一句有画的句子改成新的一节，再往上挪 4000（笔在屏幕上往下偏，画面下半截停哪儿都会飞出去）；上一句的动作全挪到句首、写快。
+// 判：笔起飞前空着够 park.minRest 秒（有工夫先挪个地方）时，整段飞行笔尖（渲染用的 penAt、cameraAt）一直在取景框里。
+// 演示分镜上原来的排法挑中的是原地（不压东西、离得最近），原地起飞 9:16 出框 192px、16:9 出框 269px
+if (SKIP.has('compile')) skip('换节起飞前停笔的地方，飞过去笔尖不出取景框', '这次没改编译器和分镜校验（--skip compile）');
+else {
+  const name = '换节起飞前停笔的地方，飞到下一节的路上笔尖一直在取景框里';
+  const b = structuredClone(beatsSrc); b.id = '_selftest';
+  for (const a of acts(b)) {
+    for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov);
+    delete a.layout;
+  }
+  const pi = b.phrases.findLastIndex((q, i) => i > 0 && q.actions?.length && b.phrases[i - 1].actions?.some((a) => a.type !== 'off' && a.type !== 'glow') && !b.phrases[i - 1].revisit?.length && b.phrases[i - 1].role !== 'aha' && b.phrases[i - 1].camera !== 'focus');
+  if (pi < 0) skip(name, '基线分镜里找不到前后两句都画东西的地方');
+  else {
+    const p = b.phrases[pi], prev = b.phrases[pi - 1];
+    p.chapter = '_换节';
+    for (const a of p.actions) for (const k of ['y', 'cy']) if (typeof a[k] === 'number') a[k] -= 4000;
+    for (const a of p.actions) for (const k of ['from', 'to']) if (Array.isArray(a[k])) a[k] = [a[k][0], a[k][1] - 4000];
+    const head = prev.text.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '').slice(0, 2);
+    for (const a of prev.actions) { a.at = head; a.speed = 3; }
+    fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+    const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT, '--no-validate'], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+    const tlp = `build/_selftest-${TGT}.timeline.json`, tl = fs.existsSync(tlp) ? JSON.parse(fs.readFileSync(tlp, 'utf8')) : null;
+    const fly = tl?.penTrack.find((m) => m.chapter && m.phrase === pi);
+    // 上一句最后一笔写完到起飞空了多久：够 park.minRest 秒，排程才会给笔挑起飞前停的地方（不够就原地直接起飞，不归这条管）
+    const lastDown = fly && tl.penTrack.filter((s) => s.kind === 'down' && s.t1 <= fly.t0 + 1e-6).at(-1);
+    const idle = lastDown ? fly.t0 - lastDown.t1 : 0, minRest = tl?.style?.pencil?.park?.minRest ?? 0.5;
+    const rest = fly && tl.penTrack.find((s) => s.kind === 'rest' && Math.abs(s.t1 - fly.t0) < 1e-3);
+    if (!tl) skip(name, '注入后编不出来：' + out.trim().split('\n').at(-1));
+    else if (!fly) skip(name, '注入后这一节没有换节飞行');
+    else if (idle < minRest) skip(name, `注入后上一句写完离起飞只有 ${idle.toFixed(2)} 秒（不到 park.minRest ${minRest} 秒，原地直接起飞），测不出`);
+    else {
+      const fr = tl.frame;
+      let worst = Infinity, at = fly.t0;
+      for (let f = Math.ceil(fly.t0 * tl.fps); f <= Math.floor(fly.t1 * tl.fps); f++) {
+        const t = f / tl.fps, c = cameraAt(tl.camera, t), q = penAt(tl, t, 'mono');
+        const x = (q.x - c.x) * c.z + tl.view.cx, y = (q.y - c.y) * c.z + tl.view.cy, d = Math.min(x - fr.l, fr.r - x, y - fr.t, fr.b - y);
+        if (d < worst) { worst = d; at = t; }
+      }
+      record(name, worst >= 0, out + `\n起飞前空了 ${idle.toFixed(2)} 秒，从纸面 (${fly.from.map((v) => Math.round(v)).join(', ')}) 起飞${rest ? `（停了 ${(rest.t1 - rest.t0).toFixed(2)} 秒）` : ''}，飞行 ${fly.t0.toFixed(2)}–${fly.t1.toFixed(2)}s，笔尖离取景框最近 ${Math.round(worst)}px（${at.toFixed(2)}s，负数是出框）`);
+    }
     fs.rmSync('data/_selftest.beats.json', { force: true });
     for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
   }

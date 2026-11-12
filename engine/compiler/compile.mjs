@@ -11,7 +11,7 @@ import { loadLibrary, PENLESS } from '../library/index.mjs';
 import { loadSticker } from './stickers.mjs';
 import { makeKit, samplePts, offsetPath, r2, dist } from '../library/kit.mjs';
 import { validateBeats, loadStyle, gateLevel, strip, breakLines, styleSubset } from './validate.mjs';
-const { stickerOutline, flightTip } = await import('../src/timeline.ts');
+const { stickerOutline, flightTip, cameraAt } = await import('../src/timeline.ts');
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
@@ -599,24 +599,29 @@ function schedule(boost) {
       // 停笔的舒适框（屏幕）：左、上离取景框 40px，右、下给朝右下伸的笔身留 200px（16:9 取景框下沿紧挨字幕，只看取景框时笔尖还在框里、笔身已经压上字幕，审 #68）
       const comfy = { l: fr.l + 40, r: fr.r - 200, t: fr.t + 40, b: fr.b - 200 };
       const outBy = ([x, y]) => [comfy.l - x, x - comfy.r, comfy.t - y, y - comfy.b].map((v) => Math.max(0, v)); // 左、右、上、下各出框多少
-      // 换节飞行从 a 飞到 b：笔尖比两头多出舒适框多少像素（0 = 没有比两头更出框）。镜头从上一镜飞到这一镜，同起同落（src/timeline.ts 的 flightTip）。
+      // 换节飞行从 a 飞到 b：笔尖比共有的那一头多出舒适框多少像素（0 = 没有多出）。镜头从上一镜飞到这一镜，同起同落（src/timeline.ts 的 flightTip）。
       // 两头都在框里，中途也可能出框：镜头起步快、笔是对称缓动，笔在屏幕上先往飞行的反方向偏，推近时还被往外推
       // （E06 试编：第 8 节收尾时笔退到右上角，下一节在右下方、镜头 0.8 → 1.15 倍，起飞 1.3 秒后笔尖到了画面最上沿，铅笔怎么转都出画）。
-      // 每条边各自比两头：落笔处本来就贴着下沿时，飞行可以和它一样低，不能更低。起点在画布外的（回看时退到画外、从画外飞进来）不管。
+      // 每条边各自放宽到共有那一头出框的量（shared：它在飞行里的 u，0 = a，1 = b）：起飞前停笔时是落笔处 b，落地停笔时是起飞点 a，挪不挪都要飞到（或飞离）那里。
+      // 落笔处本来就贴着下沿时，飞行可以和它一样低，不能更低。另一头是挑出来的停笔处，候选都在舒适框里；「不挪」时那一头是原处或落笔处，
+      // 它本身出框也不放宽，和候选一个标准（原来两头一起放宽，不挪的那一头出框多少就白送多少，退路偏向不挪，审 #68）。
+      // 没有按飞到哪儿再收紧放宽量（越靠近共有那一头放得越宽）：试过，E02–E05 只变了 E05 一处，直接落在落笔处被判多出 6px（笔在起飞那条边外多待了一会儿，没有更出框），
+      // 改落到旁边再挪回来，离取景框一样是 117px，白多一次挪动。起点在画布外的（回看时退到画外、从画外飞进来）不管。
       // 前提：镜头这段就是从上一镜飞到这一镜、和笔同起同落、缓动是 motion.easeAccel。连着两句顿悟时镜头起飞可能晚于笔（holdUntil）、
       // 被相邻镜头合并时终点会变，这里都按同起同落估；真出了画布或压上字幕，编译末尾的铅笔角度规划照样报出来
-      const flightEx = (a, b) => {
+      const flightEx = (a, b, shared) => {
         const c0 = targetCam[pi - 1];
         if (!c0) return 0;
         const at = (u) => flightTip(a, b, c0, cam, u, VIEW, M.easeAccel), s0 = at(0);
         if (s0[0] < 0 || s0[0] > TGT.w || s0[1] < 0 || s0[1] > TGT.h) return 0;
-        const e0 = outBy(s0), e1 = outBy(at(1)), lim = e0.map((v, k) => Math.max(v, e1[k]));
+        const lim = outBy(shared ? at(1) : s0);
         let ex = 0;
         for (let i = 1; i < 32; i++) { const o = outBy(at(i / 32)); for (let k = 0; k < 4; k++) ex = Math.max(ex, o[k] - lim[k]); }
         return ex;
       };
-      // 换节飞行至少飞 flyDur 秒，笔在这段时间里按屏幕上不超过 flightSpeed 能飞多远：停笔挪到反方向太远，飞行就超速了（审 #68）
-      const flyFar = Math.max(dist(fromPos, st), camFar, (flyDur * (M.flightSpeed ?? V_MOVE)) / z) + 1;
+      // 换节飞行至少飞 flyDur 秒，笔在这段时间里按屏幕上不超过 flightSpeed 能飞多远：停笔挪到反方向太远，飞行就超速了（审 #68）。
+      // flyDur 本来就按笔和镜头里飞得远的那个算，这个距离不会比它们短
+      const flyFar = (flyDur * (M.flightSpeed ?? V_MOVE)) / z + 1;
       // 停笔等的地方：笔身别压文字、刚画完的元素和推近焦点，等的位置在这几个取景里都看得到（views）
       // until/goal：停到什么时候、停完去哪（默认停到这一笔落笔、去落笔处；等上一句说完再起飞时停到起飞、不用回来）
       // fly：换节前后停笔时接下来（或刚才）那段飞行。{ ex(q)：从 q 起飞或飞到 q 多出舒适框多少，near(q)：飞行不超过 flyFar，stay：不挪时的 ex }
@@ -656,20 +661,24 @@ function schedule(boost) {
         const fits = ({ q }) => freeAt + moveDur(dist(from, q), 0.12, z) + 0.2 <= until - (goal ? moveDur(dist(q, goal), 0.12, z) : 0);
         const pool = cands.filter(fits);
         if (!fly) return pool.sort((x, y) => x.c - y.c)[0];
-        // 换节前后：先在飞行不多出舒适框的位置里挑代价最小的；一个都没有时挑多出最少、而且比不挪好的；还没有就不挪（原地起飞、直接落在落笔处）
+        // 换节前后：先在飞行不多出舒适框的位置里挑代价最小的；一个都没有时挑多出最少、而且比不挪好的；还没有就不挪（原地起飞、直接落在落笔处）。
+        // 多出多少按 10px 一档，同一档里再比代价：只按多出的像素排时，代价只用来打平，多出 6px 压着字的会赢过多出 7px 不压字的（审 #68）。
+        // 不挪（from：起飞前是原处，落地时是落笔处）也按同样的档和代价一起排：和不挪同一档、却压着字的候选，不该赢过不压字的不挪（审 #69）
         for (const x of pool) x.ex = fly.ex(x.q);
         const clean = pool.filter((x) => x.ex <= 1);
         if (clean.length) return clean.sort((x, y) => x.c - y.c)[0];
-        return pool.filter((x) => x.ex < fly.stay - 1).sort((x, y) => x.ex - y.ex || x.c - y.c)[0];
+        const tier = (x) => Math.floor(x.ex / 10), stay = { q: from, c: cost(from), ex: fly.stay, stay: true };
+        const best = [...pool.filter((x) => x.ex < fly.stay - 1), stay].sort((x, y) => tier(x) - tier(y) || x.c - y.c || x.ex - y.ex)[0];
+        return best.stay ? undefined : best;
       };
       // 换节要等上一句说完才起飞（见 takeoff）：等够 minRest 秒就先退到不压东西的地方停着，从那里起飞（原来手一空就飞，不用等）。
       // 只在笔上一句刚写过、还在原处时停：上一句是不画的回看时笔已被当成在画外（penAway），上一句不画时取景也还没到那一镜
-      // 停的位置还要看接下来的飞行（flightEx、flyFar）：从那里飞到落笔处，笔尖不比两头更出舒适框，飞行也不超速
+      // 停的位置还要看接下来的飞行（flightEx、flyFar）：从那里飞到落笔处，笔尖不比落笔处更出舒适框，飞行也不超速
       let flyFrom = fromPos;
       const flyT0 = flight ? takeoff : 0;
       if (flight && penPhrase === pi - 1 && !penAway && targetCam[pi - 1] && flyT0 - penFree >= PK.minRest) {
         const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1]].filter(Boolean), false, flyT0, null,
-          { ex: (q) => flightEx(q, st), near: (q) => dist(q, st) <= flyFar, stay: flightEx(penPos, st) });
+          { ex: (q) => flightEx(q, st, 1), near: (q) => dist(q, st) <= flyFar, stay: flightEx(penPos, st, 1) });
         if (best && dist(best.q, penPos) > 2) {
           const go = moveDur(dist(penPos, best.q), 0.12, z);
           penTrack.push({ kind: 'move', t0: penFree, t1: penFree + go, from: penPos, to: best.q });
@@ -680,7 +689,7 @@ function schedule(boost) {
       if (flight && slack > 1) {
         // 飞到新纸面上先找空白处停着（审片 v11：落在要圈的「写不完」上等了 3 秒，笔身压着「不完」），快到提示词再挪到落笔处
         // 飞过去的路上同样要看（只看落地那一镜时，中途会被甩出去）；不挪就是直接落在落笔处
-        const best = pickRest(st, takeoff + flyDur, [cam], false, t, st, { ex: (q) => flightEx(flyFrom, q), near: (q) => dist(flyFrom, q) <= flyFar, stay: flightEx(flyFrom, st) });
+        const best = pickRest(st, takeoff + flyDur, [cam], false, t, st, { ex: (q) => flightEx(flyFrom, q, 0), near: (q) => dist(flyFrom, q) <= flyFar, stay: flightEx(flyFrom, st, 0) });
         const land = best ? best.q : st, back = best ? moveDur(dist(land, st), 0.12, z) : 0;
         penTrack.push({ kind: 'move', t0: takeoff, t1: takeoff + flyDur, from: flyFrom, to: land, chapter: true, phrase: pi });
         penTrack.push({ kind: 'rest', t0: takeoff + flyDur, t1: t - back, at: land });
@@ -893,12 +902,8 @@ if (focusCam[phrases.length - 1]) {
 }
 const lastCamEnd = camera[camera.length - 1].t1;
 // 自检：每一笔画完的时刻都在取景框内
-// 和渲染端 src/timeline.ts 的 camLerp 同一套插值（glide：中间匀速、两头各 1.5 秒缓起缓停、缩放按对数）
-// 和渲染端 src/timeline.ts 的 glideAt 同一个公式：绕两头取景里屏幕位置相同的纸面点缩放，起始画面里的东西只往它靠、不出画
-const glideAt = (f, t, e) => { const z = f.z * Math.pow(t.z / f.z, e); if (Math.abs(t.z - f.z) < 1e-6) return { x: f.x + (t.x - f.x) * e, y: f.y + (t.y - f.y) * e, z };
-  const px = (t.x * t.z - f.x * f.z) / (t.z - f.z), py = (t.y * t.z - f.y * f.z) / (t.z - f.z); return { x: px + (f.x - px) * f.z / z, y: py + (f.y - py) * f.z / z, z }; };
-const glideE = (u, dur) => { const r = Math.min(0.45, 1.5 / Math.max(dur, 1e-6)), k = 1 / (2 * r * (1 - r)); return u < r ? u * u * k : u > 1 - r ? 1 - (1 - u) * (1 - u) * k : (u - r / 2) / (1 - r); };
-const camAt = (t) => { let c = camera[0].from; for (const m of camera) { if (t >= m.t1) c = m.to; else if (t > m.t0) { const u = (t - m.t0) / (m.t1 - m.t0); if (m.curve === 'glide') c = glideAt(m.from, m.to, glideE(u, m.t1 - m.t0)); else { const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2; c = { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e }; } } } return c; };
+// 镜头位置用渲染端的 cameraAt（src/timeline.ts），普通移动的缓动认 accel（style.motion.easeAccel；原来这里另写了一份，写死对称缓动）
+const camAt = (t) => cameraAt(camera, t);
 // 贴图落定时，外轮廓（含胶带）也要在取景框里
 for (const k of stickers) {
   const c = camAt(k.t1);
@@ -1045,7 +1050,7 @@ const out = {
   const WM = style.watermark, slots = WM?.slots?.[targetName];
   const brand = fs.existsSync('brand.local.json') ? JSON.parse(fs.readFileSync('brand.local.json', 'utf8')) : null;
   if (brand?.watermark?.text && slots?.length) {
-    const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } = await import('../src/timeline.ts');
+    const { subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } = await import('../src/timeline.ts');
     const stickerInks = stickers.map(stickerInk); // 水印也不压贴图
     const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, contentMargin: WM.contentMargin, spans: [] };
     // 和安全区检查同样每 0.1 秒看一次，框再多留 4px，保证检查一定过
@@ -1097,7 +1102,7 @@ const out = {
 //   edge：靠近画布边缘或字幕时，为了让整支笔留在画内、不压字幕而需要的转角。逐帧求最小转角，再做"限速包络"
 //   （每帧最多转 turnPerFrame 度，且提前转到位），保证不晃也不出画（审片发现方版铅笔被右边缘切掉）。
 {
-  const { penAt, cameraAt, pencilScale, pencilBodyPts, pencilFootprint, subtitleBox, inBox, isFlight, SUB_MARGIN } = await import('../src/timeline.ts');
+  const { penAt, pencilScale, pencilBodyPts, pencilFootprint, subtitleBox, inBox, isFlight, SUB_MARGIN } = await import('../src/timeline.ts');
   const P = style.pencil;
   const nF = Math.ceil(end * FPS), sway = new Float64Array(nF), lift = new Float64Array(nF);
   for (let f = 0; f < nF; f++) {

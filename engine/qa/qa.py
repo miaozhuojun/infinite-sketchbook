@@ -63,8 +63,7 @@ def still(name):
 
 
 def ease(x, a=0.5):
-    """和 src/timeline.ts 的 ease 同一条：a 是加速段占几成。镜头按 style.motion.easeAccel（m["accel"]）缓动，
-    原来这里一律按对称的 0.5 算，镜头飞行中途抽到的笔尖位置会偏十来个像素，报成「笔尖没落在笔迹上」（E06 帧 505，accel 0.35）"""
+    """和 src/timeline.ts 的 ease 同一条：a 是加速段占几成；镜头按 style.motion.easeAccel（m["accel"]），笔用对称的 0.5"""
     return x * x / a if x < a else 1 - (1 - x) ** 2 / (1 - a)
 
 
@@ -97,7 +96,7 @@ a, b = still("det_a.png"), still("det_b.png")
 check("同帧确定性", np.array_equal(a, b), f"第 {f} 帧两次渲染最大像素差 {int(np.abs(a - b).max())}")
 
 # 5. 笔尖跟随：随机抽 12 个落笔时刻，隐藏铅笔渲染，检查预测笔尖处是否刚好有墨迹
-misses = []
+misses, checked = [], 0
 for s, fr in zip(samples, pen_frames):
     t = fr / tl["fps"]
     # 复现渲染端的笔尖位置：用渲染时同一套路径长度插值（在浏览器里求），这里直接读页面会更慢；
@@ -110,6 +109,7 @@ for s, fr in zip(samples, pen_frames):
     c = cam_at(t)
     if c is None:
         continue
+    checked += 1
     sx, sy = (x - c["x"]) * c["z"] + tl["view"]["cx"], (y - c["y"]) * c["z"] + tl["view"]["cy"]
     r = 6
     patch = img[int(sy) - r:int(sy) + r + 1, int(sx) - r:int(sx) + r + 1]
@@ -118,7 +118,7 @@ for s, fr in zip(samples, pen_frames):
     ink = int((np.sqrt(((patch.astype(int) - paper) ** 2).sum(axis=2)) > 80).sum())
     if ink < 3:
         misses.append(f"帧{fr} {stroke['id']} 屏幕({sx:.0f},{sy:.0f}) 墨迹像素{ink}")
-check("笔尖落在正在画的笔迹上", not misses, f"抽检 {len(samples)} 处，未命中 {len(misses)}" + (("：" + "；".join(misses)) if misses else ""))
+check("笔尖落在正在画的笔迹上", not misses and checked > 0, f"抽检 {checked} 处（抽到片尾长镜头跳过 {len(samples) - checked} 处），未命中 {len(misses)}" + (("：" + "；".join(misses)) if misses else ""))
 
 # 运笔流畅、笔身晃动、压字幕：见 qa/pencil_check.mjs（直接复用渲染端的姿态函数）
 

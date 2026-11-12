@@ -662,16 +662,18 @@ function schedule(boost) {
         const pool = cands.filter(fits);
         if (!fly) return pool.sort((x, y) => x.c - y.c)[0];
         // 换节前后：先在飞行不多出舒适框的位置里挑代价最小的；一个都没有时挑多出最少、而且比不挪好的；还没有就不挪（原地起飞、直接落在落笔处）。
-        // 多出多少按 10px 一档，同一档里再比代价：只按多出的像素排时，代价只用来打平，多出 6px 压着字的会赢过多出 7px 不压字的（审 #68）
+        // 多出多少按 10px 一档，同一档里再比代价：只按多出的像素排时，代价只用来打平，多出 6px 压着字的会赢过多出 7px 不压字的（审 #68）。
+        // 不挪（from：起飞前是原处，落地时是落笔处）也按同样的档和代价一起排：和不挪同一档、却压着字的候选，不该赢过不压字的不挪（审 #69）
         for (const x of pool) x.ex = fly.ex(x.q);
         const clean = pool.filter((x) => x.ex <= 1);
         if (clean.length) return clean.sort((x, y) => x.c - y.c)[0];
-        const tier = (x) => Math.floor(x.ex / 10);
-        return pool.filter((x) => x.ex < fly.stay - 1).sort((x, y) => tier(x) - tier(y) || x.c - y.c || x.ex - y.ex)[0];
+        const tier = (x) => Math.floor(x.ex / 10), stay = { q: from, c: cost(from), ex: fly.stay, stay: true };
+        const best = [...pool.filter((x) => x.ex < fly.stay - 1), stay].sort((x, y) => tier(x) - tier(y) || x.c - y.c || x.ex - y.ex)[0];
+        return best.stay ? undefined : best;
       };
       // 换节要等上一句说完才起飞（见 takeoff）：等够 minRest 秒就先退到不压东西的地方停着，从那里起飞（原来手一空就飞，不用等）。
       // 只在笔上一句刚写过、还在原处时停：上一句是不画的回看时笔已被当成在画外（penAway），上一句不画时取景也还没到那一镜
-      // 停的位置还要看接下来的飞行（flightEx、flyFar）：从那里飞到落笔处，笔尖不比两头更出舒适框，飞行也不超速
+      // 停的位置还要看接下来的飞行（flightEx、flyFar）：从那里飞到落笔处，笔尖不比落笔处更出舒适框，飞行也不超速
       let flyFrom = fromPos;
       const flyT0 = flight ? takeoff : 0;
       if (flight && penPhrase === pi - 1 && !penAway && targetCam[pi - 1] && flyT0 - penFree >= PK.minRest) {

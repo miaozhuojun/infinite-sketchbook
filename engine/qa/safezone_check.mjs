@@ -12,9 +12,10 @@
 //   6. 水印避开字幕、平台界面和内容：每一段水印显示期间（每 0.1 秒看一次），离平台界面、正在显示的字幕至少 margin 像素，离已开始画的内容至少 contentMargin 像素
 //   7. 水印换位避开顿悟句：水印淡出、换位、淡入的时刻不落在顿悟句里（从开口到说完再停 aha.holdAfter 秒，前后各留 fade 秒）（审片 v9：60 秒那次换位正好撞上灯灭）
 // 用法：node qa/safezone_check.mjs build/<id>.timeline.json
+import '../compiler/node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import { svgPathProperties } from 'svg-path-properties';
-import { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } from '../src/timeline.ts';
+const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];

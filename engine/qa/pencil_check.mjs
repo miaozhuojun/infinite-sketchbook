@@ -13,8 +13,9 @@
 //      （审片 v9：16x9 画声波的约 1.9 秒里，笔身横压 x₁、x₂ 和「×3」，正在说「这个输入说话越大声」）
 //   8. 片尾不带笔：最后一帧整支笔都在画外（审片 v9：16x9 笔扫过算式和灯后停在右缘，终帧带着铅笔）
 // 用法：node qa/pencil_check.mjs build/<id>.timeline.json
+import '../compiler/node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
-import { pencilPose, cameraAt, pencilBodyPts, pencilFootprint, subtitleBox, inBox, isFlight, idleAfterCamera, SUB_MARGIN } from '../src/timeline.ts';
+const { pencilPose, cameraAt, pencilBodyPts, pencilFootprint, subtitleBox, inBox, isFlight, idleAfterCamera, SUB_MARGIN } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];

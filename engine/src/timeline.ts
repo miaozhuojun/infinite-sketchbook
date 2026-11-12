@@ -84,11 +84,8 @@ export function penAt(tl: Timeline, t: number, mode: InkMode): PenState {
   // 停住时笔贴着纸；抬笔量只在移动中从 0 平滑升起再落回 0，全程连续，影子不会跳
   if (seg.kind === 'rest') return { x: seg.at[0], y: seg.at[1], down: false, lift: 0, heading: 0 };
   if (seg.kind === 'move') {
-    const u = progress(t, seg.t0, seg.t1), k = ease(u);
-    return {
-      x: seg.from[0] + (seg.to[0] - seg.from[0]) * k, y: seg.from[1] + (seg.to[1] - seg.from[1]) * k, down: false,
-      lift: Math.sin(Math.PI * u) * 0.5, heading: Math.atan2(seg.to[1] - seg.from[1], seg.to[0] - seg.from[0]),
-    };
+    const u = progress(t, seg.t0, seg.t1), [x, y] = moveAt(seg.from, seg.to, u);
+    return { x, y, down: false, lift: Math.sin(Math.PI * u) * 0.5, heading: Math.atan2(seg.to[1] - seg.from[1], seg.to[0] - seg.from[0]) };
   }
   const s = tl.strokes[seg.stroke];
   const p = progress(t, seg.t0, seg.t1);
@@ -125,6 +122,18 @@ export function camLerp(m: CamMove, t: number): Cam {
   if (m.curve === 'glide') return glideAt(m.from, m.to, glideEase(u, m.t1 - m.t0));
   const e = ease(u, m.accel);
   return { x: m.from.x + (m.to.x - m.from.x) * e, y: m.from.y + (m.to.y - m.from.y) * e, z: m.from.z + (m.to.z - m.from.z) * e };
+}
+// 抬笔移动走到 u（0–1）时笔尖的纸面位置：对称缓动（penAt 的移动段就用它）
+export function moveAt(from: [number, number], to: [number, number], u: number): [number, number] {
+  const k = ease(u);
+  return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+}
+// 换节飞行走到 u（0–1）时笔尖的屏幕位置：笔从 from 移到 to，镜头从 c0 移到 c1，两段同起同落（编译器就是这样排的）。
+// 笔用对称缓动，镜头按 accel（style.motion.easeAccel）缓动。accel 小于 0.5 时镜头起步快，笔在屏幕上会先往飞行的反方向偏；
+// 推近时笔还会被往画面外推。编译器挑换节前后停笔的位置时用它，和渲染用同一套插值（moveAt、camLerp）
+export function flightTip(from: [number, number], to: [number, number], c0: Cam, c1: Cam, u: number, view: { cx: number; cy: number }, accel?: number): [number, number] {
+  const [x, y] = moveAt(from, to, u), c = camLerp({ t0: 0, t1: 1, from: c0, to: c1, accel }, u);
+  return [(x - c.x) * c.z + view.cx, (y - c.y) * c.z + view.cy];
 }
 export function cameraAt(moves: CamMove[], t: number): Cam {
   let c = moves[0].from;

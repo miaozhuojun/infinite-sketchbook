@@ -3,6 +3,7 @@
 // 时间是估的：「画面落后旁白」「停顿过长」这类建议只作参考，以真配音跑出来的报告为准。
 // 用法：node compiler/dry_layout.mjs data/<id>.beats.json [--rate 4.0] [--keep]（--keep：留下试编的时间线 build/_dry-<id>-<画幅>.timeline.json，查镜头用）
 // 静帧审稿（qa/still_review.mjs）也用它：import { dryLayout } 拿到每个画幅的试编时间线、问题和建议
+import './node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

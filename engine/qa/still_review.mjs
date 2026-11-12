@@ -6,6 +6,7 @@
 // 用法：node qa/still_review.mjs data/<id>.beats.json [--out out/<id>-s<N>] [--rate 字每秒] [--targets 16x9,9x16] [--prev <上一轮的 review.json>]
 //   --out：默认 out/<id>/stills；每轮审稿换一个目录（out/<id>-s1、-s2……），下一轮把上一轮的 review.json 用 --prev 带上，审稿人逐条标改好没有
 // 时间是估的（试编），「落后」「停顿」以真配音为准；声音、语气、运动是否流畅，留给配音和整片之后的最后一次全量审片。
+import '../compiler/node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dryLayout } from '../compiler/dry_layout.mjs';
 import { renderTimelineStills } from './stills.mjs';
 import { PY_QA } from './pyenv.mjs';
-import { cameraAt } from '../src/timeline.ts';
+const { cameraAt } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const T0 = Date.now(), secs = () => ((Date.now() - T0) / 1000).toFixed(0);

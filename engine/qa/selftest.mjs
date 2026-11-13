@@ -854,44 +854,76 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
 // 贴视频（clip，用户 2026-11-13）：实验画面这类证据贴在纸上放。片子要在、截的那段要在片子里面、出处要齐（许可只收能改编能商用的）；
 // 编译时它和贴图一样当一块图形，而且放完之前镜头不能把它移出取景框；分段渲染认片子的内容
 {
-  const CLP = 'public/clips/_selftest.mp4', NAMES = ['贴视频的片子不在 public/clips/ 里', '贴视频截的一段超出片子长度', '贴视频的 play 不在这句旁白里', '贴视频没写出处', '贴的素材许可带 NC（不许商用）',
-    '不是自己做的素材没写原始网址', 'CC BY 的素材没写作者', '贴视频整个盖在一段文字上（关闭自动修复）', '贴视频还没放完，镜头就把它移出取景框（关闭自动修复）', '贴视频的片子编译后换过（渲染前核对）', '换了片子，分段渲染的指纹要变'];
+  // 两段自测片子：20 秒的常规片；比整集还长几秒的长片（查「截的一段比整集还长」，5 帧/秒，长也不占地方）
+  const CLP = 'public/clips/_selftest.mp4', LONG = 'public/clips/_selftest-long.mp4', longSec = Math.ceil(base.duration) + 5;
+  const NAMES = ['贴视频的片子不在 public/clips/ 里', '贴视频截的一段超出片子长度', '贴视频截的一段 to 在 from 前面', '贴视频的倍速超出 0.25–4', '贴视频放得太长（建议）', '贴视频的 play 不在这句旁白里',
+    '贴视频没写出处', '贴的素材出处写成了示意数值（kind: example）', '贴的素材许可带 NC（不许商用）', '不是自己做的素材没写原始网址', '不是自己做的素材没存证（source）', 'CC BY 的素材没写作者', 'CC BY 的署名里没写作者',
+    '贴视频整个盖在一段文字上（关闭自动修复）', '贴视频还没放完，镜头就把它移出取景框（关闭自动修复）', '贴视频截的一段比整集还长（定格会被截住）', '回描贴视频只描外轮廓（卡片里的横线不画）',
+    '贴视频的片子编译后换过（渲染前核对）', '换了片子，分段渲染的指纹要变'];
   fs.mkdirSync('public/clips', { recursive: true });
   const ff = spawnSync(PY_QA, ['-c', 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())'], { encoding: 'utf8' }).stdout?.trim() || 'ffmpeg';
-  const made = spawnSync(ff, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x8a6d4f:s=160x90:d=2:r=30', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', CLP], { encoding: 'utf8' });
-  if (made.status !== 0) for (const n of NAMES) skip(n, '生成不了自测用的片子（没有 ffmpeg）');
+  const enc = (out, sec, fps) => spawnSync(ff, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x8a6d4f:s=160x90:d=${sec}:r=${fps}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', out], { encoding: 'utf8' }).status === 0;
+  if (!enc(CLP, 20, 30) || !enc(LONG, longSec, 5)) for (const n of NAMES) skip(n, '生成不了自测用的片子（没有 ffmpeg）');
   else try {
     // 注入挑第一句写了字的句子（不推近、不回看）：贴在它上方够远的地方，后面几句的镜头才会离开它
     const host = (b) => b.phrases.find((q) => !q.camera && !q.revisit?.length && q.role !== 'aha' && q.actions?.some((a) => a.type === 'text' && typeof a.x === 'number')) ?? b.phrases[0];
-    const own = { media: '_selftest.mp4', license: 'own', origin: '自测生成的 2 秒纯色片' };
+    const own = { media: '_selftest.mp4', license: 'own', origin: '自测生成的 20 秒纯色片' }, web = { media: '_selftest.mp4', license: 'public-domain', origin: 'https://example.org/clip', cite: '示例片子（公有领域）' };
     const paste = (b, extra = {}, fact = own) => {
       const p = host(b);
       if (fact) b.facts = [...(b.facts ?? []), fact];
-      p.actions.push({ id: '_clp', type: 'clip', at: p.actions[0]?.at ?? p.text.slice(0, 2), src: '_selftest.mp4', cx: 2600, cy: 400, w: 300, ...extra });
+      p.actions.push({ id: '_clp', type: 'clip', at: p.actions[0]?.at ?? p.text.slice(0, 2), src: '_selftest.mp4', cx: 2600, cy: 400, w: 300, to: 2, ...extra });
     };
-    expectBeats(NAMES[0], (b) => paste(b, { src: '_selftest-missing.mp4' }, { ...own, media: '_selftest-missing.mp4' }), validate, /找不到 public\/clips\/_selftest-missing\.mp4/);
-    expectBeats(NAMES[1], (b) => paste(b, { from: 0.5, to: 9 }), validate, /片子只有 2\.00 秒，放不到第 9 秒/);
-    expectBeats(NAMES[2], (b) => paste(b, { play: '旁白里没有这个词' }), validate, /「旁白里没有这个词」不在这句旁白里/);
-    expectBeats(NAMES[3], (b) => paste(b, {}, null), validate, /「_selftest\.mp4」没有出处/);
-    expectBeats(NAMES[4], (b) => paste(b, {}, { ...own, license: 'CC-BY-NC-4.0', origin: 'https://example.org/clip', cite: '示例 CC BY-NC 4.0' }), validate, /「CC-BY-NC-4\.0」不收/);
-    expectBeats(NAMES[5], (b) => paste(b, {}, { ...own, license: 'public-domain', origin: '网上找的', cite: '示例片子（公有领域）' }), validate, /写原始页面的网址/);
-    expectBeats(NAMES[6], (b) => paste(b, {}, { media: '_selftest.mp4', license: 'CC-BY-4.0', origin: 'https://example.org/clip', cite: '示例片子 CC BY 4.0' }), validate, /CC-BY-4\.0 要署名：写作者/);
+    const N = [...NAMES];
+    expectBeats(N.shift(), (b) => paste(b, { src: '_selftest-missing.mp4' }, { ...own, media: '_selftest-missing.mp4' }), validate, /找不到 public\/clips\/_selftest-missing\.mp4/);
+    expectBeats(N.shift(), (b) => paste(b, { from: 0.5, to: 99 }), validate, /片子只有 20\.00 秒，放不到第 99 秒/);
+    expectBeats(N.shift(), (b) => paste(b, { from: 1.5, to: 1 }), validate, /要在 from（1\.5）之后/);
+    expectBeats(N.shift(), (b) => paste(b, { rate: 8 }), validate, /倍速在 0\.25–4 之间/);
+    expectBeats(N.shift(), (b) => paste(b, { to: 20 }), validate, /超过 15 秒/, { advice: true });
+    expectBeats(N.shift(), (b) => paste(b, { play: '旁白里没有这个词' }), validate, /「旁白里没有这个词」不在这句旁白里/);
+    expectBeats(N.shift(), (b) => paste(b, {}, null), validate, /「_selftest\.mp4」没有出处/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { media: '_selftest.mp4', kind: 'example' }), validate, /media 不能和 kind: example 写在一起/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, license: 'CC-BY-NC-4.0', cite: '示例 CC BY-NC 4.0' }), validate, /「CC-BY-NC-4\.0」不收/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, origin: '网上找的' }), validate, /写原始页面的网址/);
+    expectBeats(N.shift(), (b) => paste(b, {}, web), validate, /存证：/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, license: 'CC-BY-4.0', cite: '示例片子 CC BY 4.0' }), validate, /CC-BY-4\.0 要署名：写作者/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, license: 'CC-BY-4.0', author: '某作者', cite: '示例片子 CC BY 4.0' }), validate, /cite 里写上作者「某作者」/);
     // 编译：小屏幕整个盖在一段文字上（文字落在屏幕里面），版面检查要报
-    expectBeats(NAMES[7], (b) => {
+    expectBeats(N.shift(), (b) => {
       const p = host(b), t = p.actions.find((a) => a.type === 'text' && typeof a.x === 'number');
       paste(b, { at: t.at, cx: t.x + 60, cy: t.y, w: 900 });
     }, compileNoFix(TGT), /离 _clp|_clp.*离/);
     // 编译：第一句贴在字的上方，慢放成 8 秒，后面几句镜头往下走，它还没放完就出了取景框
-    expectBeats(NAMES[8], (b) => {
+    expectBeats(N.shift(), (b) => {
       const p = host(b), t = p.actions.find((a) => a.type === 'text' && typeof a.x === 'number');
       paste(b, { at: t.at, cx: t.x, cy: t.y - 430, w: 260, rate: 0.25 });
     }, compileNoFix(TGT), /_clp 还没放完/);
+    // 编译：片子比整集还长，4 倍速放完整段，片子里走过的秒数超过整集（渲染时定格会被截在整集的帧数以内）
+    expectBeats(N.shift(), (b) => paste(b, { src: '_selftest-long.mp4', to: undefined, rate: 4 }, { ...own, media: '_selftest-long.mp4' }), compileNoFix(TGT), /截的一段在片子里走 .*比整集.*还长/);
+    // 编译：回描贴视频，只描外轮廓（卡片里那排横线只给版面检查用；PR #71 审查：原来会把二十几条横线也描出来）
+    {
+      const name = N.shift();
+      if (SKIP.has('compile')) skip(name, '这次没改编译器和分镜校验（--skip compile）');
+      else {
+        const b = structuredClone(beatsSrc);
+        b.id = '_selftest';
+        for (const a of acts(b)) { for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov); delete a.layout; }
+        paste(b);
+        const later = b.phrases.slice(b.phrases.indexOf(host(b)) + 1).find((q) => q.actions?.length);
+        later?.actions.push({ id: '_rt', type: 'retrace', at: later.actions[0].at, target: '_clp' });
+        fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+        const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT], { encoding: 'utf8' }), tp = `build/_selftest-${TGT}.timeline.json`;
+        const n = fs.existsSync(tp) ? JSON.parse(fs.readFileSync(tp, 'utf8')).strokes.filter((s) => s.action === '_rt').length : -1;
+        record(name, later && n > 0 && n <= 2, `回描笔画 ${n} 笔（只描外轮廓应是 2 笔）\n${(r.stdout || '') + (r.stderr || '')}`);
+        fs.rmSync('data/_selftest.beats.json', { force: true });
+        for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+      }
+    }
     // 渲染前：编译后换了片子，分段渲染、静帧链接片子时要拦下（不然分段缓存拿旧指纹复用旧画面）
     {
       const { linkClips } = await import('../compiler/clips.mjs'), dir = fs.mkdtempSync(path.resolve('build/_selftest-pub-'));
       let msg = '';
       try { linkClips({ clips: [{ id: '_clp', src: 'clips/_selftest.mp4', sha: '0'.repeat(64) }] }, dir); } catch (e) { msg = e.message; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-      record(NAMES[9], /编译之后换过了/.test(msg), msg || '没有报错');
+      record(N.shift(), /编译之后换过了/.test(msg), msg || '没有报错');
     }
     // 分段指纹：同一条时间线只换片子的内容指纹，用得到它的段指纹要变
     {
@@ -899,9 +931,9 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
       tl.clips = [{ id: '_clp', src: 'clips/_selftest.mp4', sha: 'a', duration: 2, cx: c.x, cy: c.y, w: 200, h: 112, tilt: 2, t0: 0.5, t1: 1, play: 1, end: 3, from: 0, to: 2, rate: 1, bezel: '#3b3632', tape: '#e6d7ad', shade: '#3c2a12', warm: { sepia: 0, saturate: 1 } }];
       const a = JSON.stringify(sliceFor(tl, 0, tl.durationInFrames));
       tl.clips[0].sha = 'b';
-      record(NAMES[10], a !== JSON.stringify(sliceFor(tl, 0, tl.durationInFrames)), 'sliceFor 没带上片子的指纹');
+      record(N.shift(), a !== JSON.stringify(sliceFor(tl, 0, tl.durationInFrames)), 'sliceFor 没带上片子的指纹');
     }
-  } finally { fs.rmSync(CLP, { force: true }); }
+  } finally { fs.rmSync(CLP, { force: true }); fs.rmSync(LONG, { force: true }); }
 }
 // 多音字：结构助词「地」（用户听 E02 v5：「细细地讲」念成了 dì）
 expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b) => {

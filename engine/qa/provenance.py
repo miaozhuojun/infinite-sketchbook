@@ -68,7 +68,7 @@ rec = {
     "engine": engine_rev(), "brand": brand["name"], "copyright": brand["copyright"],
 }
 # 片中贴的别人的、或自己另做的素材（贴视频、不是封面的贴图）：出处、许可和贴进去的那个文件的指纹，一起记进存证
-clip_sha = {Path(k["src"]).name: k["sha"] for k in tl.get("clips") or []}
+clip_sha = {k["src"].split("/", 1)[1]: k["sha"] for k in tl.get("clips") or []}  # src 是 clips/<文件名>（文件名可以带子目录）
 media = [{"file": m, "license": f.get("license"), "origin": f.get("origin"), **({"author": f["author"]} if f.get("author") else {}),
           **({"evidence": f["source"]} if f.get("source") else {}), **({"sha256": clip_sha[m]} if m in clip_sha else {})}
          for f in beats.get("facts") or [] for m in ([f["media"]] if isinstance(f.get("media"), str) else f.get("media") or [])]

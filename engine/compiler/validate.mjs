@@ -340,13 +340,14 @@ export function validateBeats(beats, style, reg) {
   const facts = beats.facts || [];
   for (const tk of tokens) if (!facts.some((f) => (f.match || []).includes(tk))) E('facts', `旁白里的「${tk}」没有出处，也没有标为示意数值（kind: example）`);
   facts.forEach((f, i) => {
-    if (f.kind === 'example') return;
-    // 贴的东西的出处（media）：许可只收能改编、能商用的，不是自己做的要有原始网址、署名和存证（compiler/clips.mjs）
+    // 贴的东西的出处（media）：许可只收能改编、能商用的，不是自己做的要有原始网址、署名和存证（compiler/clips.mjs）。
+    // 先于 kind: example 查：示意数值的那种 example 管不到贴的东西，写在一起就把许可检查整条跳过了（PR #71 审查）
     if (f.media !== undefined) {
+      if (f.kind === 'example') E(`facts[${i}].kind`, 'media 不能和 kind: example 写在一起：贴的东西不是示意数值，照样要写 license、origin');
       if (!mediaOf(f).length || mediaOf(f).some((m) => typeof m !== 'string' || !m)) E(`facts[${i}].media`, '写贴图或贴视频的文件名（一个字符串，或几个文件名的数组）');
       for (const [k, msg] of mediaFactIssues(f)) E(`facts[${i}].${k}`, msg);
       if (!f.source) return; // 自己做的：origin 写清怎么做的就够；别人的缺存证上面已经报了
-    }
+    } else if (f.kind === 'example') return;
     if (!f.source) { E(`facts[${i}]`, '需要 source（项目内资料文件#锚点）或 kind: example'); return; }
     const [file, anchor] = f.source.split('#');
     const fp = path.resolve(PROJECT, file);

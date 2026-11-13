@@ -148,14 +148,15 @@ const buildOne = (a) => {
     const sk = a.type === 'clip' ? clipOf(a) : stickerOf(a), o = stickerOutline(sk), ink = (pts) => ({ kind: 'shape', color: style.palette.ink, width: style.ink.penWidth, d: 'M' + pts.map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' L') });
     const rows = [], step = Math.max(6, (style.type.labelGap ?? 14) * 0.9), [p0, p1, p2, p3] = o; // 外轮廓：左上、右上、右下、左下（含胶带）
     // u 是沿左边的比例：从半个间距起（原来从 step / 2 起，u 一开始就 ≥ 1，一排横线都没铺，卡片里面的字照样不报）
-    for (let u = step / 2 / dist(p0, p3); u < 1; u += step / dist(p0, p3)) rows.push(ink([[p0[0] + (p3[0] - p0[0]) * u, p0[1] + (p3[1] - p0[1]) * u], [p1[0] + (p2[0] - p1[0]) * u, p1[1] + (p2[1] - p1[1]) * u]]));
+    for (let u = step / 2 / dist(p0, p3); u < 1; u += step / dist(p0, p3)) rows.push({ ...ink([[p0[0] + (p3[0] - p0[0]) * u, p0[1] + (p3[1] - p0[1]) * u], [p1[0] + (p2[0] - p1[0]) * u, p1[1] + (p2[1] - p1[1]) * u]]), inner: true });
     geo.set(a.id, [ink(o), ...rows]);
     return;
   }
   if (a.type === 'retrace') {
-    // 回描：同一支笔沿原路径错开零点几到两个像素再描几遍（不换粗笔，不另起一块墨迹）
+    // 回描：同一支笔沿原路径错开零点几到两个像素再描几遍（不换粗笔，不另起一块墨迹）。
+    // 回描贴图、贴视频只描外轮廓：卡片里面那排横线（inner）只给版面检查用，不是画出来的（PR #71 审查）
     const offs = style.ink.retraceOffsets.slice(0, a.passes || 2);
-    geo.set(a.id, geo.get(a.target).flatMap((s) => offs.map((o) => ({ ...s, kind: 'shape', group: a.target, d: offsetPath(s.d, o) }))));
+    geo.set(a.id, geo.get(a.target).filter((s) => !s.inner).flatMap((s) => offs.map((o) => ({ ...s, kind: 'shape', group: a.target, d: offsetPath(s.d, o) }))));
   } else if (a.type === 'text' && a.after) {
     // 接写：同一行，左对齐在前文墨迹右边，间距和同一段文字里的字距一样（公式「1×4」「+1×3」接起来像一串）；
     // 要空一格就在文字开头写空格。前文被放大、挪动后跟着重排
@@ -949,7 +950,7 @@ for (const s of strokes) {
   }
 }
 
-const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold) + PEN.tail;
+const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold, ...clips.map((k) => k.end + 0.3)) + PEN.tail; // 贴视频放完再收尾（PR #71 审查：最后一句里慢放的片子会被片尾卡盖住）
 // 片尾参考资料卡：正片说完以后单独停几秒，列出这一集用到的资料（facts 的 cite，按第一次出现的顺序去重），
 // 再加分镜 endCard.lines 里的几行（比如讲义怎么领）。每一集都有：写了 cite 就自动生成；endCard: false 关掉。
 // 卡片是屏幕层（不随镜头），整张纸色底盖住画面，画在取景框里（不进平台界面）。字号按画幅短边算
@@ -969,6 +970,11 @@ const endCard = (() => {
   return { t0: r2(endBody), t1: r2(endBody + sec), fade: EC.fade ?? 0.6, title: refs.length ? B.title ?? EC.title ?? '参考资料' : B.title ?? '', refs, lines, size, titleSize: Math.round(size * 1.5) };
 })();
 const end = endCard ? endCard.t1 : endBody;
+// 渲染时片子的时钟定在「已经放了多少秒」那一帧（Freeze），Remotion 把它截在整集的帧数以内：截的一段在片子里走过的秒数比整集还长，就会停在错的帧上
+for (const k of clips) {
+  const ran = Math.min(k.to, k.duration - 0.05) - k.from;
+  if (ran * FPS > Math.ceil(end * FPS) - 1) problems.push(`贴视频 ${k.id}：截的一段在片子里走 ${r2(ran)} 秒，比整集（${r2(end)} 秒）还长，渲染会停在错的帧上：截短一点（from/to）`);
+}
 // 离场：写完最后一笔，抬笔沿压过内容最少的方向出画，最后整支笔都在画外（审片 v9：原来按世界坐标往右上挪 1200，
 // 16x9 镜头拉远后推不出画面，笔扫过算式和灯，停在右缘直到片尾）。候选方向不往下走，免得划过字幕
 const exitTo = (() => {

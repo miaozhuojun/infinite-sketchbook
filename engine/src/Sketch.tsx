@@ -261,7 +261,8 @@ const StickerCard: React.FC<{ s: Sticker; t: number }> = ({ s, t }) => {
 };
 
 // ---------- 贴视频（clip）：纸上的一块小屏幕（世界层，在墨迹和贴图下面）。落下和贴图同一套动作和外轮廓，边框是深色细边 ----------
-// 画面按 clipTime 取片子那一刻的帧：Freeze 把片子的时钟定在那一帧（片子的第 clipTime 秒），OffthreadVideo 渲染时逐帧精确取帧，同一帧两次渲染一样。
+// 画面按 clipTime 取片子那一刻的帧，OffthreadVideo 渲染时逐帧精确取帧，同一帧两次渲染一样。片子的起点交给 trimBefore，
+// Freeze 只定「已经放了多少秒」：Remotion 把 Freeze 的帧号截在整集的帧数以内，直接定片子里的绝对秒数，长素材截后面一段时会停在错的帧上（PR #71 审查）。
 // 片子调成纸面的暖色（style.clip.warm），再和整个画面一起过全局调色、暗角和颗粒。不出声
 const ClipScreen: React.FC<{ k: Clip; t: number; fps: number }> = ({ k, t, fps }) => {
   if (t < k.t0) return null;
@@ -272,8 +273,8 @@ const ClipScreen: React.FC<{ k: Clip; t: number; fps: number }> = ({ k, t, fps }
       <div style={box(-W / 2 + 6 + up * 14, -H / 2 + 8 + up * 20, W, H, { borderRadius: b * 0.6, background: k.shade, opacity: STICKER.shadow * (0.6 + 0.4 * e), filter: 'blur(7px)' })} />
       <div style={box(-W / 2, -H / 2, W, H, { borderRadius: b * 0.6, background: k.bezel })} />
       <div style={box(-W / 2 + b, -H / 2 + b, k.w, k.h, { overflow: 'hidden', borderRadius: 2, background: k.bezel })}>
-        <Freeze frame={clipTime(k, t) * fps}>
-          <OffthreadVideo src={staticFile(k.src)} muted style={{ width: '100%', height: '100%', objectFit: 'cover', filter: `sepia(${k.warm.sepia}) saturate(${k.warm.saturate})` }} />
+        <Freeze frame={(clipTime(k, t) - k.from) * fps}>
+          <OffthreadVideo src={staticFile(k.src)} muted trimBefore={k.from * fps} style={{ width: '100%', height: '100%', objectFit: 'cover', filter: `sepia(${k.warm.sepia}) saturate(${k.warm.saturate})` }} />
         </Freeze>
       </div>
       {stickerTapes(k).map((p, i) => <div key={i} style={box(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, { background: k.tape, opacity: 0.78, transform: `rotate(${p.ang}deg)` })} />)}

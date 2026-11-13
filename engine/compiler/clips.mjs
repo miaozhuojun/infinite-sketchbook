@@ -43,10 +43,20 @@ function boxes(buf) {
 }
 const child = (buf, type) => (buf ? boxes(buf).find((b) => b.type === type)?.body : undefined);
 
-// 片子的画面宽高（按 tkhd 的旋转矩阵转过来：手机竖拍的片子存的是横的）、时长（视频轨的 mdhd）和编码
+// 片子的画面宽高（按 tkhd 的旋转矩阵转过来：手机竖拍的片子存的是横的）、时长和编码。
+// 时长取视频轨的 mdhd；有编辑列表（elst：ffmpeg -c copy 剪过的、手机相册里剪过的）就取它播出来的长度，两者取短的（PR #71 审查）
 export function clipInfo(file) {
   const moov = readMoov(file);
   if (!moov) throw new Error('找不到 moov（不是 MP4/MOV，或者文件不完整）');
+  const mvhd = child(moov, 'mvhd'), mts = mvhd ? (mvhd[0] === 1 ? mvhd.readUInt32BE(20) : mvhd.readUInt32BE(12)) : 0;
+  const edited = (trak) => { // 编辑列表的总长（秒，按 mvhd 的时间单位）；没有就是 null
+    const elst = child(child(trak, 'edts'), 'elst');
+    if (!elst || !(mts > 0) || elst.length < 8) return null;
+    const v1 = elst[0] === 1, n = elst.readUInt32BE(4), size = v1 ? 20 : 12;
+    let sum = 0;
+    for (let i = 0, o = 8; i < n && o + size <= elst.length; i++, o += size) sum += v1 ? Number(elst.readBigUInt64BE(o)) : elst.readUInt32BE(o);
+    return sum > 0 ? sum / mts : null;
+  };
   for (const trak of boxes(moov).filter((b) => b.type === 'trak').map((b) => b.body)) {
     const mdia = child(trak, 'mdia'), hdlr = child(mdia, 'hdlr');
     if (!hdlr || hdlr.toString('latin1', 8, 12) !== 'vide') continue;
@@ -61,7 +71,8 @@ export function clipInfo(file) {
     const codec = stsd && stsd.length >= 16 ? stsd.toString('latin1', 12, 16) : '?';
     if (!(w0 > 0 && h0 > 0)) throw new Error('视频轨没有画面尺寸');
     if (!(scale > 0 && dur > 0)) throw new Error('读不出时长（分片 MP4？先转成普通 MP4：ffmpeg -i 原片 -c copy -movflags +faststart 新片.mp4）');
-    return { w: turned ? h0 : w0, h: turned ? w0 : h0, duration: dur / scale, codec };
+    const ed = edited(trak);
+    return { w: turned ? h0 : w0, h: turned ? w0 : h0, duration: ed ? Math.min(ed, dur / scale) : dur / scale, codec };
   }
   throw new Error('没有视频轨');
 }
@@ -106,7 +117,7 @@ export function linkClips(tl, publicDir) {
 // license 只收这几种：own（自己拍的、自己做的、程序生成的）、public-domain（公有领域）、CC0-1.0，和允许改编、允许商用、只要求署名的 CC BY。
 // 带 NC（不许商用：作品要在四个平台发）、ND（不许改编：要裁、调色、歪着贴）的不收；SA（相同方式共享）也不收：
 // 裁剪调色以后是改编，改编的部分要按 CC BY-SA 放出去，和作品保留所有权利冲突
-export const MEDIA_LICENSES = ['own', 'public-domain', 'CC0-1.0', 'CC-BY-4.0', 'CC-BY-3.0', 'CC-BY-2.0'];
+export const MEDIA_LICENSES = ['own', 'public-domain', 'CC0-1.0', 'CC-BY-4.0', 'CC-BY-3.0', 'CC-BY-2.5', 'CC-BY-2.0', 'CC-BY-1.0'];
 export const mediaOf = (f) => (Array.isArray(f?.media) ? f.media : typeof f?.media === 'string' ? [f.media] : []);
 // 这条 media 出处缺了什么：返回 [字段, 说明] 的列表（空列表就是齐了）。source（存证）在不在由分镜校验按项目路径另查
 export function mediaFactIssues(f) {

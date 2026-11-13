@@ -951,13 +951,14 @@ for (const s of strokes) {
 }
 
 const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold, ...clips.map((k) => k.end + 0.3)) + PEN.tail; // 贴视频放完再收尾（PR #71 审查：最后一句里慢放的片子会被片尾卡盖住）
-// 片尾参考资料卡：正片说完以后单独停几秒，列出这一集用到的资料（facts 的 cite，按第一次出现的顺序去重），
+// 片尾参考资料卡：正片说完以后单独停几秒，列出这一集用到的资料（不带 media 的 facts 的 cite，按第一次出现的顺序去重；贴的东西的署名不上卡），
 // 再加分镜 endCard.lines 里的几行（比如讲义怎么领）。每一集都有：写了 cite 就自动生成；endCard: false 关掉。
 // 卡片是屏幕层（不随镜头），整张纸色底盖住画面，画在取景框里（不进平台界面）。字号按画幅短边算
 const endCard = (() => {
   const EC = style.endCard ?? {}, B = beats.endCard ?? {};
   if (beats.endCard === false) return null;
-  const refs = [...new Set((beats.facts ?? []).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])).map(String))];
+  // 贴的东西的署名（facts 里写了 media 的那一条）只记在内部（时间线、存证、分镜），不上片尾卡：发布的作品里不写照片、素材出处（用户 2026-11-13）
+  const refs = [...new Set((beats.facts ?? []).filter((f) => f.media === undefined).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])).map(String))];
   const lines = (B.lines ?? []).map(String);
   if (!refs.length && !lines.length) return null;
   const sec = Math.max(1, B.sec ?? EC.sec ?? 5), k = Math.min(TGT.w, TGT.h) / 1080;

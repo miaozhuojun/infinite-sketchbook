@@ -128,7 +128,7 @@ export function mediaFactIssues(f) {
   if (lic && lic !== 'own') {
     if (!f.source) out.push(['source', '存证：把原始页面（看得到作者和许可的那一页）存成 PDF 或 HTML 放进项目，写它的路径（「文件#锚点」，锚点可省）']);
     const cite = (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : []).join(' ');
-    if (!cite) out.push(['cite', '写片尾资料卡上的署名（作者、出处、许可）']);
+    if (!cite) out.push(['cite', '写署名（作者、出处、许可）：只记在内部（分镜、时间线、存证），不上片尾资料卡']);
     if (/^CC-BY/.test(lic)) {
       if (typeof f.author !== 'string' || !f.author.trim()) out.push(['author', `${lic} 要署名：写作者`]);
       else if (cite && (!cite.includes(f.author.trim()) || !/CC[\s-]?BY/i.test(cite))) out.push(['cite', `${lic} 要署名：cite 里写上作者「${f.author.trim()}」和许可（如 CC BY 4.0）`]);

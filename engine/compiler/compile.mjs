@@ -957,7 +957,8 @@ const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOvervie
 const endCard = (() => {
   const EC = style.endCard ?? {}, B = beats.endCard ?? {};
   if (beats.endCard === false) return null;
-  const refs = [...new Set((beats.facts ?? []).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])).map(String))];
+  // 贴的东西的署名（facts 里写了 media 的那一条）只记在内部（时间线、存证、分镜），不上片尾卡：发布的作品里不写照片、素材出处（用户 2026-11-13）
+  const refs = [...new Set((beats.facts ?? []).filter((f) => f.media === undefined).flatMap((f) => (Array.isArray(f.cite) ? f.cite : f.cite ? [f.cite] : [])).map(String))];
   const lines = (B.lines ?? []).map(String);
   if (!refs.length && !lines.length) return null;
   const sec = Math.max(1, B.sec ?? EC.sec ?? 5), k = Math.min(TGT.w, TGT.h) / 1080;

@@ -951,7 +951,7 @@ for (const s of strokes) {
 }
 
 const endBody = Math.max(audioEndAll, penFree + 0.8, lastCamEnd + M.finalOverviewHold, ...clips.map((k) => k.end + 0.3)) + PEN.tail; // 贴视频放完再收尾（PR #71 审查：最后一句里慢放的片子会被片尾卡盖住）
-// 片尾参考资料卡：正片说完以后单独停几秒，列出这一集用到的资料（facts 的 cite，按第一次出现的顺序去重），
+// 片尾参考资料卡：正片说完以后单独停几秒，列出这一集用到的资料（不带 media 的 facts 的 cite，按第一次出现的顺序去重；贴的东西的署名不上卡），
 // 再加分镜 endCard.lines 里的几行（比如讲义怎么领）。每一集都有：写了 cite 就自动生成；endCard: false 关掉。
 // 卡片是屏幕层（不随镜头），整张纸色底盖住画面，画在取景框里（不进平台界面）。字号按画幅短边算
 const endCard = (() => {

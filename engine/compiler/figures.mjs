@@ -3,13 +3,16 @@
 // --ink kai 改用楷体字形轮廓（和渲染器的 kai 模式一样：有 kai 数据的笔画都用它），
 // 所以放多大都清楚。纸色和方格照风格规范；铅笔、字幕、水印、镜头都不要。
 // 每一节一张：取这一节画的笔画的范围（四周留白 pad），把到这一节结束时已画在这个范围里的笔画都画上（这一节接着上一节那块纸画时，前面画的也在）；
-// 光晕按那一刻亮着的画。另出一张全集纸面 all.svg。
+// 光晕按那一刻亮着的画；贴视频画那一刻屏幕上的那一帧（ffmpeg 从片子里取，调成和成片一样的暖色）。另出一张全集纸面 all.svg。
 // 用法：node compiler/figures.mjs build/<id>-<画幅>.timeline.json --out <目录> [--pad 80] [--ink mono|kai]
 import './node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { getStroke } from 'perfect-freehand';
-const { STICKER, stickerCard, stickerOutline, stickerTapes } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
+import { PY_QA } from '../qa/pyenv.mjs';
+const { STICKER, stickerCard, stickerOutline, stickerTapes, clipTime, pastedOf } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const args = process.argv.slice(2);
 const tlPath = args[0], opt = (k, d) => (args.includes(k) ? args[args.indexOf(k) + 1] : d);
@@ -38,8 +41,29 @@ const box = (s) => {
 const union = (bs) => bs.reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
 const hit = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 const strokes = tl.strokes.filter((s) => s.pts?.length).map((s) => ({ ...s, box: box(s) }));
-// 贴图的外轮廓也算进每节插图的范围（不切半截）
-const stickerBoxes = (tl.stickers ?? []).map((k) => { const o = stickerOutline(k), xs = o.map((q) => q[0]), ys = o.map((q) => q[1]); return { id: k.id, t1: k.t1, box: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } }; });
+// 贴图、贴视频的外轮廓也算进每节插图的范围（不切半截）
+const stickerBoxes = pastedOf(tl).map((k) => { const o = stickerOutline(k), xs = o.map((q) => q[0]), ys = o.map((q) => q[1]); return { id: k.id, t1: k.t1, box: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } }; });
+
+// 贴视频在讲义里画成那一刻屏幕上的一帧：ffmpeg（画面检查那个 Python 环境里带的）取帧成 JPEG 嵌进去；取不到就画一块空屏幕
+const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+let FF;
+const ffmpeg = () => (FF ??= (() => { const r = spawnSync(PY_QA, ['-c', 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())'], { encoding: 'utf8' }); return r.status === 0 ? r.stdout.trim() : 'ffmpeg'; })());
+const posters = new Map();
+const posterOf = (k, t) => {
+  const at = clipTime(k, t), key = `${k.src}@${at}`;
+  if (!posters.has(key)) {
+    const r = spawnSync(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-ss', at.toFixed(3), '-i', path.join(ENGINE, 'public', k.src), '-frames:v', '1', '-vf', 'scale=min(iw\\,1600):-2', '-q:v', '3', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'], { maxBuffer: 1 << 26 });
+    posters.set(key, r.status === 0 && r.stdout?.length ? `data:image/jpeg;base64,${r.stdout.toString('base64')}` : null);
+    if (!posters.get(key)) console.log(`[提醒] 贴视频 ${k.id}：取不到第 ${at.toFixed(2)} 秒那一帧（public/${k.src}），讲义里画成空屏幕`);
+  }
+  return posters.get(key);
+};
+// 和成片一样的暖色：CSS sepia() 的矩阵（Filter Effects 规范）再接 saturate，在 sRGB 里算
+const warmFilter = (k) => {
+  const a = 1 - k.warm.sepia;
+  const m = [0.393 + 0.607 * a, 0.769 - 0.769 * a, 0.189 - 0.189 * a, 0, 0, 0.349 - 0.349 * a, 0.686 + 0.314 * a, 0.168 - 0.168 * a, 0, 0, 0.272 - 0.272 * a, 0.534 - 0.534 * a, 0.131 + 0.869 * a, 0, 0, 0, 0, 0, 1, 0];
+  return `<filter id="warm-${k.id}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="${m.map((v) => +v.toFixed(4)).join(' ')}"/><feColorMatrix type="saturate" values="${k.warm.saturate}"/></filter>`;
+};
 
 function svg(b, tEnd, title) {
   const x = b.x0 - PAD, y = b.y0 - PAD, w = b.x1 - b.x0 + 2 * PAD, h = b.y1 - b.y0 + 2 * PAD, g = st.paper.gridSize;
@@ -47,6 +71,7 @@ function svg(b, tEnd, title) {
   const fx = (tl.effects ?? []).filter((e) => e.t1 <= tEnd + 1e-6 && (e.t2 === undefined || e.t2 > tEnd));
   const view = { x0: x, y0: y, x1: x + w, y1: y + h };
   const sk = (tl.stickers ?? []).filter((k) => k.t1 <= tEnd + 1e-6 && hit(stickerBoxes.find((q) => q.id === k.id).box, view)); // 贴图（被依赖那一集的封面），按落定的样子画；不在这张图范围里的不嵌（一张就几百 KB）
+  const cl = (tl.clips ?? []).filter((k) => k.t1 <= tEnd + 1e-6 && hit(stickerBoxes.find((q) => q.id === k.id).box, view)); // 贴视频：画那一刻屏幕上的那一帧
   // 同一种墨色的笔画合成一层再整体上透明度（和成片一样，交叉处不叠黑）；墨色在最下
   const layers = new Map([[st.palette.ink, []]]);
   for (const s of shown) { if (!layers.has(s.color)) layers.set(s.color, []); layers.get(s.color).push(s); }
@@ -54,6 +79,7 @@ function svg(b, tEnd, title) {
 <title>${title.replace(/[<&]/g, '')}</title>
 <defs>
 <pattern id="grid" width="${g}" height="${g}" patternUnits="userSpaceOnUse" x="10" y="18"><path d="M${g} 0H0V${g}" fill="none" stroke="${st.palette.grid}" stroke-width="1.1" opacity="${st.paper.gridOpacity}"/></pattern>
+${cl.map(warmFilter).join('\n')}
 ${fx.map((e) => `<radialGradient id="g-${e.id}"><stop offset="0" stop-color="${e.color}" stop-opacity="0.7"/><stop offset="0.5" stop-color="${e.color}" stop-opacity="0.28"/><stop offset="1" stop-color="${e.color}" stop-opacity="0"/></radialGradient>`).join('\n')}
 </defs>
 <rect x="${f2(x)}" y="${f2(y)}" width="${f2(w)}" height="${f2(h)}" fill="${st.palette.paper}"/>
@@ -61,6 +87,10 @@ ${fx.map((e) => `<radialGradient id="g-${e.id}"><stop offset="0" stop-color="${e
 ${sk.map((k) => { const { W, H } = stickerCard(k), b = STICKER.border * k.w;
     const tapes = stickerTapes(k).map((p) => `<rect x="${f2(p.x - p.w / 2)}" y="${f2(p.y - p.h / 2)}" width="${f2(p.w)}" height="${f2(p.h)}" fill="${k.tape}" opacity="0.78" transform="rotate(${p.ang} ${f2(p.x)} ${f2(p.y)})"/>`).join('');
     return `<g transform="translate(${f2(k.cx)} ${f2(k.cy)}) rotate(${k.tilt})"><rect x="${f2(-W / 2)}" y="${f2(-H / 2)}" width="${f2(W)}" height="${f2(H)}" rx="3" fill="${k.card}"/><image href="${k.href}" x="${f2(-W / 2 + b)}" y="${f2(-H / 2 + b)}" width="${f2(k.w)}" height="${f2(k.h)}" preserveAspectRatio="xMidYMid slice"/>${tapes}</g>`;
+  }).join('\n')}
+${cl.map((k) => { const { W, H } = stickerCard(k), b = STICKER.border * k.w, img = posterOf(k, tEnd);
+    const tapes = stickerTapes(k).map((p) => `<rect x="${f2(p.x - p.w / 2)}" y="${f2(p.y - p.h / 2)}" width="${f2(p.w)}" height="${f2(p.h)}" fill="${k.tape}" opacity="0.78" transform="rotate(${p.ang} ${f2(p.x)} ${f2(p.y)})"/>`).join('');
+    return `<g transform="translate(${f2(k.cx)} ${f2(k.cy)}) rotate(${k.tilt})"><rect x="${f2(-W / 2)}" y="${f2(-H / 2)}" width="${f2(W)}" height="${f2(H)}" rx="${f2(b * 0.6)}" fill="${k.bezel}"/>${img ? `<image href="${img}" x="${f2(-W / 2 + b)}" y="${f2(-H / 2 + b)}" width="${f2(k.w)}" height="${f2(k.h)}" preserveAspectRatio="xMidYMid slice" filter="url(#warm-${k.id})"/>` : ''}${tapes}</g>`;
   }).join('\n')}
 ${fx.map((e) => `<circle cx="${e.cx}" cy="${e.cy}" r="${e.r}" fill="url(#g-${e.id})"/>` + (e.rays ?? []).map((deg) => {
     const r = (deg * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r), a = e.r * 0.5, bb = e.r * 0.75;

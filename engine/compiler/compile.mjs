@@ -9,9 +9,10 @@ import { execFileSync } from 'node:child_process';
 import { svgPathProperties } from 'svg-path-properties';
 import { loadLibrary, PENLESS } from '../library/index.mjs';
 import { loadSticker } from './stickers.mjs';
+import { loadClip } from './clips.mjs';
 import { makeKit, samplePts, offsetPath, r2, dist } from '../library/kit.mjs';
 import { validateBeats, loadStyle, gateLevel, strip, breakLines, styleSubset } from './validate.mjs';
-const { stickerOutline, flightTip, cameraAt } = await import('../src/timeline.ts');
+const { stickerOutline, flightTip, cameraAt, pastedOf } = await import('../src/timeline.ts');
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
@@ -136,15 +137,18 @@ const allActions = phrases.flatMap((p) => p.actions);
 const actionsById = new Map(allActions.map((a) => [a.id, a]));
 // 贴图：图的宽高按图的比例（w 是图宽，不含白边）
 const stickerOf = (a) => { const im = loadSticker(a.src); return { cx: a.cx, cy: a.cy, w: a.w, h: (a.w * im.h) / im.w, tilt: a.tilt ?? -3, href: im.href }; };
+// 贴视频：画面的宽高按片子的比例（w 是画面宽，不含边框），和贴图同一套外轮廓
+const clipOf = (a) => { const v = loadClip(a.src); return { cx: a.cx, cy: a.cy, w: a.w, h: (a.w * v.h) / v.w, tilt: a.tilt ?? 2, src: v.src, sha: v.sha, duration: r2(v.duration) }; };
 const buildOne = (a) => {
   if (a.type === 'glow' || a.type === 'off') return;
-  if (a.type === 'sticker') {
-    // 贴图不动笔，但版面检查（留空、压线、避让）和取景要把它当一块图形：外轮廓当成一笔「图形」放进 geo，排笔时跳过它
+  if (a.type === 'sticker' || a.type === 'clip') {
+    // 贴图、贴视频不动笔，但版面检查（留空、压线、避让）和取景要把它当一块图形：外轮廓当成一笔「图形」放进 geo，排笔时跳过它
     // 只放外轮廓时，整个落在卡片里面的字量的是到轮廓线的距离，压在卡片上也不报（PR #66 审查）：卡片里面再铺一排横线，间距小于标签留空，
     // 落在卡片里的任何一点离最近的线都不到留空，照样算压线
-    const sk = stickerOf(a), o = stickerOutline(sk), ink = (pts) => ({ kind: 'shape', color: style.palette.ink, width: style.ink.penWidth, d: 'M' + pts.map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' L') });
+    const sk = a.type === 'clip' ? clipOf(a) : stickerOf(a), o = stickerOutline(sk), ink = (pts) => ({ kind: 'shape', color: style.palette.ink, width: style.ink.penWidth, d: 'M' + pts.map(([x, y]) => `${r2(x)} ${r2(y)}`).join(' L') });
     const rows = [], step = Math.max(6, (style.type.labelGap ?? 14) * 0.9), [p0, p1, p2, p3] = o; // 外轮廓：左上、右上、右下、左下（含胶带）
-    for (let u = step / 2; u < 1; u += step / dist(p0, p3)) rows.push(ink([[p0[0] + (p3[0] - p0[0]) * u, p0[1] + (p3[1] - p0[1]) * u], [p1[0] + (p2[0] - p1[0]) * u, p1[1] + (p2[1] - p1[1]) * u]]));
+    // u 是沿左边的比例：从半个间距起（原来从 step / 2 起，u 一开始就 ≥ 1，一排横线都没铺，卡片里面的字照样不报）
+    for (let u = step / 2 / dist(p0, p3); u < 1; u += step / dist(p0, p3)) rows.push(ink([[p0[0] + (p3[0] - p0[0]) * u, p0[1] + (p3[1] - p0[1]) * u], [p1[0] + (p2[0] - p1[0]) * u, p1[1] + (p2[1] - p1[1]) * u]]));
     geo.set(a.id, [ink(o), ...rows]);
     return;
   }
@@ -493,7 +497,7 @@ const offRight = (cams, y) => { const cs = cams.filter(Boolean); return cs.lengt
 const runsOf = (frames) => frames.reduce((r, f) => { const l = r.at(-1); if (l && f === l[1] + 1) l[1] = f; else r.push([f, f]); return r; }, []);
 const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都看不到
 function schedule(boost) {
-  const strokes = [], penTrack = [], effects = [], stickers = [], audioClips = [], report = { phrases: [], actions: [] };
+  const strokes = [], penTrack = [], effects = [], stickers = [], clips = [], audioClips = [], report = { phrases: [], actions: [] };
   let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false, awayUntil = 0; // awayUntil：回看时退场的那段移动走完的时刻（不进 penFree）
   // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
@@ -544,6 +548,21 @@ function schedule(boost) {
         const SK = style.sticker ?? {}, drop = SK.drop ?? 0.5;
         stickers.push({ id: a.id, ...stickerOf(a), t0: r2(cue), t1: r2(cue + drop), card: SK.card ?? '#fbf8f1', tape: SK.tape ?? '#e6d7ad', shade: style.palette.shade });
         report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(cue + drop), lag: 0, pen: false });
+        continue;
+      }
+      if (a.type === 'clip') {
+        // 贴视频：和贴图一样提示词那一刻落下；落定（或说到 play 那个词）开始放 from→to，按 rate 倍速，放完停在最后一帧。铅笔不去画它
+        const CS = style.clip ?? {}, drop = CS.drop ?? 0.5, v = clipOf(a), from = a.from ?? 0, to = a.to ?? v.duration, rate = a.rate ?? 1;
+        let play = cue + drop;
+        if (a.play) {
+          const pIdx = fullText.indexOf(strip(a.play), cueIdx);
+          if (pIdx < 0 || pIdx > p.i1) throw new Error(`${a.id} 的 play「${a.play}」不在短语「${p.text}」里（要在 at「${a.at}」之后）`);
+          play = Math.max(play, toTL(charTimes[pIdx].s));
+        }
+        const end = play + (to - from) / rate;
+        clips.push({ id: a.id, ...v, t0: r2(cue), t1: r2(cue + drop), play: r2(play), end: r2(end), from, to, rate,
+          bezel: CS.bezel ?? '#3b3632', tape: CS.tape ?? '#e6d7ad', shade: style.palette.shade, warm: CS.warm ?? { sepia: 0, saturate: 1 } });
+        report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(end), lag: 0, pen: false });
         continue;
       }
       if (a.type === 'glow') {
@@ -626,8 +645,8 @@ function schedule(boost) {
       // until/goal：停到什么时候、停完去哪（默认停到这一笔落笔、去落笔处；等上一句说完再起飞时停到起飞、不用回来）
       // fly：换节前后停笔时接下来（或刚才）那段飞行。{ ex(q)：从 q 起飞或飞到 q 多出舒适框多少，near(q)：飞行不超过 flyFar，stay：不挪时的 ex }
       const pickRest = (from, freeAt, views, allowOff = true, until = t, goal = st, fly = null) => {
-        // 贴好的封面也算画过的东西，而且和文字一样要护着：笔身不压在封面上
-        const drawn = new Set([...strokes.map((s) => s.action), ...stickers.map((k) => k.id)]), lastId = strokes.at(-1)?.action, stuck = new Set(stickers.map((k) => k.id));
+        // 贴好的封面、贴视频也算画过的东西，而且和文字一样要护着：笔身不压在上面
+        const pasted = [...stickers, ...clips], drawn = new Set([...strokes.map((s) => s.action), ...pasted.map((k) => k.id)]), lastId = strokes.at(-1)?.action, stuck = new Set(pasted.map((k) => k.id));
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
         const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id) || stuck.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
         const other = [...drawn].map((id) => bboxOf(geo.get(id)));
@@ -748,7 +767,7 @@ function schedule(boost) {
     T = nextT;
   });
   // 回看时退了场、之后再没动笔（回顾一路讲到片尾）：笔已经停在整段每一镜的画外，片尾不用再离场（awayAt 记它什么时候到的）
-  return { strokes, penTrack, effects, stickers, audioClips, report, penFree, penPos, awayAt: penAway && awayUntil > 0 ? awayUntil : null };
+  return { strokes, penTrack, effects, stickers, clips, audioClips, report, penFree, penPos, awayAt: penAway && awayUntil > 0 ? awayUntil : null };
 }
 // 写字要跟着旁白：文字类动作（文字、带标签的量表）必须在本句说完前起笔，且书写时间至少一半和本句旁白重叠
 // （审片发现「门槛 5」「7」都是旁白说完后才写）。不满足时先给该动作提速重排（不插静音），提到上限仍不行再报给分镜。
@@ -770,7 +789,8 @@ for (let it = 0; it < 8 && AUTOFIX; it++) {
   sched = schedule(boost);
 }
 for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`), console.log(`  提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`);
-const { strokes, penTrack, effects, stickers, audioClips, report } = sched;
+const { strokes, penTrack, effects, stickers, clips, audioClips, report } = sched;
+const pasted = pastedOf({ stickers, clips }); // 纸面上贴着的东西（贴图、贴视频）
 let { penFree, penPos } = sched;
 const awayAt = sched.awayAt;
 const problems = [...layoutProblems], advice = [...layoutAdvice], flag = flagTo(problems, advice);
@@ -830,8 +850,8 @@ const pushMove = (t0, t1, to, focus) => {
 phrases.forEach((p, pi) => {
   const tc = targetCam[pi];
   // 这句没有笔画（比如结尾回收句只说不画）也要移到自己的取景：从句子开头起移
-  // 这句第一样新东西出现的时刻：第一笔，或者贴图开始落下（贴图的提示词在第一笔前面时，镜头要先到，PR #66 审查）
-  const t0s = [strokes.find((s) => p.actions.some((a) => a.id === s.action))?.t0, ...stickers.filter((k) => p.actions.some((a) => a.id === k.id)).map((k) => k.t0)].filter((x) => x != null);
+  // 这句第一样新东西出现的时刻：第一笔，或者贴图、贴视频开始落下（贴图的提示词在第一笔前面时，镜头要先到，PR #66 审查）
+  const t0s = [strokes.find((s) => p.actions.some((a) => a.id === s.action))?.t0, ...pasted.filter((k) => p.actions.some((a) => a.id === k.id)).map((k) => k.t0)].filter((x) => x != null);
   const first = t0s.length ? { t0: Math.min(...t0s) } : { t0: report.phrases[pi].at + (focusCam[pi] ? 0 : M.cameraMove[0]) };
   if (!tc || !first) return;
   if (!camera.length) { camera.push({ t0: 0, t1: 0, from: tc, to: tc }); return; }
@@ -904,12 +924,20 @@ const lastCamEnd = camera[camera.length - 1].t1;
 // 自检：每一笔画完的时刻都在取景框内
 // 镜头位置用渲染端的 cameraAt（src/timeline.ts），普通移动的缓动认 accel（style.motion.easeAccel；原来这里另写了一份，写死对称缓动）
 const camAt = (t) => cameraAt(camera, t);
-// 贴图落定时，外轮廓（含胶带）也要在取景框里
-for (const k of stickers) {
-  const c = camAt(k.t1);
+// 贴图落定时，外轮廓（含胶带）也要在取景框里；贴视频从落定到放完一直要在取景框里（镜头在它放完之前移走，观众就没看到证据），每 0.25 秒看一次
+const outOfFrame = (k, t) => {
+  const c = camAt(t);
   for (const [x, y] of stickerOutline(k)) {
     const sx = (x - c.x) * c.z + VIEW.cx, sy = (y - c.y) * c.z + VIEW.cy;
-    if (sx < TGT.frame.l || sx > TGT.frame.r || sy < TGT.frame.t || sy > TGT.frame.b) { problems.push(`镜头外：贴图 ${k.id} 在 ${r2(k.t1)}s 屏幕(${r2(sx)},${r2(sy)})`); break; }
+    if (sx < TGT.frame.l || sx > TGT.frame.r || sy < TGT.frame.t || sy > TGT.frame.b) return `屏幕(${r2(sx)},${r2(sy)})`;
+  }
+  return null;
+};
+for (const k of stickers) { const o = outOfFrame(k, k.t1); if (o) problems.push(`镜头外：贴图 ${k.id} 在 ${r2(k.t1)}s ${o}`); }
+for (const k of clips) {
+  for (let t = k.t1; t <= k.end + 1e-6; t = t >= k.end ? Infinity : Math.min(k.end, t + 0.25)) {
+    const o = outOfFrame(k, t);
+    if (o) { problems.push(t <= k.t1 ? `镜头外：贴视频 ${k.id} 在 ${r2(t)}s ${o}` : `镜头外：贴视频 ${k.id} 还没放完（放到 ${r2(k.end)}s），${r2(t)}s 镜头就把它移出了取景框 ${o}`); break; }
   }
 }
 for (const s of strokes) {
@@ -1038,7 +1066,7 @@ chapters.forEach((c, i) => {
 });
 const out = {
   id: OUT_ID, target: targetName, canvas: { w: TGT.w, h: TGT.h, fps: FPS }, fps: FPS, durationInFrames: Math.ceil(end * FPS), duration: r2(end),
-  narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, ...(stickers.length ? { stickers } : {}), camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
+  narration: `audio/${OUT_ID}.narration.wav`, source: beats.narration.audio, beatsId: beats.id, audioClips, strokes, penTrack, effects, ...(stickers.length ? { stickers } : {}), ...(clips.length ? { clips } : {}), camera, view: { cx: VIEW.cx, cy: VIEW.cy }, frame: TGT.frame, sub: TGT.sub,
   subtitles, chapters, style: styleSubset(style), ...(endCard ? { endCard } : {}),
   platforms: TGT.platforms, platformUI: Object.fromEntries(TGT.platforms.map((pf) => [pf, style.platformUI[pf]])),
   report: { ...report, problems, advice, fixes },
@@ -1051,7 +1079,7 @@ const out = {
   const brand = fs.existsSync('brand.local.json') ? JSON.parse(fs.readFileSync('brand.local.json', 'utf8')) : null;
   if (brand?.watermark?.text && slots?.length) {
     const { subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } = await import('../src/timeline.ts');
-    const stickerInks = stickers.map(stickerInk); // 水印也不压贴图
+    const stickerInks = pasted.map(stickerInk); // 水印也不压贴图、贴视频
     const wm = { text: brand.watermark.text, size: WM.size[targetName], opacity: WM.opacity, fade: WM.fade, margin: WM.margin, contentMargin: WM.contentMargin, spans: [] };
     // 和安全区检查同样每 0.1 秒看一次，框再多留 4px，保证检查一定过
     const clashes = (slot, t0, t1) => {

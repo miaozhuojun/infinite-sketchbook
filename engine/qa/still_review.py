@@ -111,6 +111,14 @@ for k, name in [("question", "回答的问题"), ("audience", "面向"), ("fromP
 # 前向依赖（每集能单独看）：片中贴了那一集的封面、用一句话复述。审稿时看这句复述够不够没看过那一集的人往下听
 for d in b.get("dependsOn") or []:
     L.append(f"- 依赖 {d.get('ep')}（片中贴它的封面）：{d.get('what')}；片中复述：「{d.get('recap')}」")
+# 片中贴的素材（贴视频、不是封面的贴图）：只当证据（原文、数据图、实物、实验画面），核心概念照旧用笔边说边写。
+# 审稿时看它是不是在替笔讲概念、贴的那句旁白是不是只说它
+src_of = {f: x for x in beats.get("facts") or [] for f in ([x["media"]] if isinstance(x.get("media"), str) else x.get("media") or [])}
+for p in beats.get("phrases", []):
+    for a in p.get("actions") or []:
+        if a.get("type") == "clip" or (a.get("type") == "sticker" and not a.get("ep")):
+            f = src_of.get(a.get("src"), {})
+            L.append(f"- 贴{'视频' if a['type'] == 'clip' else '图'} {a['id']}（{a.get('src')}，{f.get('license', '?')}，{f.get('origin', '?')}）配的旁白：「{p.get('text')}」")
 L += [f"- 学习目标 {i + 1}：{o}" for i, o in enumerate(b.get("objectives", []))]
 if b.get("next"):
     L.append(f"- 留给下一集：{b['next']}")

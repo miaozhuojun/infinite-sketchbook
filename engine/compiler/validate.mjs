@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { BUILTINS, loadLibrary } from '../library/index.mjs';
 import { CJK, glyphData, makeKit } from '../library/kit.mjs';
 import { loadSticker } from './stickers.mjs';
+import { loadClip, mediaOf, mediaFactIssues } from './clips.mjs';
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROJECT = path.resolve(ENGINE, '../..');
@@ -241,6 +242,25 @@ export function validateBeats(beats, style, reg) {
         try { loadSticker(a.src); } catch (e) { E(`${A}.src`, e.message); }
         if (!(a.w > 0)) E(`${A}.w`, '图的宽要是正数（纸面像素）');
       }
+      // 贴视频：片子要在 public/clips/ 里、读得出尺寸和时长；from–to 要在片子里面；倍速有上下限；play 要在这句旁白里、在 at 之后
+      if (a.type === 'clip') {
+        let v = null;
+        try { v = loadClip(a.src); } catch (e) { E(`${A}.src`, e.message); }
+        if (!(a.w > 0)) E(`${A}.w`, '画面的宽要是正数（纸面像素）');
+        const from = a.from ?? 0, to = a.to ?? v?.duration, rate = a.rate ?? 1;
+        if (!(from >= 0)) E(`${A}.from`, '从第几秒放起，要 ≥ 0');
+        if (v && !(to > from)) E(`${A}.to`, `放到第 ${to} 秒，要在 from（${from}）之后`);
+        if (v && to > v.duration + 0.01) E(`${A}.to`, `片子只有 ${v.duration.toFixed(2)} 秒，放不到第 ${to} 秒`);
+        if (!(rate >= 0.25 && rate <= 4)) E(`${A}.rate`, '倍速在 0.25–4 之间（慢放写 0.5）');
+        else if (v && to > from && (to - from) / rate > (style.clip?.maxSec ?? 15)) advice.push(`${A}：要放 ${((to - from) / rate).toFixed(1)} 秒，超过 ${style.clip?.maxSec ?? 15} 秒：证据只放要看的那几秒（from/to 截一段），说明交给笔`);
+        if (a.play !== undefined) {
+          const i0 = st.indexOf(strip(String(a.at ?? ''))), ip = typeof a.play === 'string' ? st.indexOf(strip(a.play), Math.max(0, i0)) : -1;
+          if (ip < 0) E(`${A}.play`, `「${a.play}」不在这句旁白里（要在 at「${a.at}」之后）`);
+        }
+      }
+      // 贴的东西（贴视频，和不是封面的贴图）要有出处：facts 里一条 media 写它的文件名，license、origin 写齐（见下面的出处检查）
+      if ((a.type === 'clip' || (a.type === 'sticker' && !a.ep)) && typeof a.src === 'string' && !(beats.facts ?? []).some((f) => mediaOf(f).includes(a.src)))
+        E(`${A}.src`, `「${a.src}」没有出处：facts 里加一条 { media: "${a.src}", license, origin }（license 只用 own、public-domain、CC0、CC BY）`);
       if (a.type === 'off') {
         const g = beats.phrases.flatMap((p) => p.actions).find((x) => x.id === a.target);
         if (g && g.type !== 'glow') E(`${A}.target`, `off 只能熄灭光晕（glow），「${a.target}」是 ${g.type}`);
@@ -321,6 +341,12 @@ export function validateBeats(beats, style, reg) {
   for (const tk of tokens) if (!facts.some((f) => (f.match || []).includes(tk))) E('facts', `旁白里的「${tk}」没有出处，也没有标为示意数值（kind: example）`);
   facts.forEach((f, i) => {
     if (f.kind === 'example') return;
+    // 贴的东西的出处（media）：许可只收能改编、能商用的，不是自己做的要有原始网址、署名和存证（compiler/clips.mjs）
+    if (f.media !== undefined) {
+      if (!mediaOf(f).length || mediaOf(f).some((m) => typeof m !== 'string' || !m)) E(`facts[${i}].media`, '写贴图或贴视频的文件名（一个字符串，或几个文件名的数组）');
+      for (const [k, msg] of mediaFactIssues(f)) E(`facts[${i}].${k}`, msg);
+      if (!f.source) return; // 自己做的：origin 写清怎么做的就够；别人的缺存证上面已经报了
+    }
     if (!f.source) { E(`facts[${i}]`, '需要 source（项目内资料文件#锚点）或 kind: example'); return; }
     const [file, anchor] = f.source.split('#');
     const fp = path.resolve(PROJECT, file);

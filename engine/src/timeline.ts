@@ -20,6 +20,7 @@ export type Timeline = {
   id: string; canvas: { w: number; h: number; fps: number }; fps: number; durationInFrames: number; duration: number;
   narration: string; audio?: string; strokes: Stroke[]; penTrack: PenSeg[]; effects: Effect[];
   stickers?: Sticker[]; // 贴图（被依赖那一集的封面），分镜用了 sticker 才有
+  clips?: Clip[]; // 贴视频（实验画面这类证据），分镜用了 clip 才有
   subtitles: { text: string; lines: string[]; t0: number; t1: number; join?: boolean; joinNext?: boolean; speaker?: string; label?: string; color?: string }[]; // join/joinNext：同一句拆出的几张，换卡时不淡出淡入；speaker/label/color：对话里不是主讲说的句子（compiler/speakers.mjs）
   style: Style; platforms: string[];
   camera: CamMove[]; view: { cx: number; cy: number };
@@ -253,10 +254,10 @@ export function isFlight(tl: Timeline, m: PenSeg): boolean {
 // 有多少秒旁白在讲。超过 motion.maxIdleAfterMove 秒，观众就是对着一块空纸（或没变的画面）听讲。
 // 审片 E05 v1：五处换节镜头在上一句说完前就飞到下一节，205 秒那处对着空纸讲了 7 秒（E04 复盘也有）
 export type IdleAfterMove = { arrive: number; next: number; idle: number };
-export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effects' | 'stickers'> & { audioClips?: { at: number; srcIn: number; srcOut: number }[] }): IdleAfterMove[] {
+export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effects' | 'stickers' | 'clips'> & { audioClips?: { at: number; srcIn: number; srcOut: number }[] }): IdleAfterMove[] {
   const talk = (tl.audioClips ?? []).map((c) => [c.at, c.at + c.srcOut - c.srcIn] as const);
   const said = (a: number, b: number) => talk.reduce((s, [x, y]) => s + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0);
-  const events = [...tl.strokes.map((s) => [s.t0, s.t1] as const), ...(tl.effects ?? []).map((e) => [e.t0, e.t1] as const), ...(tl.stickers ?? []).map((k) => [k.t0, k.t1] as const)];
+  const events = [...tl.strokes.map((s) => [s.t0, s.t1] as const), ...(tl.effects ?? []).map((e) => [e.t0, e.t1] as const), ...(tl.stickers ?? []).map((k) => [k.t0, k.t1] as const), ...(tl.clips ?? []).map((k) => [k.t0, k.end] as const)]; // 贴视频放着的时候画面一直在变
   const out: IdleAfterMove[] = [];
   tl.camera.forEach((m, i) => {
     const to = m.to as Cam & { revisit?: boolean; overview?: boolean };
@@ -275,7 +276,7 @@ export function idleAfterCamera(tl: Pick<Timeline, 'camera' | 'strokes' | 'effec
 // 编译器的版面检查和取景、安全区检查、水印避让都用这里的外轮廓，把它当一块图形。
 export type Sticker = { id: string; href: string; cx: number; cy: number; w: number; h: number; tilt: number; t0: number; t1: number; card: string; tape: string; shade: string };
 export const STICKER = { border: 0.035, tapeW: 0.24, tapeH: 0.07, tapeOut: 0.045, rise: 34, scale0: 1.05, turn: 2.5, shadow: 0.2 };
-type StickerGeo = Pick<Sticker, 'cx' | 'cy' | 'w' | 'h' | 'tilt'>;
+export type StickerGeo = Pick<Sticker, 'cx' | 'cy' | 'w' | 'h' | 'tilt'>;
 // 卡片（含白边）的宽高
 export const stickerCard = (s: StickerGeo) => ({ W: s.w * (1 + 2 * STICKER.border), H: s.h + 2 * STICKER.border * s.w });
 // 两条胶带（卡片坐标，未转 tilt）：中心在上沿、离左右边 0.3 个胶带宽，各转 ∓32°。绘制（成片、讲义插图）和外轮廓都用它
@@ -299,11 +300,28 @@ export function stickerOutline(s: StickerGeo): [number, number][] {
   const loc: [number, number][] = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
   return loc.map(([x, y]) => [s.cx + x * c - y * sn, s.cy + x * sn + y * c]);
 }
-// 当成一笔墨迹交给按笔画查的检查（安全区、水印避让、镜头到位后的动静）：外轮廓每条边上取几个点
-export function stickerInk(s: Sticker): Stroke {
+// 当成一笔墨迹交给按笔画查的检查（安全区、水印避让、镜头到位后的动静）：外轮廓每条边上取几个点。贴视频（clip）也用它
+export function stickerInk(s: StickerGeo & { id: string; t0: number; t1: number; card?: string; bezel?: string }): Stroke {
   const o = stickerOutline(s), pts: Pt[] = [];
   for (let i = 0; i + 1 < o.length; i++) for (let k = 0; k < 8; k++) pts.push([o[i][0] + ((o[i + 1][0] - o[i][0]) * k) / 8, o[i][1] + ((o[i + 1][1] - o[i][1]) * k) / 8, 0.5]);
   pts.push([...o[0], 0.5]);
   const d = 'M' + o.map(([x, y]) => `${Math.round(x * 100) / 100} ${Math.round(y * 100) / 100}`).join(' L');
-  return { id: `${s.id}#sticker`, action: s.id, kind: 'shape', color: s.card, width: 0, d, len: 0, t0: s.t0, t1: s.t1, pts };
+  return { id: `${s.id}#sticker`, action: s.id, kind: 'shape', color: s.card ?? s.bezel ?? '#000000', width: 0, d, len: 0, t0: s.t0, t1: s.t1, pts };
 }
+
+// ---------- 贴视频（clip）：一小段片子贴在纸面上，当一块小屏幕放（实验画面、实物怎么动这类证据） ----------
+// 和贴图同一套几何（外轮廓、胶带、落下），只是边框是深色的细边（像一块小屏幕），图换成按时间取帧的片子。
+// t0→t1 落下放好；play 起按 rate 倍速放片子的 from→to，end 放完，之后停在最后一帧。不出声。
+// src 是相对 public/ 的路径（渲染时 staticFile）；sha 是片子的内容指纹，分段渲染的指纹带上它，换了片子就重渲
+export type Clip = StickerGeo & {
+  id: string; src: string; sha: string; duration: number; // duration：整个文件多长（秒）
+  t0: number; t1: number; play: number; end: number; from: number; to: number; rate: number;
+  bezel: string; tape: string; shade: string; warm: { sepia: number; saturate: number };
+};
+// t 秒时屏幕上是片子的第几秒（逐帧确定：只由时间线和 t 决定）。没开始放是 from 那一帧，放完停在 to（离文件结尾至少留 0.05 秒，免得取不到帧）
+export const clipTime = (k: Pick<Clip, 'play' | 'from' | 'to' | 'rate' | 'duration'>, t: number) => {
+  const last = Math.max(k.from, Math.min(k.to, k.duration - 0.05));
+  return Math.min(last, k.from + Math.max(0, t - k.play) * k.rate);
+};
+// 纸面上贴着的东西（贴图和贴视频）：按笔画查的检查把它们当图形
+export const pastedOf = (tl: Pick<Timeline, 'stickers' | 'clips'>) => [...(tl.stickers ?? []), ...(tl.clips ?? [])];

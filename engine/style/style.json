@@ -129,6 +129,7 @@
  },
 
  "sticker": { "note": "贴图（sticker，被依赖那一集的封面）：印出来的小卡片。card 白边颜色，tape 胶带颜色，drop 落下放好用几秒", "card": "#fbf8f1", "tape": "#e6d7ad", "drop": 0.5 },
+ "clip": { "note": "贴视频（clip，实验画面这类证据）：纸上的一块小屏幕。bezel 边框颜色，tape 胶带颜色，drop 落下放好用几秒；warm 把片子调成纸面的暖色（CSS sepia、saturate）；maxSec 放多长以上给一条建议（证据只放要看的那几秒）", "bezel": "#3b3632", "tape": "#e6d7ad", "drop": 0.5, "warm": { "sepia": 0.16, "saturate": 0.85 }, "maxSec": 15 },
  "audio": {
   "voiceLufs": -16,
   "truePeak": -1.5,

@@ -16,7 +16,10 @@
   "synthetic": true
  },
  "pen": { "leadIn": 1.1, "tail": 1.0, "cueLead": 0.12, "defaultHold": 0.3 },
- "facts": [{ "match": ["1", "2", "4"], "kind": "example", "note": "演示用的算式" }],
+ "facts": [
+  { "match": ["1", "2", "4"], "kind": "example", "note": "演示用的算式" },
+  { "media": "demo-beads.mp4", "license": "own", "origin": "qa/fixtures/demo/make_demo.py 程序画的示意动画（不是实拍）", "note": "贴视频（clip）的示例：贴的东西只当证据，出处写在这里" }
+ ],
  "quiz": [],
  "phrases": [
   {
@@ -41,6 +44,7 @@
    "caption": "2 加 2 等于 4",
    "role": "aha",
    "actions": [
+    { "id": "beads", "type": "clip", "at": "2加2", "src": "demo-beads.mp4", "cx": 490, "cy": 1130, "w": 360, "layout": { "16x9": { "cx": 1470, "cy": 560 } } },
     { "id": "b1", "type": "text", "at": "2加2", "text": "2+2=", "x": 280, "y": 900, "size": 96, "anchor": "l", "layout": { "16x9": { "x": 760, "y": 640 } } },
     { "id": "b2", "type": "text", "at": "4", "text": "4", "x": 600, "y": 900, "size": 96, "anchor": "l", "color": "accent", "layout": { "16x9": { "x": 1080, "y": 640 } } },
     { "id": "ring", "type": "circle", "at": "4", "cx": 627, "cy": 891, "r": 68, "color": "accent", "layout": { "16x9": { "cx": 1107, "cy": 631 } } }

@@ -20,6 +20,7 @@ import { bundle } from '@remotion/bundler';
 import { openBrowser, renderMedia, renderStill, selectComposition } from '@remotion/renderer';
 import { GL } from '../qa/gl.mjs';
 import { PY_QA } from '../qa/pyenv.mjs';
+import { linkClips } from '../compiler/clips.mjs';
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha = (x) => createHash('sha256').update(typeof x === 'string' ? x : JSON.stringify(x)).digest('hex');
@@ -45,7 +46,7 @@ export function sliceFor(tl, f0, f1) {
     style: { palette: st.palette, paper: st.paper, grade: st.grade, ink: st.ink, subtitle: st.subtitle, pencil: st.pencil },
     strokes: tl.strokes.map((s, i) => [i, s]).filter(([, s]) => s.t0 < tb + eps),
     pen: penIdx.map((i) => [i, pen[i], pen[i].kind === 'down' ? tl.strokes[pen[i].stroke] : null]), // 落笔段带上那一笔本身（笔画 t0 取整到两位，落笔段没取整，可能差一帧）
-    camera: cam, effects: tl.effects.filter((e) => e.t0 < tb + eps), stickers: (tl.stickers ?? []).filter((k) => k.t0 < tb + eps),
+    camera: cam, effects: tl.effects.filter((e) => e.t0 < tb + eps), stickers: (tl.stickers ?? []).filter((k) => k.t0 < tb + eps), clips: (tl.clips ?? []).filter((k) => k.t0 < tb + eps), // 贴视频带着片子的内容指纹（sha）：换了片子就重渲
     subtitles: tl.subtitles.filter((s) => s.t0 <= tb + eps && s.t1 > ta),
     pencil: tl.pencil ? { sway: f(tl.pencil.sway), lift: f(tl.pencil.lift), edge: f(tl.pencil.edge) } : null,
     watermark: tl.watermark ? { ...tl.watermark, spans: tl.watermark.spans.filter((s) => s.t0 <= tb + eps && s.t1 > ta).map((s) => ({ ...s, atEnd: s.t1 >= tl.duration })) } : null,
@@ -115,6 +116,7 @@ export async function renderSegmented(tlPath, outFile, { audio = null, scale = 1
       "registerRoot(() => <Composition id=\"seg\" component={Sketch} durationInFrames={t.durationInFrames} fps={t.fps} width={t.canvas.w} height={t.canvas.h} defaultProps={{ tl: t, inkMode: 'mono' as const }} />);", ''].join('\n'));
     fs.mkdirSync(path.join(dir, 'public'));
     const serveUrl = await bundle({ entryPoint: path.join(dir, 'entry.tsx'), publicDir: path.join(dir, 'public'), outDir: path.join(dir, 'bundle') });
+    linkClips(tl, path.join(dir, 'bundle', 'public')); // 贴视频的片子硬链接进打包好的 public（不拷贝），核对编译后没换过
     const chromiumOptions = GL ? { gl: GL } : {};
     const composition = await selectComposition({ serveUrl, id: 'seg', logLevel: 'error', chromiumOptions });
     const w = Math.round(tl.canvas.w * scale), h = Math.round(tl.canvas.h * scale);

@@ -1,7 +1,7 @@
 // 组件注册表：自动加载 components/ 下所有组件。编译器、分镜校验、组件测试都从这里取组件和参数定义。
-// 内置动作（不是画图组件、由编译器直接处理）：retrace（回描已有元素加粗）、strike（划掉已有元素）、ring（圈出已有元素）、glow（光晕效果，不动笔）、off（熄灭光晕）、sticker（贴图，不动笔）。
+// 内置动作（不是画图组件、由编译器直接处理）：retrace（回描已有元素加粗）、strike（划掉已有元素）、ring（圈出已有元素）、glow（光晕效果，不动笔）、off（熄灭光晕）、sticker（贴图，不动笔）、clip（贴视频，不动笔）。
 // 不动笔的动作（铅笔不去画它，编译时直接按提示词的时刻出现）
-export const PENLESS = new Set(['glow', 'off', 'sticker']);
+export const PENLESS = new Set(['glow', 'off', 'sticker', 'clip']);
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,6 +32,20 @@ export const BUILTINS = {
       w: { type: 'number', required: true, desc: '图的宽（纸面像素，不含白边），高按图的比例' },
       tilt: { type: 'number', desc: '歪几度（正数顺时针），默认 -3' },
       ep: { type: 'string', desc: '这张图代表哪一集（brief.dependsOn 里的 ep）：分镜校验据此核对每条依赖都贴了封面' },
+    },
+  },
+  clip: {
+    name: 'clip', title: '贴视频',
+    desc: '把一小段片子贴在纸面上，当一块小屏幕放：实验画面、实物怎么动这类证据（核心概念照旧用笔边说边写）。深色细边框、略歪、上边两角两条胶带，和贴图一样 0.5 秒从上方落下；落定（或说到 play 那个词）时开始放 from–to 这一段，放完停在最后一帧。不出声，旁白照常。调成纸面的暖色（style.clip.warm）。铅笔不画它；版面检查、取景、安全区检查把它当一块图形，镜头在它放完之前不能把它移出取景框。片子放在 public/clips/（不进仓库），出处写在 facts 里一条 media 写这个文件名的（license、origin）。',
+    params: {
+      src: { type: 'string', required: true, desc: 'public/clips/ 下的文件名（.mp4 .mov .m4v）' },
+      cx: { type: 'number', required: true }, cy: { type: 'number', required: true },
+      w: { type: 'number', required: true, desc: '画面的宽（纸面像素，不含边框），高按片子的比例' },
+      from: { type: 'number', desc: '从片子的第几秒放起，默认 0' },
+      to: { type: 'number', desc: '放到片子的第几秒，默认放到结尾' },
+      rate: { type: 'number', desc: '放的速度（0.25–4，慢放写 0.5），默认 1' },
+      play: { type: 'string', desc: '说到这个词时开始放（同一句旁白里、在 at 之后），默认落定就放' },
+      tilt: { type: 'number', desc: '歪几度（正数顺时针），默认 2' },
     },
   },
   off: {

@@ -15,12 +15,12 @@
 import '../compiler/node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
 import { svgPathProperties } from 'svg-path-properties';
-const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
+const { cameraAt, subtitleBox, watermarkBox, watermarkSampleTimes, boxesOverlap, strokeScreenBox, stickerInk, pastedOf } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const tl = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const fails = [];
-// 贴图（被依赖那一集的封面）也是内容：外轮廓当一笔图形，和笔画一起查（不进平台界面、不切半截、不进字幕区、水印不压它）
-const ink = [...tl.strokes, ...(tl.stickers ?? []).map(stickerInk)];
+// 贴图（被依赖那一集的封面）、贴视频也是内容：外轮廓当一笔图形，和笔画一起查（不进平台界面、不切半截、不进字幕区、水印不压它）
+const ink = [...tl.strokes, ...pastedOf(tl).map(stickerInk)];
 // gate：风格规范 gates 里是 advice 的关卡没过只打 [建议]、不判失败（创作取舍）；没写 gate 或是 hard 的照常判失败
 const advs = [];
 const check = (name, ok, detail, gate) => {

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { bundle } from '@remotion/bundler';
 import { openBrowser, renderStill, selectComposition } from '@remotion/renderer';
 import { GL } from './gl.mjs';
+import { linkClips } from '../compiler/clips.mjs';
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const opts = { logLevel: 'error', chromiumOptions: { gl: GL } };
@@ -39,7 +40,7 @@ async function renderAll(serveUrl, jobs, concurrency) {
 }
 
 // 渲染试编时间线（或任何时间线文件）的静帧：临时写一个只注册这几条时间线的入口打包，不碰 build/compositions.generated.ts（流水线和别的检查在用）。
-// timelines：{ 合成名: 时间线文件 }；jobs：[{ comp, frame, out, props? }]。不带配音（静帧用不到，试编的假配音也不在 public/ 里）
+// timelines：{ 合成名: 时间线文件 }；jobs：[{ comp, frame, out, props? }]。不带配音（静帧用不到，试编的假配音也不在 public/ 里）；贴视频的片子链接进临时 public
 export async function renderTimelineStills(timelines, jobs, { concurrency = Math.min(4, Math.max(1, os.cpus().length - 2)) } = {}) {
   const dir = fs.mkdtempSync(path.join(ENGINE, 'build', '_stills-'));
   try {
@@ -53,6 +54,7 @@ export async function renderTimelineStills(timelines, jobs, { concurrency = Math
     fs.writeFileSync(path.join(dir, 'entry.tsx'), lines.join('\n'));
     fs.mkdirSync(path.join(dir, 'public'));
     const serveUrl = await bundle({ entryPoint: path.join(dir, 'entry.tsx'), publicDir: path.join(dir, 'public'), outDir: path.join(dir, 'bundle') });
+    for (const n of names) linkClips(JSON.parse(fs.readFileSync(timelines[n], 'utf8')), path.join(dir, 'bundle', 'public')); // 贴视频的片子硬链接进打包好的 public（不拷贝）
     await renderAll(serveUrl, jobs, concurrency);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

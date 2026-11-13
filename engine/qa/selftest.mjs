@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { PY_QA, PY_MLX } from './pyenv.mjs';
 import { strip } from '../compiler/validate.mjs';
 import { PENLESS } from '../library/index.mjs';
-const { cameraAt, penAt, idleAfterCamera } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
+const { cameraAt, penAt, idleAfterCamera, pastedOf, stickerInk } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
 const basePath = process.argv[2];
 const base = JSON.parse(fs.readFileSync(basePath, 'utf8'));
@@ -56,10 +56,13 @@ const writingFrame = (tl) => { const s = tl.strokes[Math.floor(tl.strokes.length
 // 停笔 1 秒，让笔身（不是笔尖）横在一块内容正中：笔尖放在中心沿笔的方向往回 0.45 个笔长的地方
 // 写完后这段时间里没有停够 0.5 秒的停笔的第一个整段文字：「写字时压字」那项检查跳过长停笔（归停笔那项管），
 // 注入要落在笔在写字或移动的时段里（原来取第一个文字，E02 v4 开场那句写完就停笔 5.5 秒，注入全落在停笔里，永远「漏掉」）
-function textFreeOfRest(tl, dur) {
+// ok：另加的条件（比如这段时间里笔一直在画面里）
+function textFreeOfRest(tl, dur, ok = () => true) {
   const busy = (a, b) => tl.penTrack.some((s) => s.kind === 'rest' && s.t1 - s.t0 >= 0.5 && s.t0 < b && s.t1 > a);
-  return [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText) && !busy(q.at(-1).t1 + 0.05, q.at(-1).t1 + 0.05 + dur));
+  return [...Map.groupBy(tl.strokes, (x) => x.action).values()].find((q) => q.every(isText) && !busy(q.at(-1).t1 + 0.05, q.at(-1).t1 + 0.05 + dur) && ok(q));
 }
+// 推近镜头的焦点墨迹：笔画，加上贴在焦点里的贴图、贴视频的外轮廓（和安全区检查同一套）
+const focusPts = (tl, m) => [...tl.strokes, ...pastedOf(tl).map(stickerInk)].filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts);
 function restAcross(tl, pts, t0) {
   const P = tl.style.pencil, Lw = P.length * P.scale * (Math.min(tl.canvas.w, tl.canvas.h) / 1080), r = (P.base * Math.PI) / 180;
   const cx = mid(pts.map((q) => q[0])), cy = mid(pts.map((q) => q[1]));
@@ -112,8 +115,11 @@ expectFail('写字时笔身横在别的字上 1.5 秒（不是停笔）', (tl) =
   tl.penTrack.unshift({ kind: 'move', t0: r.t0, t1: r.t0 + 1.5, from: r.at, to: r.at });
 }, pencil, '[建议] 写字时笔身不长时间压住别的字');
 expectFail('一句话里笔身断续压字，累计超过上限（每段都不到 1 秒）', (tl) => {
-  // 在一句旁白里插四段 0.7 秒的原地「移动」，笔身横在一段已写的文字上，中间隔 0.1 秒：连续的检查拦不住，累计的要拦住
-  const g = textFreeOfRest(tl, 3.2), r = restAcross(tl, g.flatMap((x) => x.pts), g.at(-1).t1 + 0.05);
+  // 在一句旁白里插四段 0.7 秒的原地「移动」，笔身横在一段已写的文字上，中间隔 0.1 秒：连续的检查拦不住，累计的要拦住。
+  // 挑的文字要在这 3.2 秒里一直和笔一起留在画面里：镜头推走、笔尖出了画面的那几帧检查不算（演示分镜贴了视频以后，推近把标题推出了画面）
+  const across = (q) => restAcross(tl, q.flatMap((x) => x.pts), q.at(-1).t1 + 0.05);
+  const inCanvas = (q) => { const r = across(q); for (let t = r.t0; t <= r.t0 + 3.2; t += 0.1) { const [x, y] = toScreen(tl, r.at, t); if (x < 0 || x > tl.canvas.w || y < 0 || y > tl.canvas.h) return false; } return true; };
+  const g = textFreeOfRest(tl, 3.2, inCanvas) ?? textFreeOfRest(tl, 3.2), r = across(g);
   for (let i = 3; i >= 0; i--) tl.penTrack.unshift({ kind: 'move', t0: r.t0 + i * 0.8, t1: r.t0 + i * 0.8 + 0.7, from: r.at, to: r.at });
   const p = tl.report.phrases.findLast((q) => q.at <= r.t0);
   p.at = Math.min(p.at, r.t0); // 这四段都算在同一句里
@@ -138,6 +144,7 @@ expectFail('镜头最远那次移动压到上限的 2 倍速（甩镜头）', (t
     for (const s of tl.strokes) sh(s, 't0', 't1');
     for (const m of tl.penTrack) sh(m, 't0', 't1');
     for (const e of tl.effects ?? []) sh(e, 't0', 't1', 't2', 't3');
+    for (const k of pastedOf(tl)) sh(k, 't0', 't1', 'play', 'end'); // 贴图、贴视频也推后（放着的视频算画面在动）
     for (const m of tl.camera) if (m.t1 !== cand.arrive) sh(m, 't0', 't1');
   }, pencil, `${cand.arrive.toFixed(2)}s 到位`);
 }
@@ -203,6 +210,12 @@ expectFail('镜头停稳时贴图压在字幕衬底底下', (tl) => {
   const y = c.y + (subTop(tl) + 10 - tl.view.cy) / c.z; // 卡片中心落在字幕上沿下面 10px
   tl.stickers = [{ id: '_stk', href: 'data:image/svg+xml;base64,', cx: c.x, cy: y, w: 300 / c.z, h: 170 / c.z, tilt: -3, t0: Math.max(0, m.t1 - 0.6), t1: Math.max(0.1, m.t1 - 0.1), card: '#ffffff', tape: '#e6d7ad', shade: '#3c2a12' }];
 }, safezone, '[失败] 镜头停稳时内容不进字幕区');
+// 贴视频也是内容：同一套外轮廓。镜头停稳时这块小屏幕的下半截落在字幕衬底底下
+expectFail('镜头停稳时贴视频压在字幕衬底底下', (tl) => {
+  const m = tl.camera.find((x) => !x.focus && x.t1 > x.t0) ?? tl.camera[0], c = m.to;
+  const y = c.y + (subTop(tl) + 10 - tl.view.cy) / c.z;
+  tl.clips = [{ id: '_clp', src: 'clips/_selftest.mp4', sha: '0', duration: 2, cx: c.x, cy: y, w: 300 / c.z, h: 170 / c.z, tilt: 2, t0: Math.max(0, m.t1 - 0.6), t1: Math.max(0.1, m.t1 - 0.1), play: Math.max(0.1, m.t1 - 0.1), end: m.t1 + 1.9, from: 0, to: 2, rate: 1, bezel: '#3b3632', tape: '#e6d7ad', shade: '#3c2a12', warm: { sepia: 0, saturate: 1 } }];
+}, safezone, '[失败] 镜头停稳时内容不进字幕区');
 expectFail('镜头停稳时一个图形越过取景框下沿（还在字幕上方）', (tl) => {
   const [m, ys] = shotWithShape(tl);
   m.to = { ...m.to, y: Math.max(...ys) - (tl.frame.b + 0.5 * (subTop(tl) - tl.frame.b) - tl.view.cy) / m.to.z }; // 图形底边落在取景框下沿和字幕之间
@@ -229,14 +242,14 @@ expectFail('镜头停稳时一个字的最后一笔露在画面左缘几像素�
 expectFail('推近把焦点挤到画面顶上（下面大半空着）', (tl) => {
   const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
   // 把焦点中心放到取景框中心上方 35% 个取景框高（按焦点的实际位置算；原来只把镜头往下挪固定一段，焦点本来偏下的基线上挪完反而更居中，查不出来）
-  const pts = tl.strokes.filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts), fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
+  const pts = focusPts(tl, m), fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
   m.to = { ...m.to, y: fy + (0.35 * (tl.frame.b - tl.frame.t)) / m.to.z };
 }, safezone, '[建议] 推近时焦点在画面中部');
 { // 推近镜头把焦点内容推进顶部平台界面：按基线画幅实际的顶部界面算（原来写死 TikTok 顶栏的 650px，16:9 上整段推出画外，查不出来）
   const top = uiZones(base).find((z) => z.t <= 2 && z.r - z.l >= base.canvas.w / 2);
   if (top) expectFail(`推近镜头把焦点内容推进 ${top.pf} 的${top.name}`, (tl) => {
     const m = tl.camera.find((x) => x.focus && (x.to.push ?? 1) > 1.001);
-    const pts = tl.strokes.filter((s) => m.focus.includes(s.action)).flatMap((s) => s.pts), fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
+    const pts = focusPts(tl, m), fy = (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2;
     m.to = { ...m.to, y: fy - (top.b / 2 - tl.view.cy) / m.to.z }; // 焦点中心正好落在顶部界面中间
   }, safezone, '[失败] 内容避开平台界面');
   else skip('推近镜头把焦点内容推进顶部平台界面', '基线画幅的平台界面里没有顶部横条');
@@ -827,6 +840,8 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
   expectBeats('贴图的图不在 public/stickers/ 里', (b) => {
     stick(b); host(b).actions.at(-1).src = '_selftest-missing.png';
   }, validate, /找不到 public\/stickers\/_selftest-missing.png/);
+  // 不是封面的贴图（原文、数据图、实物照片这类证据）要有出处，和贴视频一样（用户 2026-11-13：严格保护版权）
+  expectBeats('贴了一张不是封面的图，没写出处', (b) => { stick(b); }, validate, /「_selftest\.svg」没有出处/);
   // 编译：贴图整个盖在一段文字上（文字落在卡片里面，离外轮廓很远），版面检查也要报（PR #66 审查：原来只量到外轮廓的距离）
   expectBeats('贴图整个盖在一段文字上（关闭自动修复）', (b) => {
     const p = b.phrases.find((q) => !q.camera && !q.revisit?.length && q.actions?.some((a) => a.type === 'text' && typeof a.x === 'number'));
@@ -835,6 +850,90 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
     p.actions.push({ id: '_stk', type: 'sticker', at: t.at, src: '_selftest.svg', cx: t.x + 60, cy: t.y, w: 900, ep: 'e00-test' });
   }, compileNoFix(TGT), /离 _stk|_stk.*离/);
   } finally { fs.rmSync(STK, { force: true }); }
+}
+// 贴视频（clip，用户 2026-11-13）：实验画面这类证据贴在纸上放。片子要在、截的那段要在片子里面、出处要齐（许可只收能改编能商用的）；
+// 编译时它和贴图一样当一块图形，而且放完之前镜头不能把它移出取景框；分段渲染认片子的内容
+{
+  // 两段自测片子：20 秒的常规片；比整集还长几秒的长片（查「截的一段比整集还长」，5 帧/秒，长也不占地方）
+  const CLP = 'public/clips/_selftest.mp4', LONG = 'public/clips/_selftest-long.mp4', longSec = Math.ceil(base.duration) + 5;
+  const NAMES = ['贴视频的片子不在 public/clips/ 里', '贴视频截的一段超出片子长度', '贴视频截的一段 to 在 from 前面', '贴视频的倍速超出 0.25–4', '贴视频放得太长（建议）', '贴视频的 play 不在这句旁白里',
+    '贴视频没写出处', '贴的素材出处写成了示意数值（kind: example）', '贴的素材许可带 NC（不许商用）', '不是自己做的素材没写原始网址', '不是自己做的素材没存证（source）', 'CC BY 的素材没写作者', 'CC BY 的署名里没写作者',
+    '贴视频整个盖在一段文字上（关闭自动修复）', '贴视频还没放完，镜头就把它移出取景框（关闭自动修复）', '贴视频截的一段比整集还长（定格会被截住）', '回描贴视频只描外轮廓（卡片里的横线不画）',
+    '贴视频的片子编译后换过（渲染前核对）', '换了片子，分段渲染的指纹要变'];
+  fs.mkdirSync('public/clips', { recursive: true });
+  const ff = spawnSync(PY_QA, ['-c', 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())'], { encoding: 'utf8' }).stdout?.trim() || 'ffmpeg';
+  const enc = (out, sec, fps) => spawnSync(ff, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x8a6d4f:s=160x90:d=${sec}:r=${fps}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', out], { encoding: 'utf8' }).status === 0;
+  if (!enc(CLP, 20, 30) || !enc(LONG, longSec, 5)) for (const n of NAMES) skip(n, '生成不了自测用的片子（没有 ffmpeg）');
+  else try {
+    // 注入挑第一句写了字的句子（不推近、不回看）：贴在它上方够远的地方，后面几句的镜头才会离开它
+    const host = (b) => b.phrases.find((q) => !q.camera && !q.revisit?.length && q.role !== 'aha' && q.actions?.some((a) => a.type === 'text' && typeof a.x === 'number')) ?? b.phrases[0];
+    const own = { media: '_selftest.mp4', license: 'own', origin: '自测生成的 20 秒纯色片' }, web = { media: '_selftest.mp4', license: 'public-domain', origin: 'https://example.org/clip', cite: '示例片子（公有领域）' };
+    const paste = (b, extra = {}, fact = own) => {
+      const p = host(b);
+      if (fact) b.facts = [...(b.facts ?? []), fact];
+      p.actions.push({ id: '_clp', type: 'clip', at: p.actions[0]?.at ?? p.text.slice(0, 2), src: '_selftest.mp4', cx: 2600, cy: 400, w: 300, to: 2, ...extra });
+    };
+    const N = [...NAMES];
+    expectBeats(N.shift(), (b) => paste(b, { src: '_selftest-missing.mp4' }, { ...own, media: '_selftest-missing.mp4' }), validate, /找不到 public\/clips\/_selftest-missing\.mp4/);
+    expectBeats(N.shift(), (b) => paste(b, { from: 0.5, to: 99 }), validate, /片子只有 20\.00 秒，放不到第 99 秒/);
+    expectBeats(N.shift(), (b) => paste(b, { from: 1.5, to: 1 }), validate, /要在 from（1\.5）之后/);
+    expectBeats(N.shift(), (b) => paste(b, { rate: 8 }), validate, /倍速在 0\.25–4 之间/);
+    expectBeats(N.shift(), (b) => paste(b, { to: 20 }), validate, /超过 15 秒/, { advice: true });
+    expectBeats(N.shift(), (b) => paste(b, { play: '旁白里没有这个词' }), validate, /「旁白里没有这个词」不在这句旁白里/);
+    expectBeats(N.shift(), (b) => paste(b, {}, null), validate, /「_selftest\.mp4」没有出处/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { media: '_selftest.mp4', kind: 'example' }), validate, /media 不能和 kind: example 写在一起/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, license: 'CC-BY-NC-4.0', cite: '示例 CC BY-NC 4.0' }), validate, /「CC-BY-NC-4\.0」不收/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, origin: '网上找的' }), validate, /写原始页面的网址/);
+    expectBeats(N.shift(), (b) => paste(b, {}, web), validate, /存证：/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, license: 'CC-BY-4.0', cite: '示例片子 CC BY 4.0' }), validate, /CC-BY-4\.0 要署名：写作者/);
+    expectBeats(N.shift(), (b) => paste(b, {}, { ...web, license: 'CC-BY-4.0', author: '某作者', cite: '示例片子 CC BY 4.0' }), validate, /cite 里写上作者「某作者」/);
+    // 编译：小屏幕整个盖在一段文字上（文字落在屏幕里面），版面检查要报
+    expectBeats(N.shift(), (b) => {
+      const p = host(b), t = p.actions.find((a) => a.type === 'text' && typeof a.x === 'number');
+      paste(b, { at: t.at, cx: t.x + 60, cy: t.y, w: 900 });
+    }, compileNoFix(TGT), /离 _clp|_clp.*离/);
+    // 编译：第一句贴在字的上方，慢放成 8 秒，后面几句镜头往下走，它还没放完就出了取景框
+    expectBeats(N.shift(), (b) => {
+      const p = host(b), t = p.actions.find((a) => a.type === 'text' && typeof a.x === 'number');
+      paste(b, { at: t.at, cx: t.x, cy: t.y - 430, w: 260, rate: 0.25 });
+    }, compileNoFix(TGT), /_clp 还没放完/);
+    // 编译：片子比整集还长，4 倍速放完整段，片子里走过的秒数超过整集（渲染时定格会被截在整集的帧数以内）
+    expectBeats(N.shift(), (b) => paste(b, { src: '_selftest-long.mp4', to: undefined, rate: 4 }, { ...own, media: '_selftest-long.mp4' }), compileNoFix(TGT), /截的一段在片子里走 .*比整集.*还长/);
+    // 编译：回描贴视频，只描外轮廓（卡片里那排横线只给版面检查用；PR #71 审查：原来会把二十几条横线也描出来）
+    {
+      const name = N.shift();
+      if (SKIP.has('compile')) skip(name, '这次没改编译器和分镜校验（--skip compile）');
+      else {
+        const b = structuredClone(beatsSrc);
+        b.id = '_selftest';
+        for (const a of acts(b)) { for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov); delete a.layout; }
+        paste(b);
+        const later = b.phrases.slice(b.phrases.indexOf(host(b)) + 1).find((q) => q.actions?.length);
+        later?.actions.push({ id: '_rt', type: 'retrace', at: later.actions[0].at, target: '_clp' });
+        fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+        const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT], { encoding: 'utf8' }), tp = `build/_selftest-${TGT}.timeline.json`;
+        const n = fs.existsSync(tp) ? JSON.parse(fs.readFileSync(tp, 'utf8')).strokes.filter((s) => s.action === '_rt').length : -1;
+        record(name, later && n > 0 && n <= 2, `回描笔画 ${n} 笔（只描外轮廓应是 2 笔）\n${(r.stdout || '') + (r.stderr || '')}`);
+        fs.rmSync('data/_selftest.beats.json', { force: true });
+        for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+      }
+    }
+    // 渲染前：编译后换了片子，分段渲染、静帧链接片子时要拦下（不然分段缓存拿旧指纹复用旧画面）
+    {
+      const { linkClips } = await import('../compiler/clips.mjs'), dir = fs.mkdtempSync(path.resolve('build/_selftest-pub-'));
+      let msg = '';
+      try { linkClips({ clips: [{ id: '_clp', src: 'clips/_selftest.mp4', sha: '0'.repeat(64) }] }, dir); } catch (e) { msg = e.message; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+      record(N.shift(), /编译之后换过了/.test(msg), msg || '没有报错');
+    }
+    // 分段指纹：同一条时间线只换片子的内容指纹，用得到它的段指纹要变
+    {
+      const { sliceFor } = await import('../render/segmented.mjs'), tl = structuredClone(base), c = tl.camera.at(-1).to;
+      tl.clips = [{ id: '_clp', src: 'clips/_selftest.mp4', sha: 'a', duration: 2, cx: c.x, cy: c.y, w: 200, h: 112, tilt: 2, t0: 0.5, t1: 1, play: 1, end: 3, from: 0, to: 2, rate: 1, bezel: '#3b3632', tape: '#e6d7ad', shade: '#3c2a12', warm: { sepia: 0, saturate: 1 } }];
+      const a = JSON.stringify(sliceFor(tl, 0, tl.durationInFrames));
+      tl.clips[0].sha = 'b';
+      record(N.shift(), a !== JSON.stringify(sliceFor(tl, 0, tl.durationInFrames)), 'sliceFor 没带上片子的指纹');
+    }
+  } finally { fs.rmSync(CLP, { force: true }); fs.rmSync(LONG, { force: true }); }
 }
 // 多音字：结构助词「地」（用户听 E02 v5：「细细地讲」念成了 dì）
 expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b) => {

@@ -1,4 +1,5 @@
-"""成片的版权信息与存证：把品牌和版权声明写进 MP4 元数据（只改封装，不重新编码），再记下成片的 SHA-256、时间和生成它的引擎版本。
+"""成片的版权信息与存证：把品牌和版权声明写进 MP4 元数据（只改封装，不重新编码），再记下成片的 SHA-256、时间和生成它的引擎版本；
+片中贴了素材（贴视频、不是封面的贴图）的，每个素材的出处、许可和文件指纹也记进去。
 存证写两处：交付目录里的 provenance.json（随成片交付），和本机台账 docs-private/provenance.jsonl（不进仓库，留作出处证明）。
 品牌信息取自本机 brand.local.json；没有这个文件时流水线不调用这一步。
 用法：../.venv-qa/bin/python qa/provenance.py data/<id>.beats.json build/<id>-<画幅>.timeline.json out/<id>/<画幅>.mp4
@@ -66,6 +67,13 @@ rec = {
     "sha256": sha256(video), "duration": tl["duration"], "beatsSha256": sha256(beats_path), "style": tl["style"]["version"],
     "engine": engine_rev(), "brand": brand["name"], "copyright": brand["copyright"],
 }
+# 片中贴的别人的、或自己另做的素材（贴视频、不是封面的贴图）：出处、许可和贴进去的那个文件的指纹，一起记进存证
+clip_sha = {k["src"].split("/", 1)[1]: k["sha"] for k in tl.get("clips") or []}  # src 是 clips/<文件名>（文件名可以带子目录）
+media = [{"file": m, "license": f.get("license"), "origin": f.get("origin"), **({"author": f["author"]} if f.get("author") else {}),
+          **({"evidence": f["source"]} if f.get("source") else {}), **({"sha256": clip_sha[m]} if m in clip_sha else {})}
+         for f in beats.get("facts") or [] for m in ([f["media"]] if isinstance(f.get("media"), str) else f.get("media") or [])]
+if media:
+    rec["media"] = media
 book = video.parent / "provenance.json"
 recs = [r for r in (json.loads(book.read_text(encoding="utf-8")) if book.exists() else []) if r["file"] != rec["file"]]
 book.write_text(json.dumps(recs + [rec], ensure_ascii=False, indent=1), encoding="utf-8")

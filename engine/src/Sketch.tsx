@@ -1,9 +1,9 @@
 import React from 'react';
 import { getStroke } from 'perfect-freehand';
-import { AbsoluteFill, Html5Audio, cancelRender, continueRender, delayRender, staticFile, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, Freeze, Html5Audio, OffthreadVideo, cancelRender, continueRender, delayRender, staticFile, useCurrentFrame } from 'remotion';
 import 'lxgw-wenkai-webfont/lxgwwenkai-bold.css';
 import 'lxgw-wenkai-webfont/lxgwwenkai-regular.css'; // 风格 0.7.0 起字幕降一档字重
-import { Cam, cameraAt, ease, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke, Sticker, STICKER, stickerCard, stickerTapes } from './timeline';
+import { Cam, cameraAt, ease, InkMode, partialPts, PENCIL_SHADOW, PencilPose, pencilPose, Style, Timeline, progress, Stroke, Sticker, STICKER, stickerCard, stickerTapes, Clip, clipTime } from './timeline';
 
 // 所有颜色、纸面、墨迹、字幕参数都来自时间线里带的风格规范（style/style.json），这里不写裸值
 // 墨迹层的世界坐标框（overflow 可见，只是坐标系，不裁内容）
@@ -260,6 +260,28 @@ const StickerCard: React.FC<{ s: Sticker; t: number }> = ({ s, t }) => {
   );
 };
 
+// ---------- 贴视频（clip）：纸上的一块小屏幕（世界层，在墨迹和贴图下面）。落下和贴图同一套动作和外轮廓，边框是深色细边 ----------
+// 画面按 clipTime 取片子那一刻的帧，OffthreadVideo 渲染时逐帧精确取帧，同一帧两次渲染一样。片子的起点交给 trimBefore，
+// Freeze 只定「已经放了多少秒」：Remotion 把 Freeze 的帧号截在整集的帧数以内，直接定片子里的绝对秒数，长素材截后面一段时会停在错的帧上（PR #71 审查）。
+// 片子调成纸面的暖色（style.clip.warm），再和整个画面一起过全局调色、暗角和颗粒。不出声
+const ClipScreen: React.FC<{ k: Clip; t: number; fps: number }> = ({ k, t, fps }) => {
+  if (t < k.t0) return null;
+  const e = ease(progress(t, k.t0, k.t1), 0.35), up = 1 - e, { W, H } = stickerCard(k), b = STICKER.border * k.w;
+  const box = (x: number, y: number, w: number, h: number, more: React.CSSProperties = {}): React.CSSProperties => ({ position: 'absolute', left: x, top: y, width: w, height: h, ...more });
+  return (
+    <div style={{ position: 'absolute', left: k.cx, top: k.cy - up * STICKER.rise, width: 0, height: 0, transformOrigin: '0 0', transform: `rotate(${k.tilt + up * STICKER.turn}deg) scale(${1 + up * (STICKER.scale0 - 1)})`, opacity: Math.min(1, progress(t, k.t0, k.t0 + 0.08)) }}>
+      <div style={box(-W / 2 + 6 + up * 14, -H / 2 + 8 + up * 20, W, H, { borderRadius: b * 0.6, background: k.shade, opacity: STICKER.shadow * (0.6 + 0.4 * e), filter: 'blur(7px)' })} />
+      <div style={box(-W / 2, -H / 2, W, H, { borderRadius: b * 0.6, background: k.bezel })} />
+      <div style={box(-W / 2 + b, -H / 2 + b, k.w, k.h, { overflow: 'hidden', borderRadius: 2, background: k.bezel })}>
+        <Freeze frame={(clipTime(k, t) - k.from) * fps}>
+          <OffthreadVideo src={staticFile(k.src)} muted trimBefore={k.from * fps} style={{ width: '100%', height: '100%', objectFit: 'cover', filter: `sepia(${k.warm.sepia}) saturate(${k.warm.saturate})` }} />
+        </Freeze>
+      </div>
+      {stickerTapes(k).map((p, i) => <div key={i} style={box(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, { background: k.tape, opacity: 0.78, transform: `rotate(${p.ang}deg)` })} />)}
+    </div>
+  );
+};
+
 // ---------- 主画面 ----------
 
 // ---------- 片尾参考资料卡（屏幕层）：正片说完后整张纸色底淡入，取景框里列出这一集的资料和附言（timeline.endCard） ----------
@@ -317,6 +339,7 @@ export const Sketch: React.FC<{ tl: Timeline; inkMode: InkMode; showPen?: boolea
       {(tl.audio || tl.narration) && <Html5Audio src={staticFile(tl.audio ?? tl.narration)} />}
       <World cam={cam} view={tl.view}><PaperWorld st={st} cam={cam} view={tl.view} canvas={tl.canvas} /></World>
       <Lamp w={w} h={h} st={st} t={t} />
+      {!!tl.clips?.length && <World cam={cam} view={tl.view}>{tl.clips.map((k) => <ClipScreen key={k.id} k={k} t={t} fps={tl.fps} />)}</World>}
       <World cam={cam} view={tl.view}>
         <svg {...worldSvg}>
           <defs>

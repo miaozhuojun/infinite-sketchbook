@@ -158,6 +158,21 @@ expectFail('片尾铅笔停在画面中间', (tl) => {
   last.at = [c.x, c.y]; // 最后一段停笔挪到片尾镜头的正中
   tl.penTrack.at(-2).to = last.at;
 }, pencil, '[建议] 片尾不带笔');
+{
+  // 回看时笔退到画外以后，又从画外慢慢滑回画面里（审 #73）：挑一段笔在画面中间一带的轨迹，改成「退场 → 从画外滑回原处 → 原地停到换节」
+  const posOf = (sg) => { const q = penAt(base, sg.t0); return { at: [q.x, q.y], s: toScreen(base, [q.x, q.y], sg.t0) }; };
+  const inMid = ({ s: [x, y] }) => x > base.canvas.w * 0.2 && x < base.canvas.w * 0.8 && y > base.canvas.h * 0.2 && y < base.canvas.h * 0.8;
+  const pick = base.penTrack.filter((sg) => sg.t1 - sg.t0 >= 0.4 && inMid(posOf(sg))).sort((a, b) => b.t1 - b.t0 - (a.t1 - a.t0))[0];
+  if (!pick) skip('退场以后笔又滑回画面', '基线里没有笔在画面中间、够长的一段轨迹');
+  else expectFail('退场以后笔又滑回画面', (tl) => {
+    const i = tl.penTrack.findIndex((x) => x.t0 === pick.t0 && x.t1 === pick.t1 && x.kind === pick.kind), sg = tl.penTrack[i];
+    const c = cameraAt(tl.camera, sg.t0), d = (sg.t1 - sg.t0) / 4, P = posOf(pick).at, off = [c.x + (tl.canvas.w + 600 - tl.view.cx) / c.z, P[1]];
+    tl.penTrack.splice(i, 1,
+      { kind: 'move', t0: sg.t0, t1: sg.t0 + d, from: P, to: off, exit: true },
+      { kind: 'move', t0: sg.t0 + d, t1: sg.t0 + 3 * d, from: off, to: P },
+      { kind: 'rest', t0: sg.t0 + 3 * d, t1: sg.t1, at: P, chapter: true });
+  }, pencil, '[失败] 退场后笔不回画面');
+}
 // 往平台界面里挪：按基线画幅实际有的界面区算位置（原来写死 9:16 的 TikTok 底栏和右侧按钮列，16:9 基线上这两条注入落不到任何界面里，永远「漏掉」）
 const uiZones = (tl) => tl.platforms.flatMap((pf) => (tl.platformUI?.[pf] ?? []).map((z) => ({ ...z, pf })));
 {

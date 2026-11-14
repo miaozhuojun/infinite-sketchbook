@@ -12,6 +12,8 @@
 //      一句旁白里累计不超过 pencil.maxCoverPhraseSec 秒（审片 v10：断续压住「x₂」累计 1.2 秒，连续的检查拦不住）
 //      （审片 v9：16x9 画声波的约 1.9 秒里，笔身横压 x₁、x₂ 和「×3」，正在说「这个输入说话越大声」）
 //   8. 片尾不带笔：最后一帧整支笔都在画外（审片 v9：16x9 笔扫过算式和灯后停在右缘，终帧带着铅笔）
+//   9. 退场后笔不回画面：回看时笔退到画外（penTrack 里 exit 那段），到下一次换节飞进来（chapter 那段）或落笔之前，整支笔都不在画布里
+//      （审 #73：入场点换了以后，轨迹补空档让笔从退场点慢慢滑过去，E07 片尾回顾时笔在画面里漂了 14 秒，别的检查都没拦住）
 // 用法：node qa/pencil_check.mjs build/<id>.timeline.json
 import '../compiler/node_version.mjs'; // 先查 Node 版本
 import fs from 'node:fs';
@@ -201,6 +203,20 @@ check('写字时笔身不长时间压住别的字', !longCover.length && !heavy.
 // 8. 片尾不带笔
 const lastPose = pencilPose(tl, (tl.durationInFrames - 1) / tl.fps), onCanvas = pencilBodyPts(tl, lastPose).filter(([x, y]) => x > 0 && x < tl.canvas.w && y > 0 && y < tl.canvas.h);
 check('片尾不带笔', !onCanvas.length, onCanvas.length ? `最后一帧铅笔还在画面里（笔尖 ${lastPose.x.toFixed(0)},${lastPose.y.toFixed(0)}）` : '最后一帧整支笔都在画外', 'pencil.exit');
+
+// 9. 退场后笔不回画面
+{
+  const segs = [...(tl.penTrack ?? [])].sort((a, b) => a.t0 - b.t0), back = [];
+  for (const [i, ex] of segs.entries()) {
+    if (!ex.exit) continue;
+    const t1 = segs.slice(i + 1).find((sg) => sg.chapter || sg.kind === 'down')?.t0 ?? tl.duration;
+    for (let f = Math.ceil(ex.t1 * tl.fps); f < t1 * tl.fps; f++) {
+      const p = pencilPose(tl, f / tl.fps);
+      if (pencilBodyPts(tl, p).some(([x, y]) => x > 0 && x < tl.canvas.w && y > 0 && y < tl.canvas.h)) back.push(f);
+    }
+  }
+  check('退场后笔不回画面', !back.length, back.length ? `${back.length} 帧笔在退场以后、飞回来之前又出现在画面里：` + runs(back).slice(0, 5).map(([a, b]) => `${(a / tl.fps).toFixed(2)}–${(b / tl.fps).toFixed(2)}s`).join('、') : '回看时退到画外的笔，飞回来之前一直在画外');
+}
 
 console.log(`\n铅笔检查失败 ${fails.length} 项${advs.length ? `（另有建议 ${advs.length} 项）` : ''}`);
 process.exit(fails.length ? 1 : 0);

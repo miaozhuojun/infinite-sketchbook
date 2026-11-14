@@ -307,7 +307,11 @@ const inkBox = (pts) => pts.reduce((b, [x, y, w]) => [Math.min(b[0], x - w / 2),
 const plain = (t) => t.replace(/_/g, '');
 // 文字和文字挨着时人会连起来读：不同行要 ≥0.8 个字号；同一行（竖向重叠 ≥40%）横向要 ≥1 个字号，贴着的一侧是数字时 ≥1.5 个字号
 // （设备预览和审片发现「门槛 5」「7」在同一行被读成「门槛 57」）。比例在世界坐标和屏幕上相同（镜头是等比缩放）。
+// 表格（两段文字的 grid 相同）：格子靠行列对齐来读，不会连起来读，互相之间只要求墨迹不碰（GAP），不按上面的字号比例加宽
+// （E07 的记分图：一列是考一回，四行记四道题各扣几分；按 1.5 个字号留空，八列的表有两屏宽，自动避让还会把格子挪得七零八落）
+const sameGrid = (A, B) => A.grid != null && A.grid === B.grid;
 const textPair = (A, pa, B, pb) => {
+  if (sameGrid(A, B)) return null;
   const a = inkBox(pa), b = inkBox(pb);
   const oy = Math.min(a[3], b[3]) - Math.max(a[1], b[1]), minH = Math.min(a[3] - a[1], b[3] - b[1]);
   const em = Math.min(A.size, B.size);
@@ -319,7 +323,7 @@ const textPair = (A, pa, B, pb) => {
   }
   return null;
 };
-const needGap = (A, B) => (A.type === 'text' && B.type === 'text' ? Math.max(GAP, style.type.labelTextGapEm * Math.min(A.size, B.size)) : GAP);
+const needGap = (A, B) => (A.type === 'text' && B.type === 'text' && !sameGrid(A, B) ? Math.max(GAP, style.type.labelTextGapEm * Math.min(A.size, B.size)) : GAP);
 // 采样点的中线包围盒和最粗笔宽
 const ptsBox = (pts) => {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, w = 0;

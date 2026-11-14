@@ -771,6 +771,24 @@ expectBeats('同一行两个文字标签贴太近（关闭自动修复）', (b) 
   const t = firstText(b);
   b.phrases[0].actions.push({ id: '_row', type: 'text', at: t.at, text: '57', x: t.x + t.size * 1.6, y: t.y, size: 56 });
 }, compileNoFix(TGT), /在同一行，横向只有/, { any: true });
+if (SKIP.has('compile')) skip('同一张表里的两个格子贴近，不按「同一行」报', '这次没改编译器和分镜校验（--skip compile）');
+else {
+  // 表格例外的反向用例：和上一条同样的两段字，写了相同的 grid（同一张表里的格子）就不按「同一行」规则报；只给一边写 grid 照样报
+  const run = (grids) => {
+    const b = structuredClone(beatsSrc); b.id = '_selftest';
+    for (const a of acts(b)) { for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov); delete a.layout; }
+    const t = firstText(b);
+    if (grids[0]) t.grid = grids[0];
+    b.phrases[0].actions.push({ id: '_row', type: 'text', at: t.at, text: '57', x: t.x + t.size * 1.6, y: t.y, size: 56, ...(grids[1] ? { grid: grids[1] } : {}) });
+    fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+    const r = spawnSync('node', compileNoFix(TGT)('data/_selftest.beats.json'), { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+    fs.rmSync('data/_selftest.beats.json', { force: true });
+    for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+    return out;
+  };
+  const same = run(['_g', '_g']), half = run(['_g', null]);
+  record('同一张表里的两个格子贴近，不按「同一行」报（只有一边写 grid 照样报）', !/_row.*在同一行/.test(same) && /_row.*在同一行/.test(half), same + half);
+}
 {
   // 私有创作配置把一项建议升成 hard：同样的缺陷就要判失败（用户可以把自己在意的取舍收紧）
   const prof = path.resolve('build/_selftest.profile.json');

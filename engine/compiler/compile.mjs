@@ -586,17 +586,18 @@ function schedule(boost) {
       // 半路笔会扫过画面下沿和字幕（E01 v8 竖版）。笔不在回看镜头里时，就当它在这一镜右上方画外，从那里和镜头一起飞
       // 回看时退到画外的笔（penAway）：回看之后不管隔了几句不画的，第一笔都照这条从这一镜右上方画外飞进来
       const backFromAway = pi > 0 && (phrases[pi - 1].revisit?.length || penAway);
+      let holdAway = null; // 换了入场点时，原来的退场点：起飞前笔停在这里（只在上一段轨迹就是退场那段时换，退场以后没别的轨迹）
       if (penPos !== OFF && backFromAway && !penAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         // 画外的入场点：右边外面 260px（原来是 rc.x + 1000/rc.z，取景中心偏左的横版 view.cx 815 时它落在画面里，屏幕 x 1815）
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + (TGT.w + 260 - VIEW.cx) / rc.z, rc.y - 350 / rc.z]; penAway = true; }
-      }
-      // 一段回看里镜头在纸面上走得远时（蛇形版面，E07：第一句回看在纸面最右边，回看完在最左边动笔），退场点停在最右那一镜的右边外面，
-      // 飞回来有七千像素，旁白说完八秒笔才落下。笔在画外没人看得见：动笔前把它挪到上一镜和这一镜的右边外面
-      // （和退场点一样的算法，两镜之间插值出来的镜头也看不见这个点），再和镜头一起飞进来
-      if (penAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
+      } else if (penAway && penTrack.at(-1)?.exit && a === ordered.find((x) => !PENLESS.has(x.type))) {
+        // 一段回看里镜头在纸面上走得远时（蛇形版面，E07：第一句回看在纸面最右边，回看完在最左边动笔），退场点停在最右那一镜的右边外面，
+        // 飞回来有七千像素，旁白说完八秒笔才落下。入场点改到上一镜和这一镜的右边外面（和退场点一样的算法，两镜之间插值出来的镜头也看不见）。
+        // 笔照旧停在退场点，等到起飞那一刻才换到入场点（见下面 holdAway）：两个点那一刻都在画外。只改 penPos 的话，轨迹补空档会让笔
+        // 从退场点慢慢滑到入场点，从回看的那几镜里穿过去（审 #73：E07 有 432 帧笔漂在画面里）
         const rc = targetCam[pi - 1], near = offRight([rc, targetCam[pi]], rc ? rc.y - 350 / rc.z : penPos[1]);
-        if (near && dist(near, [first.x, first.y]) < dist(penPos, [first.x, first.y])) penPos = near;
+        if (near && dist(near, [first.x, first.y]) < dist(penPos, [first.x, first.y])) { holdAway = penPos; penPos = near; }
       }
       // 全片第一笔：片子一开头笔就在纸上落笔处，不先从画外飞进来（审片 E01 v9：飞进来要 0.76 秒，开场钩子的灯晚亮）
       const opening = penPos === OFF && !strokes.length && cue - (a.lead ?? PEN.cueLead) < 1;
@@ -707,6 +708,7 @@ function schedule(boost) {
       // 停的位置还要看接下来的飞行（flightEx、flyFar）：从那里飞到落笔处，笔尖不比落笔处更出舒适框，飞行也不超速
       let flyFrom = fromPos;
       const flyT0 = flight ? takeoff : 0;
+      if (holdAway && takeoff > awayUntil + 1e-3) penTrack.push({ kind: 'rest', t0: awayUntil, t1: takeoff, at: holdAway });
       if (flight && penPhrase === pi - 1 && !penAway && targetCam[pi - 1] && flyT0 - penFree >= PK.minRest) {
         const best = pickRest(penPos, penFree, [targetCam[pi - 1], focusCam[pi - 1]].filter(Boolean), false, flyT0, null,
           { ex: (q) => flightEx(q, st, 1), near: (q) => dist(q, st) <= flyFar, stay: flightEx(penPos, st, 1) });

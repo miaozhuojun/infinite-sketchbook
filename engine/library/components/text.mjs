@@ -11,6 +11,7 @@ export default {
       anchor: { type: 'enum', values: ['l', 'c', 'r'], desc: '对齐，默认 c' },
       color: { type: 'inkColor' }, speed: { type: 'number', desc: '书写速度倍数（标题可略快）' },
       plainX: { type: 'enum', values: [true, false], desc: '为 true 时变量 x 写成普通交叉形（默认 false）' },
+      grid: { type: 'string', desc: '表格名。同一张表里的格子（grid 相同的几段文字）靠行列对齐来读，互相之间只要求墨迹不碰，不按「挨着会连起来读」加宽间距；格子自己要对齐，编译不替你排' },
     },
     example: { text: '感知机 x_1×w_1=4', x: 0, y: 0, size: 72 },
     preview: [{ text: '感知机', x: 0, y: -50, size: 72 }, { text: 'x_1×w_1=4', x: 0, y: 40, size: 56 }],

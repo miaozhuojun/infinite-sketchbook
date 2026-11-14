@@ -591,6 +591,13 @@ function schedule(boost) {
         // 画外的入场点：右边外面 260px（原来是 rc.x + 1000/rc.z，取景中心偏左的横版 view.cx 815 时它落在画面里，屏幕 x 1815）
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + (TGT.w + 260 - VIEW.cx) / rc.z, rc.y - 350 / rc.z]; penAway = true; }
       }
+      // 一段回看里镜头在纸面上走得远时（蛇形版面，E07：第一句回看在纸面最右边，回看完在最左边动笔），退场点停在最右那一镜的右边外面，
+      // 飞回来有七千像素，旁白说完八秒笔才落下。笔在画外没人看得见：动笔前把它挪到上一镜和这一镜的右边外面
+      // （和退场点一样的算法，两镜之间插值出来的镜头也看不见这个点），再和镜头一起飞进来
+      if (penAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
+        const rc = targetCam[pi - 1], near = offRight([rc, targetCam[pi]], rc ? rc.y - 350 / rc.z : penPos[1]);
+        if (near && dist(near, [first.x, first.y]) < dist(penPos, [first.x, first.y])) penPos = near;
+      }
       // 全片第一笔：片子一开头笔就在纸上落笔处，不先从画外飞进来（审片 E01 v9：飞进来要 0.76 秒，开场钩子的灯晚亮）
       const opening = penPos === OFF && !strokes.length && cue - (a.lead ?? PEN.cueLead) < 1;
       const fromPos = opening ? [first.x, first.y] : penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区

@@ -68,6 +68,14 @@ export function makeKit(a, style, library) {
   return { rnd, color, width, S, text, style, smoothPath, polyPath, wobble, r2, dist, hershey, glyphData, CJK };
 }
 
+// 把路径整体平移 (dx, dy)：复用（copyOf）照搬已画好的墨迹用。笔画路径都是绝对坐标的 M/L/C（smoothPath、polyPath），
+// 每个命令后面都是成对的坐标，按出现顺序一个 x 一个 y 地加；遇到别的命令（相对坐标、弧线）就报错，不猜
+export function translatePath(d, dx, dy) {
+  if (/[^MLCQTS0-9\s.,+-]/.test(d)) throw new Error(`复用只认绝对坐标的 M/L/C/Q/T/S 路径：${d.slice(0, 40)}`);
+  let k = 0;
+  return d.replace(/[MLCQTS]|[-+]?(?:\d+\.?\d*|\.\d+)/g, (tok) => (/^[MLCQTS]$/.test(tok) ? tok : String(r2(Number(tok) + (k++ % 2 ? dy : dx)))));
+}
+
 // 沿法线把路径整体平移 delta 像素（回描、带权连线的多遍描线都用它：同一支笔多描几遍，而不是换粗笔）
 export function offsetPath(d, delta) {
   const pr = new svgPathProperties(d), L = pr.getTotalLength(), n = Math.max(4, Math.ceil(L / 4));

@@ -30,7 +30,7 @@ export const loadStyle = (beats) => {
 // 关卡级别：gates 里写 advice 的只给建议；没列出的都是 hard
 export const gateLevel = (style, id) => (style.gates?.[id] === 'advice' ? 'advice' : 'hard');
 export const strip = (s) => s.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '');
-const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead']);
+const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead', 'copyOf', 'shift']);
 const ROLES = new Set(['hook', 'setup', 'aha', 'recap', 'next']);
 
 // 估算一行字的宽度：中文全角，其余半角
@@ -211,6 +211,16 @@ export function validateBeats(beats, style, reg) {
       if (a.at === undefined || !st.includes(strip(String(a.at)))) E(`${A}.at`, `cue「${a.at}」不在这句旁白里`);
       const def = reg.get(a.type)?.meta ?? BUILTINS[a.type];
       if (!def) { E(`${A}.type`, `未知组件「${a.type}」，可用：${[...reg.keys(), ...Object.keys(BUILTINS)].join('、')}`); continue; }
+      // 复用（copyOf）：照搬前面句子里画好的一个元素，整体平移 shift，提示词那一刻整块出现、不动笔（出现时必须在镜头外，编译时查）。
+      // 参数照原元素写一份平移后的（表格名 grid 可以换成新表的），版面检查按它们算；墨迹取原元素的，不重新生成，和原来的一笔不差
+      if (a.copyOf !== undefined) {
+        const src = beats.phrases.slice(0, pi).flatMap((q) => q.actions || []).find((x) => x.id === a.copyOf);
+        if (!src) E(`${A}.copyOf`, `「${a.copyOf}」要是前面句子里画过的元素`);
+        else if (src.type !== a.type) E(`${A}.type`, `复用要和原元素同一种（「${a.copyOf}」是 ${src.type}）`);
+        else if (['glow', 'off', 'sticker', 'clip'].includes(a.type)) E(`${A}.copyOf`, `只能复用笔画出来的元素，${a.type} 不行`);
+        if (!Array.isArray(a.shift) || a.shift.length !== 2 || !a.shift.every(Number.isFinite)) E(`${A}.shift`, '复用要写平移量 [dx, dy]（纸面像素）');
+        if (a.layout !== undefined) E(`${A}.layout`, '复用的元素不能另写画幅版式：墨迹照搬原元素的');
+      }
       const checkParams = (obj, where, partial) => {
         for (const [k, spec] of Object.entries(def.params)) {
           if (obj[k] === undefined) { if (spec.required && !partial && !(a.after && (k === 'x' || k === 'y'))) E(`${where}.${k}`, '必填'); continue; }

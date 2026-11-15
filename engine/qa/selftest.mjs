@@ -645,6 +645,17 @@ expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => 
   p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
   p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
 }, compileNoFix(TGT), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/, { advice: true });
+// 复用（copyOf）：照搬前面画好的元素，提示词那一刻整块出现、不动笔。出现时就在画面里，观众看到的是凭空冒出来一块，要报
+// （用户 2026-11-15 看 E07 样片 v3：同一张网画了四遍，「同样的图画过一次就应该以某种优美的方式复用」——复用的图要在镜头外放好，镜头飞过去）
+expectBeats('复用的图出现时就在画面里（凭空冒出来）', (b) => {
+  const src = firstText(b), p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1);
+  if (p.actions.some((a) => a.id === src.id)) throw new Error('基线最后一句就是第一段文字所在的句子，复用要照搬前面句子里的');
+  p.actions.unshift({ ...structuredClone(src), id: '_cp', at: p.actions[0].at, copyOf: src.id, shift: [0, 40], y: src.y + 40 });
+}, (p) => ['compiler/compile.mjs', p, '--target', TGT], /复用冒出来/);
+expectBeats('复用的元素和原元素不是同一种', (b) => {
+  const src = firstText(b), p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1);
+  p.actions.unshift({ id: '_cp', type: 'circle', at: p.actions[0].at, cx: 0, cy: 0, r: 40, copyOf: src.id, shift: [0, 40] });
+}, validate, '复用要和原元素同一种');
 expectBeats('顿悟句推不近又没声明', (b) => {
   // 顿悟句的焦点圈住画面最上面的字和下面远处新写的一行：焦点装不下，推不近；分镜没写 noPush，编译要报
   const p = b.phrases.find((q) => q.role === 'aha'), top = acts(b).find((a) => a.type === 'text');

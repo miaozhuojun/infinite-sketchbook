@@ -10,7 +10,7 @@ import { svgPathProperties } from 'svg-path-properties';
 import { loadLibrary, PENLESS } from '../library/index.mjs';
 import { loadSticker } from './stickers.mjs';
 import { loadClip } from './clips.mjs';
-import { makeKit, samplePts, offsetPath, r2, dist } from '../library/kit.mjs';
+import { makeKit, samplePts, offsetPath, translatePath, r2, dist } from '../library/kit.mjs';
 import { validateBeats, loadStyle, gateLevel, strip, breakLines, styleSubset } from './validate.mjs';
 const { stickerOutline, flightTip, cameraAt, pastedOf } = await import('../src/timeline.ts');
 
@@ -139,7 +139,16 @@ const actionsById = new Map(allActions.map((a) => [a.id, a]));
 const stickerOf = (a) => { const im = loadSticker(a.src); return { cx: a.cx, cy: a.cy, w: a.w, h: (a.w * im.h) / im.w, tilt: a.tilt ?? -3, href: im.href }; };
 // 贴视频：画面的宽高按片子的比例（w 是画面宽，不含边框），和贴图同一套外轮廓
 const clipOf = (a) => { const v = loadClip(a.src); return { cx: a.cx, cy: a.cy, w: a.w, h: (a.w * v.h) / v.w, tilt: a.tilt ?? 2, src: v.src, sha: v.sha, duration: r2(v.duration) }; };
+// 复用（copyOf）：照搬原元素已经画好的墨迹，整体平移 shift（不重新生成，手写的抖动也一笔不差）。原元素被自动修正放大、挪动后跟着重搬；
+// 文字的字号、位置跟着原元素同步，版面检查按它们算
+const copyGeo = (a) => {
+  const src = actionsById.get(a.copyOf), [dx, dy] = a.shift;
+  if (src.type === 'text') Object.assign(a, { size: src.size, ...(src.x !== undefined ? { x: src.x + dx, y: src.y + dy } : {}) });
+  return geo.get(a.copyOf).map((s) => ({ ...s, group: a.id, d: translatePath(s.d, dx, dy) }));
+};
+const penless = (a) => PENLESS.has(a.type) || a.copyOf !== undefined;
 const buildOne = (a) => {
+  if (a.copyOf !== undefined) { geo.set(a.id, copyGeo(a)); return; }
   if (a.type === 'glow' || a.type === 'off') return;
   if (a.type === 'sticker' || a.type === 'clip') {
     // 贴图、贴视频不动笔，但版面检查（留空、压线、避让）和取景要把它当一块图形：外轮廓当成一笔「图形」放进 geo，排笔时跳过它
@@ -185,7 +194,7 @@ const buildOne = (a) => {
   } else geo.set(a.id, drawAction(a));
 };
 // 挪动或放大一个元素后，引用它的回描、划掉也要跟着重画
-const rebuildWithDeps = (a) => { buildOne(a); for (const d of allActions) if ([d.target].flat().includes(a.id) || d.after === a.id) rebuildWithDeps(d); };
+const rebuildWithDeps = (a) => { buildOne(a); for (const d of allActions) if ([d.target].flat().includes(a.id) || d.after === a.id || d.copyOf === a.id) rebuildWithDeps(d); };
 const rebuildAll = () => { geo.clear(); for (const a of allActions) buildOne(a); };
 // 笔画采样按笔画对象缓存（同一个 d 反复采样占了编译时间的一大半；元素挪动、重画时会生成新的笔画对象，缓存自然失效）
 const strokeBox = new WeakMap();
@@ -257,7 +266,7 @@ for (let it = 0; it < 8; it++) {
   phraseCam = computePhraseCam();
   let changed = false;
   for (const a of allActions) {
-    if (a.type !== 'text') continue;
+    if (a.type !== 'text' || a.copyOf !== undefined) continue; // 复用的字跟着原元素放大（copyGeo）
     a._size0 ??= a.size;
     const px = textPx(a, phraseCam);
     const up = nextStep(a.size);
@@ -366,7 +375,7 @@ const clearance = (A, pts) => {
   return { best, who, raw, need, row }; // best = 余量（≥0 才合格；≥0 时数值和其余字段不可靠，见上）
 };
 for (const a of allActions) {
-  if (a.type !== 'text' || a.after) continue;
+  if (a.type !== 'text' || a.after || a.copyOf !== undefined) continue; // 复用的字不单独挪：挪了就和原来那张图不一样了，挤了报给分镜
   const c0 = clearance(a, sampleList(geo.get(a.id)));
   if (c0.best >= 0 || !AUTOFIX) continue;
   const x0 = a.x, y0 = a.y;
@@ -518,10 +527,10 @@ function schedule(boost) {
     // 回看句自己圈出、回描、划掉的（E02 第 63–65 句）不退场，照原来的做法和镜头同起同落。
     // 回看镜头是普通缓动（x、y、z 同一个插值），offRight 在每一镜里都离右边 260px 以上，两镜之间插值出来的镜头也看不见这个点
     const moves = (a, b) => a && b && (Math.hypot(a.x - b.x, a.y - b.y) >= 8 || Math.abs(a.z - b.z) >= 0.01);
-    if (p.revisit?.length && penPos !== OFF && !penAway && !p.actions.some((a) => !PENLESS.has(a.type)) && moves(targetCam[pi - 1], targetCam[pi])) {
+    if (p.revisit?.length && penPos !== OFF && !penAway && !p.actions.some((a) => !penless(a)) && moves(targetCam[pi - 1], targetCam[pi])) {
       const reach = (style.pencil.length + style.pencil.halfWidth) * style.pencil.scale * (Math.min(TGT.w, TGT.h) / 1080) + 40; // 笔身伸出笔尖多远
       const seen = (c) => { const sx = (penPos[0] - c.x) * c.z + VIEW.cx, sy = (penPos[1] - c.y) * c.z + VIEW.cy, m = reach * c.z; return sx > -m && sx < TGT.w + m && sy > -m && sy < TGT.h + m; };
-      let k = pi; while (k < phrases.length && !phrases[k].actions.some((a) => !PENLESS.has(a.type))) k++; // 下一句动笔的
+      let k = pi; while (k < phrases.length && !phrases[k].actions.some((a) => !penless(a))) k++; // 下一句动笔的
       const cams = targetCam.slice(pi - 1, Math.min(k, phrases.length - 1) + 1).filter(Boolean);
       if ([targetCam[pi - 1], targetCam[pi]].filter(Boolean).some(seen)) {
         // 镜头起飞前就水平退出去（和镜头一起走时，镜头起步快、笔是对称缓动，笔在屏幕上先往下掉，竖穿字幕区：E06 试编 838.9 秒）。
@@ -570,6 +579,12 @@ function schedule(boost) {
         report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(end), lag: 0, pen: false });
         continue;
       }
+      if (a.copyOf !== undefined) {
+        // 复用：提示词那一刻整块出现，铅笔不去画它。出现时必须在镜头外（编译末尾自检），镜头飞过去时它已经在纸上了
+        geo.get(a.id).forEach((s, si) => strokes.push({ ...s, id: `${a.id}#${si}`, action: a.id, len: r2(new svgPathProperties(s.d).getTotalLength()), t0: r2(cue), t1: r2(cue), copied: true }));
+        report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(cue), lag: 0, pen: false, copyOf: a.copyOf });
+        continue;
+      }
       if (a.type === 'glow') {
         effects.push({ ...a, color: style.palette[a.color], t0: cue, t1: cue + 0.7 });
         report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(cue + 0.7), lag: 0, pen: false });
@@ -587,11 +602,11 @@ function schedule(boost) {
       // 回看时退到画外的笔（penAway）：回看之后不管隔了几句不画的，第一笔都照这条从这一镜右上方画外飞进来
       const backFromAway = pi > 0 && (phrases[pi - 1].revisit?.length || penAway);
       let holdAway = null; // 换了入场点时，原来的退场点：起飞前笔停在这里（只在上一段轨迹就是退场那段时换，退场以后没别的轨迹）
-      if (penPos !== OFF && backFromAway && !penAway && a === ordered.find((x) => !PENLESS.has(x.type))) {
+      if (penPos !== OFF && backFromAway && !penAway && a === ordered.find((x) => !penless(x))) {
         const rc = targetCam[pi - 1], sx = (penPos[0] - rc.x) * rc.z + VIEW.cx, sy = (penPos[1] - rc.y) * rc.z + VIEW.cy;
         // 画外的入场点：右边外面 260px（原来是 rc.x + 1000/rc.z，取景中心偏左的横版 view.cx 815 时它落在画面里，屏幕 x 1815）
         if (sx < 0 || sx > TGT.w || sy < 0 || sy > TGT.h) { penPos = [rc.x + (TGT.w + 260 - VIEW.cx) / rc.z, rc.y - 350 / rc.z]; penAway = true; }
-      } else if (penAway && penTrack.at(-1)?.exit && a === ordered.find((x) => !PENLESS.has(x.type))) {
+      } else if (penAway && penTrack.at(-1)?.exit && a === ordered.find((x) => !penless(x))) {
         // 一段回看里镜头在纸面上走得远时（蛇形版面，E07：第一句回看在纸面最右边，回看完在最左边动笔），退场点停在最右那一镜的右边外面，
         // 飞回来有七千像素，旁白说完八秒笔才落下。入场点改到上一镜和这一镜的右边外面（和退场点一样的算法，两镜之间插值出来的镜头也看不见）。
         // 笔照旧停在退场点，等到起飞那一刻才换到入场点（见下面 holdAway）：两个点那一刻都在画外。只改 penPos 的话，轨迹补空档会让笔
@@ -614,7 +629,7 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
-      const flight = penPos !== OFF && (p.chapter || backFromAway) && a === ordered.find((x) => !PENLESS.has(x.type));
+      const flight = penPos !== OFF && (p.chapter || backFromAway) && a === ordered.find((x) => !penless(x));
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔。
       // 也不早于上一句说完（最多提前 motion.takeoffEarly 秒）：原来笔一空就起飞，上一句最后一笔落在句中时，句尾还在讲、镜头已经飞到下一节，
       // 观众对着空纸听完上一句（审片 E05 v1：五处提前离场，205 秒那处空纸 7 秒；E04 复盘同一类）
@@ -954,7 +969,16 @@ for (const k of clips) {
     if (o) { problems.push(t <= k.t1 ? `镜头外：贴视频 ${k.id} 在 ${r2(t)}s ${o}` : `镜头外：贴视频 ${k.id} 还没放完（放到 ${r2(k.end)}s），${r2(t)}s 镜头就把它移出了取景框 ${o}`); break; }
   }
 }
+// 复用的墨迹是整块出现的：出现那一刻要整段在画面外（在画面里就是凭空冒出来）；之后和别的墨迹一样，由下面的版面、取景检查管
+for (const s of strokes.filter((x) => x.copied)) {
+  const c = camAt(s.t0), pr = new svgPathProperties(s.d);
+  for (let k = 0; k <= 12; k++) {
+    const q = pr.getPointAtLength((s.len * k) / 12), sx = (q.x - c.x) * c.z + VIEW.cx, sy = (q.y - c.y) * c.z + VIEW.cy;
+    if (sx >= 0 && sx <= TGT.w && sy >= 0 && sy <= TGT.h) { problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(s.t0)}s 出现时就在画面里 屏幕(${r2(sx)},${r2(sy)})：提示词放到镜头离开以后，或者换个画外的位置`); break; }
+  }
+}
 for (const s of strokes) {
+  if (s.copied) continue;
   const c = camAt(s.t1), pr = new svgPathProperties(s.d);
   for (let k = 0; k <= 12; k++) {
     const q = pr.getPointAtLength((s.len * k) / 12);

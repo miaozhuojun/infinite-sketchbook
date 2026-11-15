@@ -5,6 +5,7 @@ export type Pt = [number, number, number]; // x, y, 压力
 export type Stroke = {
   id: string; action: string; group?: string; kind: 'glyph' | 'line' | 'shape';
   color: string; width: number; d: string; dKai?: string; len: number; t0: number; t1: number;
+  copied?: boolean; // 复用（copyOf）：照搬前面画好的墨迹，t0 那一刻整块出现（t1 = t0），铅笔不画
   pts: Pt[];
   kai?: { outline: string; gt: string; median: string };
 };

@@ -65,7 +65,7 @@ for (let f = 0; f < tl.durationInFrames; f++) {
   }
   last = { x: p.x, y: p.y, on };
 }
-const short = tl.strokes.filter((s) => (s.t1 - s.t0) * 60 < 2.95).map((s) => s.id); // 至少 3/60 秒
+const short = tl.strokes.filter((s) => !s.copied && (s.t1 - s.t0) * 60 < 2.95).map((s) => s.id); // 至少 3/60 秒（复用的墨迹整块出现，不算）
 check('运笔流畅（无瞬移）', over === 0 && !short.length,
   `${tl.fps}fps，笔尖单帧最大位移 ${maxMove[0].toFixed(0)}px（第 ${maxMove[1]} 帧，上限 ${(60 * 60 / tl.fps).toFixed(0)}），超限 ${over} 帧；写不到 3/60 秒的笔画 ${short.length} 个${short.length ? '：' + short.slice(0, 5).join('、') : ''}`);
 // 4. 笔身不出画

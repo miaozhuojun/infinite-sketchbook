@@ -1,5 +1,6 @@
 // 组件注册表：自动加载 components/ 下所有组件。编译器、分镜校验、组件测试都从这里取组件和参数定义。
 // 内置动作（不是画图组件、由编译器直接处理）：retrace（回描已有元素加粗）、strike（划掉已有元素）、ring（圈出已有元素）、glow（光晕效果，不动笔）、off（熄灭光晕）、sticker（贴图，不动笔）、clip（贴视频，不动笔）。
+// 另有一个写在任何笔画动作上的字段 copyOf + shift（复用）：照搬前面画好的那个元素的墨迹，平移后在提示词那一刻整块出现，不动笔，见 ARCHITECTURE「复用」。
 // 不动笔的动作（铅笔不去画它，编译时直接按提示词的时刻出现）
 export const PENLESS = new Set(['glow', 'off', 'sticker', 'clip']);
 import fs from 'node:fs';

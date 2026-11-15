@@ -30,7 +30,7 @@ export const loadStyle = (beats) => {
 // 关卡级别：gates 里写 advice 的只给建议；没列出的都是 hard
 export const gateLevel = (style, id) => (style.gates?.[id] === 'advice' ? 'advice' : 'hard');
 export const strip = (s) => s.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '');
-const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead']);
+const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead', 'copyOf', 'shift']);
 const ROLES = new Set(['hook', 'setup', 'aha', 'recap', 'next']);
 
 // 估算一行字的宽度：中文全角，其余半角
@@ -211,6 +211,31 @@ export function validateBeats(beats, style, reg) {
       if (a.at === undefined || !st.includes(strip(String(a.at)))) E(`${A}.at`, `cue「${a.at}」不在这句旁白里`);
       const def = reg.get(a.type)?.meta ?? BUILTINS[a.type];
       if (!def) { E(`${A}.type`, `未知组件「${a.type}」，可用：${[...reg.keys(), ...Object.keys(BUILTINS)].join('、')}`); continue; }
+      // 复用（copyOf）：照搬前面句子里画好的一个元素，整体平移 shift，提示词那一刻整块出现、不动笔（出现时必须在镜头外，编译时查）。
+      // 参数照原元素写一份平移后的（表格名 grid 可以换成新表的），版面检查按它们算；墨迹取原元素的，不重新生成，和原来的一笔不差
+      if (a.copyOf !== undefined) {
+        const src = beats.phrases.slice(0, pi).flatMap((q) => q.actions || []).find((x) => x.id === a.copyOf);
+        if (!src) E(`${A}.copyOf`, `「${a.copyOf}」要是前面句子里画过的元素`);
+        else if (src.type !== a.type) E(`${A}.type`, `复用要和原元素同一种（「${a.copyOf}」是 ${src.type}）`);
+        else if (['glow', 'off', 'sticker', 'clip'].includes(a.type)) E(`${A}.copyOf`, `只能复用笔画出来的元素，${a.type} 不行`);
+        if (!Array.isArray(a.shift) || a.shift.length !== 2 || !a.shift.every(Number.isFinite)) E(`${A}.shift`, '复用要写平移量 [dx, dy]（纸面像素）');
+        if (a.layout !== undefined) E(`${A}.layout`, '复用的元素不能另写画幅版式：墨迹照搬原元素的');
+        // 参数要照原元素平移一份：墨迹照搬原元素的，参数只给版面检查、重叠豁免、线头连接这些用，对不上就会按错的位置算（审 #75）。
+        // id、提示词、从属关系（on、target、after）、表格名可以不同；坐标类的差 shift，其余一模一样
+        else if (src && src.type === a.type && Array.isArray(a.shift) && a.shift.length === 2) {
+          // 只平移真是坐标的：同名参数在别的组件里可能不是坐标（arcs、knob 的 from/to 是角度，trafficLight 的 top 是墨色名），按类型认（审 #75）
+          const [dx, dy] = a.shift, mv = { x: dx, cx: dx, x0: dx, x1: dx, y: dy, cy: dy, top: dy, base: dy };
+          const free = new Set(['id', 'at', 'copyOf', 'shift', 'grid', 'on', 'target', 'after', 'lead', 'speed', 'hold', 'note', 'ahead', 'bleed', 'layout']);
+          const pt = (v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number');
+          const want = (k, v) => (k in mv && typeof v === 'number' ? v + mv[k] : (k === 'from' || k === 'to') && pt(v) ? [v[0] + dx, v[1] + dy]
+            : k === 'points' && Array.isArray(v) && v.every(pt) ? v.map(([x, y]) => [x + dx, y + dy]) : k === 'span' && pt(v) ? [v[0] + dx, v[1] + dx] : v);
+          const near = (u, v) => (typeof u === 'number' && typeof v === 'number' ? Math.abs(u - v) < 0.01 : Array.isArray(u) && Array.isArray(v) ? u.length === v.length && u.every((x, i) => near(x, v[i])) : JSON.stringify(u) === JSON.stringify(v));
+          const bad = [...new Set([...Object.keys(src), ...Object.keys(a)])].filter((k) => !free.has(k) && !near(want(k, src[k]), a[k]));
+          if (src.after !== undefined && a.after === undefined) E(`${A}.after`, `「${a.copyOf}」是接写（after），复用件也写 after（接在复用过来的那一段后面），不写 x、y`);
+          else if (src.layout !== undefined) E(`${A}.copyOf`, `「${a.copyOf}」写了画幅版式（layout），各画幅墨迹不一样，复用照搬不了：去掉原元素的 layout，或者这一处不复用`);
+          else if (bad.length) E(`${A}.copyOf`, `复用的参数要照「${a.copyOf}」平移 shift 写一份：${bad.join('、')} 对不上（墨迹照搬原元素的，参数只给版面检查用，对不上就按错的位置查）`);
+        }
+      } else if (a.shift !== undefined) E(`${A}.shift`, '只有复用（写了 copyOf）才写 shift');
       const checkParams = (obj, where, partial) => {
         for (const [k, spec] of Object.entries(def.params)) {
           if (obj[k] === undefined) { if (spec.required && !partial && !(a.after && (k === 'x' || k === 'y'))) E(`${where}.${k}`, '必填'); continue; }

@@ -645,6 +645,41 @@ expectBeats('箭头尖碰到后来画的红圈（关闭自动修复）', (b) => 
   p.actions.push({ id: '_ring', type: 'ring', at, target: '_t' });
   p.actions.push({ id: '_arw', type: 'arrow', at, from: [360, 1150], to: [578, 1150] });
 }, compileNoFix(TGT), /「_ring」和「_arw」的墨迹只隔|「_arw」和「_ring」的墨迹只隔/, { advice: true });
+// 复用（copyOf）：照搬前面画好的元素，提示词那一刻整块出现、不动笔。出现时就在画面里，观众看到的是凭空冒出来一块，要报
+// （用户 2026-11-15 看 E07 样片 v3：同一张网画了四遍，「同样的图画过一次就应该以某种优美的方式复用」——复用的图要在镜头外放好，镜头飞过去）
+expectBeats('复用的图出现时就在画面里（凭空冒出来）', (b) => {
+  const src = firstText(b), p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1);
+  if (p.actions.some((a) => a.id === src.id)) throw new Error('基线最后一句就是第一段文字所在的句子，复用要照搬前面句子里的');
+  p.actions.unshift({ ...structuredClone(src), id: '_cp', at: p.actions[0].at, copyOf: src.id, shift: [0, 40], y: src.y + 40 });
+}, (p) => ['compiler/compile.mjs', p, '--target', TGT], /复用冒出来/);
+{
+  // 正例：复用放在下一句第一个词上、两屏以下（镜头还停在上一句，它在画外）。演示分镜太小，摆不出真正的下一节（这句的取景要同时框住它和原来的字，
+  // 会报别的镜头问题），所以只认复用本身：不报「复用冒出来」，墨迹和原元素只差平移，粗细起伏（按原来那一笔取随机数）也一样，铅笔不画它
+  if (SKIP.has('compile')) skip('复用放在画外：不算冒出来、墨迹和原来一笔不差、铅笔不画', '这次没改编译器和分镜校验（--skip compile）');
+  else {
+    const b = structuredClone(beatsSrc); b.id = '_selftest';
+    for (const a of acts(b)) { for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov); delete a.layout; }
+    const src = firstText(b), pi = b.phrases.findIndex((q) => q.actions?.some((a) => a.id === src.id)), p = b.phrases[pi + 1], dy = 2 * base.canvas.h;
+    p.actions.unshift({ ...structuredClone(src), id: '_cp', at: p.actions[0].at, copyOf: src.id, shift: [0, dy], y: src.y + dy });
+    fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b));
+    const r = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+    const tlp = `build/_selftest-${TGT}.timeline.json`, tl = fs.existsSync(tlp) ? JSON.parse(fs.readFileSync(tlp, 'utf8')) : null;
+    const a0 = tl?.strokes.filter((s) => s.action === src.id), a1 = tl?.strokes.filter((s) => s.action === '_cp');
+    const same = !!tl && a0.length && a0.length === a1.length && a1.every((s, i) => s.copied && s.t0 === s.t1 && s.pts.length === a0[i].pts.length && s.pts.every(([x, y, w], k) => Math.abs(x - a0[i].pts[k][0]) < 0.02 && Math.abs(y - dy - a0[i].pts[k][1]) < 0.02 && Math.abs(w - a0[i].pts[k][2]) < 1e-6));
+    const noPen = !!tl && !tl.penTrack.some((g) => g.kind === 'down' && tl.strokes[g.stroke]?.action === '_cp');
+    record('复用放在画外：不算冒出来、墨迹和原来一笔不差、铅笔不画', same && noPen && !/复用冒出来/.test(out), out);
+    fs.rmSync('data/_selftest.beats.json', { force: true });
+    for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+  }
+}
+expectBeats('复用的参数没有照原元素平移', (b) => {
+  const src = firstText(b), p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1);
+  p.actions.unshift({ ...structuredClone(src), id: '_cp', at: p.actions[0].at, copyOf: src.id, shift: [0, 3000], y: src.y });
+}, validate, '复用的参数要照');
+expectBeats('复用的元素和原元素不是同一种', (b) => {
+  const src = firstText(b), p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1);
+  p.actions.unshift({ id: '_cp', type: 'circle', at: p.actions[0].at, cx: 0, cy: 0, r: 40, copyOf: src.id, shift: [0, 40] });
+}, validate, '复用要和原元素同一种');
 expectBeats('顿悟句推不近又没声明', (b) => {
   // 顿悟句的焦点圈住画面最上面的字和下面远处新写的一行：焦点装不下，推不近；分镜没写 noPush，编译要报
   const p = b.phrases.find((q) => q.role === 'aha'), top = acts(b).find((a) => a.type === 'text');

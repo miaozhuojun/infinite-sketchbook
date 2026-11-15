@@ -231,7 +231,8 @@ export function validateBeats(beats, style, reg) {
             : k === 'points' && Array.isArray(v) && v.every(pt) ? v.map(([x, y]) => [x + dx, y + dy]) : k === 'span' && pt(v) ? [v[0] + dx, v[1] + dx] : v);
           const near = (u, v) => (typeof u === 'number' && typeof v === 'number' ? Math.abs(u - v) < 0.01 : Array.isArray(u) && Array.isArray(v) ? u.length === v.length && u.every((x, i) => near(x, v[i])) : JSON.stringify(u) === JSON.stringify(v));
           const bad = [...new Set([...Object.keys(src), ...Object.keys(a)])].filter((k) => !free.has(k) && !near(want(k, src[k]), a[k]));
-          if (src.layout !== undefined) E(`${A}.copyOf`, `「${a.copyOf}」写了画幅版式（layout），各画幅墨迹不一样，复用照搬不了：去掉原元素的 layout，或者这一处不复用`);
+          if (src.after !== undefined && a.after === undefined) E(`${A}.after`, `「${a.copyOf}」是接写（after），复用件也写 after（接在复用过来的那一段后面），不写 x、y`);
+          else if (src.layout !== undefined) E(`${A}.copyOf`, `「${a.copyOf}」写了画幅版式（layout），各画幅墨迹不一样，复用照搬不了：去掉原元素的 layout，或者这一处不复用`);
           else if (bad.length) E(`${A}.copyOf`, `复用的参数要照「${a.copyOf}」平移 shift 写一份：${bad.join('、')} 对不上（墨迹照搬原元素的，参数只给版面检查用，对不上就按错的位置查）`);
         }
       } else if (a.shift !== undefined) E(`${A}.shift`, '只有复用（写了 copyOf）才写 shift');

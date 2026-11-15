@@ -220,7 +220,17 @@ export function validateBeats(beats, style, reg) {
         else if (['glow', 'off', 'sticker', 'clip'].includes(a.type)) E(`${A}.copyOf`, `只能复用笔画出来的元素，${a.type} 不行`);
         if (!Array.isArray(a.shift) || a.shift.length !== 2 || !a.shift.every(Number.isFinite)) E(`${A}.shift`, '复用要写平移量 [dx, dy]（纸面像素）');
         if (a.layout !== undefined) E(`${A}.layout`, '复用的元素不能另写画幅版式：墨迹照搬原元素的');
-      }
+        // 参数要照原元素平移一份：墨迹照搬原元素的，参数只给版面检查、重叠豁免、线头连接这些用，对不上就会按错的位置算（审 #75）。
+        // id、提示词、从属关系（on、target、after）、表格名可以不同；坐标类的差 shift，其余一模一样
+        else if (src && src.type === a.type && Array.isArray(a.shift) && a.shift.length === 2) {
+          const [dx, dy] = a.shift, mv = { x: dx, cx: dx, x0: dx, x1: dx, y: dy, cy: dy, top: dy, base: dy };
+          const free = new Set(['id', 'at', 'copyOf', 'shift', 'grid', 'on', 'target', 'after', 'lead', 'speed', 'hold', 'note', 'ahead', 'bleed']);
+          const want = (k, v) => (v === undefined ? v : k in mv ? v + mv[k] : k === 'from' || k === 'to' ? [v[0] + dx, v[1] + dy] : k === 'points' ? v.map(([x, y]) => [x + dx, y + dy]) : v);
+          const near = (u, v) => (typeof u === 'number' && typeof v === 'number' ? Math.abs(u - v) < 0.01 : Array.isArray(u) && Array.isArray(v) ? u.length === v.length && u.every((x, i) => near(x, v[i])) : JSON.stringify(u) === JSON.stringify(v));
+          const bad = [...new Set([...Object.keys(src), ...Object.keys(a)])].filter((k) => !free.has(k) && !near(want(k, src[k]), a[k]));
+          if (bad.length) E(`${A}.copyOf`, `复用的参数要照「${a.copyOf}」平移 shift 写一份：${bad.join('、')} 对不上（墨迹照搬原元素的，参数只给版面检查用，对不上就按错的位置查）`);
+        }
+      } else if (a.shift !== undefined) E(`${A}.shift`, '只有复用（写了 copyOf）才写 shift');
       const checkParams = (obj, where, partial) => {
         for (const [k, spec] of Object.entries(def.params)) {
           if (obj[k] === undefined) { if (spec.required && !partial && !(a.after && (k === 'x' || k === 'y'))) E(`${where}.${k}`, '必填'); continue; }

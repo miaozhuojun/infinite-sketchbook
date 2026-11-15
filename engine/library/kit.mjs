@@ -93,7 +93,7 @@ export function offsetPath(d, delta) {
 const smooth01 = (e0, e1, x) => { const u = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return u * u * (3 - 2 * u); };
 export function samplePts(s) {
   const pr = new svgPathProperties(s.d), L = pr.getTotalLength(), n = Math.max(2, Math.ceil(L / 2.5));
-  const rnd = mulberry32(hashStr(s.id));
+  const rnd = mulberry32(hashStr(s.seed ?? s.id)); // 复用的墨迹（copyOf）按原来那一笔取随机数，粗细起伏一样
   const ph = rnd() * 6.28;
   const pts = [];
   for (let i = 0; i <= n; i++) {

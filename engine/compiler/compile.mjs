@@ -144,7 +144,9 @@ const clipOf = (a) => { const v = loadClip(a.src); return { cx: a.cx, cy: a.cy, 
 const copyGeo = (a) => {
   const src = actionsById.get(a.copyOf), [dx, dy] = a.shift;
   if (src.type === 'text') Object.assign(a, { size: src.size, ...(src.x !== undefined ? { x: src.x + dx, y: src.y + dy } : {}) });
-  return geo.get(a.copyOf).map((s) => ({ ...s, group: a.id, d: translatePath(s.d, dx, dy) }));
+  // 楷书墨迹（kai 模式渲染、讲义插图 --ink kai）另有一份路径和字形变换，也要跟着平移（审 #75）
+  return geo.get(a.copyOf).map((s) => ({ ...s, group: a.id, d: translatePath(s.d, dx, dy),
+    ...(s.dKai ? { dKai: translatePath(s.dKai, dx, dy) } : {}), ...(s.kai ? { kai: { ...s.kai, gt: `translate(${dx} ${dy}) ${s.kai.gt}` } } : {}) }));
 };
 const penless = (a) => PENLESS.has(a.type) || a.copyOf !== undefined;
 const buildOne = (a) => {
@@ -277,7 +279,7 @@ for (let it = 0; it < 8; it++) {
   }
   if (!changed) break;
 }
-for (const a of allActions) if (a.type === 'text' && a.size !== a._size0) fixes.push(`字号：「${a.text}」${a._size0} → ${r2(a.size)}`);
+for (const a of allActions) if (a.type === 'text' && a.copyOf === undefined && a.size !== a._size0) fixes.push(`字号：「${a.text}」${a._size0} → ${r2(a.size)}`); // 复用的字跟着原元素（copyGeo），不单独记
 
 // 2) 压线自动避让：标签离其他元素太近时，在周围由近到远找一个不碰任何元素的位置挪过去
 // 有意贴近的关系不查间距：标签写在图形上（on）、回描/划掉（target）、接写（after）。两段文字之间只认 after——
@@ -400,7 +402,7 @@ for (const a of allActions) {
   const c = clearance(a, sampleList(geo.get(a.id)));
   if (c.best < 0) layoutFlag(c.raw > 0 ? 'layout.textGap' : null, `标签「${a.text}」(${a.id}) 离 ${c.who} ${c.row ? '在同一行，横向' : ''}只有 ${r2(Math.max(0, c.raw))}px（要求 ≥${r2(c.need)}px）` + (AUTOFIX ? '，自动避让 72px 内找不到空位，需要改分镜布局' : ''));
   const px = textPx(a, phraseCam);
-  if (px < MIN_TEXT - 0.5) layoutFlag('type.minScreen', `标签「${a.text}」(${a.id}) 在屏幕上约 ${r2(px)}px 高，低于本画幅最小 ${MIN_TEXT}px` + (AUTOFIX ? '（已沿字号阶梯放大到上限仍不够），需要改分镜布局' : ''));
+  if (px < MIN_TEXT - 0.5) layoutFlag('type.minScreen', `标签「${a.text}」(${a.id}) 在屏幕上约 ${r2(px)}px 高，低于本画幅最小 ${MIN_TEXT}px` + (a.copyOf !== undefined ? `（复用的字跟着原元素 ${a.copyOf} 的字号，不单独放大：把原元素写大，或者让这一节的镜头近一点）` : AUTOFIX ? '（已沿字号阶梯放大到上限仍不够），需要改分镜布局' : ''));
 }
 // 图形元素之间留空（见风格规范 type.shapeGapNote）：两个非文字元素的墨迹至少隔 shapeGapPen 个笔宽。
 // 有意贴着的不查：分镜里声明的关系（on、target、after），以及箭头、线的端点接在对方身上（离它不到 connectTol）
@@ -581,7 +583,10 @@ function schedule(boost) {
       }
       if (a.copyOf !== undefined) {
         // 复用：提示词那一刻整块出现，铅笔不去画它。出现时必须在镜头外（编译末尾自检），镜头飞过去时它已经在纸上了
-        geo.get(a.id).forEach((s, si) => strokes.push({ ...s, id: `${a.id}#${si}`, action: a.id, len: r2(new svgPathProperties(s.d).getTotalLength()), t0: r2(cue), t1: r2(cue), copied: true }));
+        // seed：粗细起伏按最初那个元素的笔画定（samplePts 按它取随机数），和原来的一笔不差；bleed 照原元素的（审 #75）
+        let root = a.copyOf; while (actionsById.get(root)?.copyOf !== undefined) root = actionsById.get(root).copyOf;
+        geo.get(a.id).forEach((s, si) => strokes.push({ ...s, id: `${a.id}#${si}`, action: a.id, len: r2(new svgPathProperties(s.d).getTotalLength()), t0: r2(cue), t1: r2(cue),
+          copied: true, seed: `${root}#${si}`, ...(a.bleed ?? actionsById.get(root)?.bleed ? { bleed: true } : {}) }));
         report.actions.push({ id: a.id, type: a.type, phrase: pi, cue: r2(cue), start: r2(cue), end: r2(cue), lag: 0, pen: false, copyOf: a.copyOf });
         continue;
       }
@@ -674,7 +679,7 @@ function schedule(boost) {
       // fly：换节前后停笔时接下来（或刚才）那段飞行。{ ex(q)：从 q 起飞或飞到 q 多出舒适框多少，near(q)：飞行不超过 flyFar，stay：不挪时的 ex }
       const pickRest = (from, freeAt, views, allowOff = true, until = t, goal = st, fly = null) => {
         // 贴好的封面、贴视频也算画过的东西，而且和文字一样要护着：笔身不压在上面
-        const pasted = [...stickers, ...clips], drawn = new Set([...strokes.map((s) => s.action), ...pasted.map((k) => k.id)]), lastId = strokes.at(-1)?.action, stuck = new Set(pasted.map((k) => k.id));
+        const pasted = [...stickers, ...clips], drawn = new Set([...strokes.map((s) => s.action), ...pasted.map((k) => k.id)]), lastId = strokes.findLast((s) => !s.copied)?.action, stuck = new Set(pasted.map((k) => k.id));
         const focusIds = new Set([pi, pi - 1].filter((q) => q >= 0 && focusCam[q]).flatMap((q) => [...phrases[q].actions.map((x) => x.id), ...(phrases[q].focus || [])]));
         const protect = [...drawn].filter((id) => textInk.has(id) || id === lastId || focusIds.has(id) || stuck.has(id)).map((id) => (textInk.has(id) && id !== lastId && !focusIds.has(id) ? textInk.get(id) : bboxOf(geo.get(id))));
         const other = [...drawn].map((id) => bboxOf(geo.get(id)));
@@ -970,11 +975,19 @@ for (const k of clips) {
   }
 }
 // 复用的墨迹是整块出现的：出现那一刻要整段在画面外（在画面里就是凭空冒出来）；之后和别的墨迹一样，由下面的版面、取景检查管
-for (const s of strokes.filter((x) => x.copied)) {
-  const c = camAt(s.t0), pr = new svgPathProperties(s.d);
-  for (let k = 0; k <= 12; k++) {
-    const q = pr.getPointAtLength((s.len * k) / 12), sx = (q.x - c.x) * c.z + VIEW.cx, sy = (q.y - c.y) * c.z + VIEW.cy;
-    if (sx >= 0 && sx <= TGT.w && sy >= 0 && sy <= TGT.h) { problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(s.t0)}s 出现时就在画面里 屏幕(${r2(sx)},${r2(sy)})：提示词放到镜头离开以后，或者换个画外的位置`); break; }
+// 看出现那一刻和下一帧（渲染从 t0 之后的第一帧起才画它，换节飞行时镜头一帧能走几十像素），笔宽也算上（审 #75）。
+// 复用要放在换节那一句的第一个词上：放在上一句，那一句的取景会把它框进来
+{
+  const seen = new Set();
+  for (const s of strokes.filter((x) => x.copied && !seen.has(x.action))) {
+    for (const t of [s.t0, s.t0 + 1 / FPS]) {
+      const c = camAt(t), m = (s.width / 2) * c.z;
+      const q = s.pts.find(([x, y]) => { const sx = (x - c.x) * c.z + VIEW.cx, sy = (y - c.y) * c.z + VIEW.cy; return sx >= -m && sx <= TGT.w + m && sy >= -m && sy <= TGT.h + m; });
+      if (q) {
+        problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(t)}s 出现时就在画面里（纸面 ${r2(q[0])},${r2(q[1])}）：复用写在换节那一句的第一个词上（镜头还停在上一节），或者把这一节摆得离上一节再远一点`);
+        seen.add(s.action); break;
+      }
+    }
   }
 }
 for (const s of strokes) {

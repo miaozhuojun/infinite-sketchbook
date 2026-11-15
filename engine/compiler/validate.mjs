@@ -223,12 +223,16 @@ export function validateBeats(beats, style, reg) {
         // 参数要照原元素平移一份：墨迹照搬原元素的，参数只给版面检查、重叠豁免、线头连接这些用，对不上就会按错的位置算（审 #75）。
         // id、提示词、从属关系（on、target、after）、表格名可以不同；坐标类的差 shift，其余一模一样
         else if (src && src.type === a.type && Array.isArray(a.shift) && a.shift.length === 2) {
+          // 只平移真是坐标的：同名参数在别的组件里可能不是坐标（arcs、knob 的 from/to 是角度，trafficLight 的 top 是墨色名），按类型认（审 #75）
           const [dx, dy] = a.shift, mv = { x: dx, cx: dx, x0: dx, x1: dx, y: dy, cy: dy, top: dy, base: dy };
-          const free = new Set(['id', 'at', 'copyOf', 'shift', 'grid', 'on', 'target', 'after', 'lead', 'speed', 'hold', 'note', 'ahead', 'bleed']);
-          const want = (k, v) => (v === undefined ? v : k in mv ? v + mv[k] : k === 'from' || k === 'to' ? [v[0] + dx, v[1] + dy] : k === 'points' ? v.map(([x, y]) => [x + dx, y + dy]) : v);
+          const free = new Set(['id', 'at', 'copyOf', 'shift', 'grid', 'on', 'target', 'after', 'lead', 'speed', 'hold', 'note', 'ahead', 'bleed', 'layout']);
+          const pt = (v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number');
+          const want = (k, v) => (k in mv && typeof v === 'number' ? v + mv[k] : (k === 'from' || k === 'to') && pt(v) ? [v[0] + dx, v[1] + dy]
+            : k === 'points' && Array.isArray(v) && v.every(pt) ? v.map(([x, y]) => [x + dx, y + dy]) : k === 'span' && pt(v) ? [v[0] + dx, v[1] + dx] : v);
           const near = (u, v) => (typeof u === 'number' && typeof v === 'number' ? Math.abs(u - v) < 0.01 : Array.isArray(u) && Array.isArray(v) ? u.length === v.length && u.every((x, i) => near(x, v[i])) : JSON.stringify(u) === JSON.stringify(v));
           const bad = [...new Set([...Object.keys(src), ...Object.keys(a)])].filter((k) => !free.has(k) && !near(want(k, src[k]), a[k]));
-          if (bad.length) E(`${A}.copyOf`, `复用的参数要照「${a.copyOf}」平移 shift 写一份：${bad.join('、')} 对不上（墨迹照搬原元素的，参数只给版面检查用，对不上就按错的位置查）`);
+          if (src.layout !== undefined) E(`${A}.copyOf`, `「${a.copyOf}」写了画幅版式（layout），各画幅墨迹不一样，复用照搬不了：去掉原元素的 layout，或者这一处不复用`);
+          else if (bad.length) E(`${A}.copyOf`, `复用的参数要照「${a.copyOf}」平移 shift 写一份：${bad.join('、')} 对不上（墨迹照搬原元素的，参数只给版面检查用，对不上就按错的位置查）`);
         }
       } else if (a.shift !== undefined) E(`${A}.shift`, '只有复用（写了 copyOf）才写 shift');
       const checkParams = (obj, where, partial) => {

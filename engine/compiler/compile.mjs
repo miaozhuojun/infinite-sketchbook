@@ -979,7 +979,8 @@ for (const k of clips) {
 // 复用要放在换节那一句的第一个词上：放在上一句，那一句的取景会把它框进来
 {
   const seen = new Set();
-  for (const s of strokes.filter((x) => x.copied && !seen.has(x.action))) {
+  for (const s of strokes.filter((x) => x.copied)) {
+    if (seen.has(s.action)) continue; // 一个复用件只报一次
     for (const t of [s.t0, s.t0 + 1 / FPS]) {
       const c = camAt(t), m = (s.width / 2) * c.z;
       const q = s.pts.find(([x, y]) => { const sx = (x - c.x) * c.z + VIEW.cx, sy = (y - c.y) * c.z + VIEW.cy; return sx >= -m && sx <= TGT.w + m && sy >= -m && sy <= TGT.h + m; });

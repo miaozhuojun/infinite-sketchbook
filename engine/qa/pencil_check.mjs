@@ -149,7 +149,8 @@ const drawnAt = (t) => {
 };
 const covered = [];
 for (const rest of (tl.penTrack ?? []).filter((sg) => sg.kind === 'rest' && sg.t1 - sg.t0 >= 0.5)) {
-  const lastId = tl.strokes.filter((s) => s.t1 <= rest.t0 + 1e-3).reduce((m, s) => (!m || s.t1 > m.t1 ? s : m), null)?.action;
+  const lastId = tl.strokes.filter((s) => !s.copied && s.t1 <= rest.t0 + 1e-3) // 复用件不算刚画完的，和编译的停笔避让一致
+   .reduce((m, s) => (!m || s.t1 > m.t1 ? s : m), null)?.action;
   for (let f = Math.ceil(rest.t0 * tl.fps); f < Math.min(rest.t1, tl.duration) * tl.fps; f++) {
     const t = f / tl.fps, c = cameraAt(tl.camera, t), p = pencilPose(tl, t);
     if (p.x < 0 || p.x > tl.canvas.w || p.y < 0 || p.y > tl.canvas.h) continue; // 笔在画面外等着，不算

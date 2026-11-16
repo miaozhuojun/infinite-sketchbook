@@ -1012,6 +1012,13 @@ expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b)
 expectBeats('旁白稿里写了「一小步一小步地」（「一X一X地」的 X 是两个字）', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，一小步一小步地走。');
 }, validate, /「一小步一小步地」.*念 de/, { any: true });
+// 「二 + 量词」念「两」、当「必须」讲的「得」念 děi（用户 2026-11-16 看 E07 成片：「2格」念成 èr gé，「得挪到」念成 de）
+expectBeats('旁白稿里写了「二格」（数量念「两」）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，往大拧到二格。');
+}, validate, /「二格」.*念「两」.*「两格」/, { any: true });
+expectBeats('旁白稿里写了「就得」（当「必须」讲念 děi）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，那就得重来一遍。');
+}, validate, /「就得」.*děi.*「就要」/, { any: true });
 // 自测题只考复述（用户：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来）
 if (!(beatsSrc.quiz ?? []).length) skip('自测题全是复述题，没有一道解释或迁移题', '基线分镜没有自测题（演示片段不要求）');
 else expectBeats('自测题全是复述题，没有一道解释或迁移题', (b) => {

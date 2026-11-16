@@ -155,7 +155,6 @@ def tone_of(sent):
         return tone_arg[s0]
     return "好奇" if s0.endswith("？") else "兴奋" if s0.endswith("！") else "认真讲"
 clean = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", args.text)
-DIG = str.maketrans("0123456789", "零一二三四五六七八九")  # ASR 把数字识别成汉字，比较前统一
 from voice import pinyin_syllables as syl  # 同音字算一致、前后鼻音不分（零/林），别的读错的音（一成听成一层、才亮听成材料）仍算错
 
 

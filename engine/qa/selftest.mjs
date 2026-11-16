@@ -1009,6 +1009,9 @@ else {
 expectBeats('旁白稿里写了「慢慢地」（「地」会念成 dì）', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，我们慢慢地看。');
 }, validate, /「慢慢地」.*念 de/, { any: true });
+expectBeats('旁白稿里写了「一小步一小步地」（「一X一X地」的 X 是两个字）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，一小步一小步地走。');
+}, validate, /「一小步一小步地」.*念 de/, { any: true });
 // 自测题只考复述（用户：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来）
 if (!(beatsSrc.quiz ?? []).length) skip('自测题全是复述题，没有一道解释或迁移题', '基线分镜没有自测题（演示片段不要求）');
 else expectBeats('自测题全是复述题，没有一道解释或迁移题', (b) => {

@@ -337,11 +337,8 @@ if tl.get("audio"):
             sf.write(tf.name, xm[int(c0 * srm):int(c1 * srm)], srm)
             parts.append(asr.generate(tf.name, language="Chinese").text)
     hyp = said_text("".join(parts))
-    from pypinyin import lazy_pinyin  # 按拼音比：同音字不算错（成/乘），读错的音仍算错
-    DIG = str.maketrans("0123456789", "零一二三四五六七八九")
-    from voice import read_numbers
-    r = lazy_pinyin(read_numbers(script.lower()), errors=lambda x: list(x))
-    h = lazy_pinyin(read_numbers(hyp.lower()), errors=lambda x: list(x))
+    from voice import pinyin_syllables  # 按拼音比：同音字不算错（成/乘），前后鼻音不分（零/林），别的读错的音仍算错
+    r, h = pinyin_syllables(script), pinyin_syllables(hyp)
     d = list(range(len(h) + 1))
     for i in range(1, len(r) + 1):
         prev, d[0] = d[0], i

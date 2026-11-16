@@ -1134,6 +1134,21 @@ print(json.dumps(cases, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts
   record('配音逐句验收：掉嗓子、破音、硬切、语速（单元检查）', ok, (r.stdout || '') + (r.stderr || ''));
 }
 
+// 回转比对的拼音（tts/voice.py 的 pinyin_syllables，qwen_clone.py 逐句验收和 speech_check.py 总混可懂度都用它）：
+// 同音字算一致；前后鼻音不分（用户 2026-11-16：南方孩子本来就不太分，E07「考零格」听成「考林格」卡掉 30 个种子）；平翘舌、别的韵母读错仍算错
+if (SKIP.has('speech') || !PY_MLX) skip('回转比对：前后鼻音不分、别的读错仍算错（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
+else {
+  const r = spawnSync(PY_MLX, ['-c', `
+import sys, json
+sys.path.insert(0, '.')
+from voice import pinyin_syllables as s
+print(json.dumps({"前后鼻音": s("考零格") == s("考林格") and s("人生") == s("人身") and s("一样") == s("一言"),
+  "同音字": s("乘上") == s("成上"), "数字": s("试了50次") == s("试了五十次"),
+  "平翘舌仍算错": s("一成") != s("一层"), "韵母仍算错": s("才亮") != s("材料"), "字母原样": s("AI") == ["a", "i"]}))`], { encoding: 'utf8', cwd: '../tts' });
+  let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
+  record('回转比对：前后鼻音不分、别的读错仍算错（单元检查）', Object.keys(got).length === 6 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
+}
+
 // ---------- 旁白检查按时刻点名到句（tts/sentence_map.py，单元检查）：一个片段里有两句时，前一句句尾的收音硬切要点名前一句，
 // 后一句句首的起音硬切点名后一句；两句都要有范围（E05 558 秒：「回到那三条规则。第二条说，听到咳嗽就算有人。」同一片段，
 // 原来按片段归句，前一句没有范围，硬切点名到「第二条说……」，自动换种子换错了句）。时间取自 E05 的真实时间线 ----------

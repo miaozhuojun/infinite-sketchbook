@@ -377,6 +377,14 @@ def read_numbers(s):
                    else _cn(int(m[0])), s)
 
 
+def pinyin_syllables(s):
+    """回转比对用：逐字转拼音（不带声调），拉丁字母原样。同音字（成/乘）算一致，读错的音仍算错，
+    只有前后鼻音不分（以 ng 结尾的都去掉 g 再比：in/ing、en/eng、an/ang、ian/iang、uan/uang 按前鼻音算一样；ong/iong 也折成 on/ion，没有真音节是这样，只和自己相等）：用户 2026-11-16「南方孩子本来就不太分得清前后鼻音，
+    偶尔的瑕疵还能带来真实感和童真感」。E07 成片「考零格」听成「考林格」，一句试满 30 个种子都没过，配音白等了几个小时。"""
+    from pypinyin import lazy_pinyin
+    return [x[:-1] if len(x) > 2 and x.endswith("ng") else x for x in lazy_pinyin(read_numbers(s.lower()), errors=lambda x: list(x))]
+
+
 # 书名号、引号这些也去掉：回转识别会自己加（E04「书名就叫感知机。」听成「书名就叫《感知机》」，字全对，30 个种子却都按念错算）
 SAID_PUNCT = r"[，。；：！？、,.;:!?\"“”'‘’（）()《》〈〉「」『』【】…·—\s-]"
 

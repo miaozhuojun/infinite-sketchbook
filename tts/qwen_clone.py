@@ -156,12 +156,7 @@ def tone_of(sent):
     return "好奇" if s0.endswith("？") else "兴奋" if s0.endswith("！") else "认真讲"
 clean = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", args.text)
 DIG = str.maketrans("0123456789", "零一二三四五六七八九")  # ASR 把数字识别成汉字，比较前统一
-from pypinyin import lazy_pinyin
-
-
-def syl(s):
-    """逐字转拼音（不带声调），拉丁字母原样：同音字（成/乘）算一致，读错的音（拧 ning / 零 ling）仍算错。"""
-    return lazy_pinyin(read_numbers(s.lower()), errors=lambda x: list(x))
+from voice import pinyin_syllables as syl  # 同音字算一致、前后鼻音不分（零/林），别的读错的音（一成听成一层、才亮听成材料）仍算错
 
 
 def cer(r, h):

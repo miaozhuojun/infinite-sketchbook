@@ -103,6 +103,11 @@ for (const p of phrases) {
       cut = (prev.srcEnd + p.srcStart) / 2;
       console.log(`  切点：「${prev.text}」|「${p.text}」换了说话的人，之间没找到静音，切在正中 ${r2(cut)}s`);
     }
+    // 换节、换块的句子也不能并进上一句：并了 chapter 就悄悄少一节，block 丢了镜头会把新旧两块一起框住（PR #82 审查）
+    if (cut === null && (p.chapter || p.block)) {
+      cut = (prev.srcEnd + p.srcStart) / 2;
+      console.log(`  切点：「${prev.text}」|「${p.text}」是新的一${p.chapter ? '节' : '块'}，之间没找到静音，切在正中 ${r2(cut)}s`);
+    }
     if (cut === null) {
       console.log(`  切点：「${prev.text}」|「${p.text}」之间没有静音，合并为一句（中间不插停顿）`);
       prev.text += p.text; prev.caption = (prev.caption || prev.text) + '，' + (p.caption || p.text);
@@ -224,7 +229,7 @@ const fitZScreen = (b, padPx) => { let z = fitZ(b, 70); for (let k = 0; k < 4; k
 const computePhraseCam = () => {
   const acc = [], out = [];
   for (const p of phrases) {
-    if (p.chapter) acc.length = 0;
+    if (p.chapter || p.block) acc.length = 0; // block：换一块纸、不另起章节（平台章节有上限，B 站 10 节；E08 一节内容一屏装不下）
     // 全景（camera=overview）：这句不画新东西，镜头把整集画过的所有东西都框进来（片尾：从近景慢慢拉到整张纸）。
     // 可以比 zoomMin 更远（整张纸本来就大），下限 overviewZoomMin
     if (p.camera === 'overview') {
@@ -634,7 +639,7 @@ function schedule(boost) {
       // 换节：飞到另一块纸面上。不先停（停的地方就是刚写完的东西，笔身压着它），手一空就起飞；
       // 镜头和这段飞行同起同落、同一条缓动曲线，笔在屏幕上就是从原处直线滑到落笔处，不会先冲出取景划过字幕（E01 实测）
       // 回看之后的第一句也按换节飞：镜头停在前面某处，笔要和镜头一起飞到新位置（不然镜头还在回程，笔已落在画外）
-      const flight = penPos !== OFF && (p.chapter || backFromAway) && a === ordered.find((x) => !penless(x));
+      const flight = penPos !== OFF && (p.chapter || p.block || backFromAway) && a === ordered.find((x) => !penless(x));
       // 上一句是顿悟句时，镜头要先停够再走（release 减去拉远那段），笔也等到那时再起飞；飞行至少 chapterMoveMin 秒，前一句太短就晚一点落笔。
       // 也不早于上一句说完（最多提前 motion.takeoffEarly 秒）：原来笔一空就起飞，上一句最后一笔落在句中时，句尾还在讲、镜头已经飞到下一节，
       // 观众对着空纸听完上一句（审片 E05 v1：五处提前离场，205 秒那处空纸 7 秒；E04 复盘同一类）
@@ -901,7 +906,7 @@ phrases.forEach((p, pi) => {
     // 一节以顿悟句开头（或回看之后接顿悟句）：镜头要飞到另一块纸面，和铅笔的换节飞行同起同落，直接落在推近的取景上。
     // 按推近只走 AHA.moveDur 秒时，E02 v4 进第 5 节 1.3 秒平移约 2500px，机器 0.4 秒就出画，之后对着空纸等笔飞到 1.6 秒（审片）
     // 笔这句在换节飞（换节、回看之后、回看时退场后飞回来）就和它同起同落：认笔轨迹上的标记，判断只留在排笔那一处
-    const fly = penTrack.find((m) => m.chapter && m.phrase === pi) ?? ((p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02));
+    const fly = penTrack.find((m) => m.chapter && m.phrase === pi) ?? ((p.chapter || p.block || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) { pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc, focusIds); newChapter.add(camera[camera.length - 1]); }
     else {
       const t0 = Math.max(Math.min(cue - AHA.lead, first.t0) - AHA.moveDur, holdUntil, prevDraw);
@@ -913,7 +918,7 @@ phrases.forEach((p, pi) => {
     // 换节：镜头和铅笔的飞行同起同落（见排程里的 flight）
     const lead = focusCam[pi - 1] ? M.cameraMove[0] + M.cameraMove[1] : M.cameraMove[0];
     // 笔这句在换节飞（换节、回看之后、回看时退场后飞回来）就和它同起同落：认笔轨迹上的标记，判断只留在排笔那一处
-    const fly = penTrack.find((m) => m.chapter && m.phrase === pi) ?? ((p.chapter || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02));
+    const fly = penTrack.find((m) => m.chapter && m.phrase === pi) ?? ((p.chapter || p.block || phrases[pi - 1]?.revisit?.length) && penTrack.find((m) => m.chapter && Math.abs(m.t1 - first.t0) < 0.02));
     if (fly && fly.t1 - Math.max(fly.t0, holdUntil) > 0.3) pushMove(Math.max(fly.t0, holdUntil), fly.t1, tc);
     else if (tc.overview) {
       // 全景：连着几句都是 overview 时只走一次——从第一句开头起，一直在动、不在中途停，到最后一句说完时拉到整张纸。
@@ -935,7 +940,7 @@ phrases.forEach((p, pi) => {
       pushMove(t0, t0 + Math.max(M.cameraMove[0] + M.cameraMove[1], M.chapterMoveMin ?? 0, far / (M.flightSpeed ?? V_MOVE)), tc);
       newChapter.add(camera[camera.length - 1]);
     } else { const t0 = Math.max(first.t0 - lead, holdUntil); pushMove(t0, t0 + M.cameraMove[0] + M.cameraMove[1], tc); }
-    if (p.chapter && camera.length > 1) newChapter.add(camera[camera.length - 1]);
+    if ((p.chapter || p.block) && camera.length > 1) newChapter.add(camera[camera.length - 1]);
   }
 });
 // 两次普通（非推近）镜头移动挨得太近（间隔不到 minCameraGap 秒）就合并成一次，直接移到后一次的取景
@@ -985,7 +990,7 @@ for (const k of clips) {
       const c = camAt(t), m = (s.width / 2) * c.z;
       const q = s.pts.find(([x, y]) => { const sx = (x - c.x) * c.z + VIEW.cx, sy = (y - c.y) * c.z + VIEW.cy; return sx >= -m && sx <= TGT.w + m && sy >= -m && sy <= TGT.h + m; });
       if (q) {
-        problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(t)}s 出现时就在画面里（纸面 ${r2(q[0])},${r2(q[1])}）：复用写在换节那一句的第一个词上（镜头还停在上一节），或者把这一节摆得离上一节再远一点`);
+        problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(t)}s 出现时就在画面里（纸面 ${r2(q[0])},${r2(q[1])}）：复用写在换节（或 block 换块）那一句的第一个词上（镜头还停在上一节），或者把这一节摆得离上一节再远一点`);
         seen.add(s.action); break;
       }
     }

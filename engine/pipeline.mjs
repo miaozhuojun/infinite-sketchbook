@@ -97,7 +97,16 @@ let voiceOk = true;
 // 样片用的配音：精配的配音和当前稿子对得上就用它；对不上就快配一份另存（<配音>.sample.*）
 let sampleVoice = null;
 // 合成提示音（演示分镜，narration.synthetic）不走克隆配音，音频由夹具脚本生成
-if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
+// 多音字围栏第一道（tts/polyphone_guard.py，用户 2026-11-19 听 E08 样片 v1：「调光灯」念错，要一套自动的检测纠错，样片阶段人和模型只管内容）：
+// 配音前把稿子里每个多音字、拼音库给的读音列出来，没核过的就停在这里（拼音库会标错：「数一数」「量一下」「一行一行」「倒是」）。
+// 核过的写在分镜 narration.readingsReviewed，改了读音的写在 narration.readings；配音时每条候选都查这些字（第二道，qwen_clone.py）
+const readingsOk = !(beatsOk && beats.narration.script && !beats.narration.synthetic && PY_MLX) ||
+  run('多音字读音核对（配音前）', PY_MLX, ['polyphone_guard.py', 'lint', path.resolve(beatsPath)], { cwd: '../tts', listProblems: true });
+const READINGS_FILE = path.resolve('build', `${beats.id}.readings.json`);
+if (beats.narration.readingsReviewed) fs.mkdirSync(path.dirname(READINGS_FILE), { recursive: true });
+if (beats.narration.readingsReviewed) fs.writeFileSync(READINGS_FILE, JSON.stringify({ readings: beats.narration.readings ?? {}, reviewed: beats.narration.readingsReviewed }));
+if (!readingsOk) voiceOk = false;
+if (beatsOk && readingsOk && beats.narration.script && !beats.narration.synthetic) {
   const base = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath)));
   // 自动换种子（见文末）：成片旁白检查点名的句子，偏移记在配音目录的 <id>.autoreseed.json，比分镜里手写的 reseed 优先，以后每次都用
   const autoReseed = fs.existsSync(base + '.autoreseed.json') ? JSON.parse(fs.readFileSync(base + '.autoreseed.json', 'utf8')) : {};
@@ -115,13 +124,16 @@ if (beatsOk && beats.narration.script && !beats.narration.synthetic) {
     return ['qwen_clone.py', dialogue ? sents.filter((s) => s.speaker === sp).map((s) => s.text).join('') : beats.narration.script, partOf(sp),
       ...(sp ? ['--voice', voicesOf(beats)[sp].voice] : []),
       ...pick({ ...(beats.narration.reseed ?? {}), ...autoReseed }, '--reseed'), ...pick(beats.narration.mood, '--mood'), ...pick(beats.narration.tone, '--tone'),
-      ...(dialogue ? turnStarts(sents).filter(keep).flatMap((t) => ['--turn', t]) : []), ...(fastV ? ['--fast'] : [])];
+      ...(dialogue ? turnStarts(sents).filter(keep).flatMap((t) => ['--turn', t]) : []), ...(fastV ? ['--fast'] : []),
+      ...(beats.narration.readingsReviewed ? ['--readings', READINGS_FILE] : [])];
   };
   let voiceArgs = dialogue ? speakers.map(argsOf) : argsOf('');
   // 配音没变就不重跑（用户 2026-11-06：E02 做了快十个小时）：旁白稿、语气、换种子、配音配置和配音程序都和上次配成功时一样，
   // 音频和逐字时间也都在，就直接用上次的。全走缓存时配音这一步也要 3–10 分钟（逐句复查缓存、整段回转识别、拼好后的复查），改版面的那几轮白等
-  const keyFiles = ['voice.json', 'qwen_clone.py', 'voice.py', ...(dialogue ? ['dialogue.py', ...speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice)] : [])];
-  const keyOf = (va) => createHash('sha1').update(JSON.stringify([va, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
+  const keyFiles = ['voice.json', 'qwen_clone.py', 'voice.py', 'polyphone_guard.py', 'readings.json', ...(dialogue ? ['dialogue.py', ...speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice)] : [])];
+  // 读法改了要重配（PR #84 审查：voiceArgs 里只有读法文件的路径）：核过的清单和改过的读法也算进键里
+  const readingsKey = beats.narration.readingsReviewed ? [JSON.stringify([beats.narration.readings ?? {}, beats.narration.readingsReviewed])] : [];
+  const keyOf = (va) => createHash('sha1').update(JSON.stringify([va, ...readingsKey, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
   const upToDate = (b, k) => fs.existsSync(b + '.voicekey') && fs.readFileSync(b + '.voicekey', 'utf8') === k && fs.existsSync(b + '.wav') && fs.existsSync(b + '.timing.json');
   let voiceKey = keyOf(voiceArgs), sameVoice = upToDate(base, voiceKey);
   if (SAMPLE && !sameVoice) { vb = base + '.sample'; fastV = true; voiceArgs = dialogue ? speakers.map(argsOf) : argsOf(''); voiceKey = keyOf(voiceArgs); sameVoice = upToDate(vb, voiceKey); }

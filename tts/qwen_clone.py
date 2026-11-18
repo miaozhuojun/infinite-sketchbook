@@ -37,10 +37,22 @@ ap.add_argument("--reseed", action="append", default=[], help="「句子=偏移�
 ap.add_argument("--tone", action="append", default=[], help="「句子=语气」：这一句按哪种语气挑候选（语气名在 voice.json 的 tones 里）")
 ap.add_argument("--turn", action="append", default=[], help="对话里一段话的开头（上一句是别人说的，engine/compiler/speakers.mjs）：不和上一句凑成一段配、挑候选时不和上一句比接不接得上")
 ap.add_argument("--fast", action="store_true", help="样片用：只查念对没有（回转识别）和逐字对齐（时间），不查音质（掉嗓子、破音、语速、背景、回声、沙沙声、音色），一句只要一条候选；精配过的句子直接用精配的缓存，快配的另存一份缓存，不混进精配的")
+ap.add_argument("--readings", default=None, help="这一集核过的多音字读法（json：{\"readings\": {\"量一下\": \"liang2 yi2 xia4\"}, \"reviewed\": [\"量 liang2\", …]}，流水线从分镜 narration.readings / readingsReviewed 写出）：每条候选都查这些字念对没有，念错换种子，换满了把这个字换成同音字再配（polyphone_guard.py）")
 ap.add_argument("--mood", action="append", default=[], help="「句子=情绪」：这一句用 voice.json 的 moods 里那段情绪参考音克隆（语气跟着内容变；可重复）")
 args = ap.parse_args()
 
 asr = load_stt("models/Qwen3-ASR-0.6B")
+# 多音字围栏（polyphone_guard.py，用户 2026-11-19 听 E08 样片 v1「调光灯」念错：要一套自动的检测纠错，人和模型在样片阶段只管内容）。
+# 回转识别按意思写字，念错的多音字查不出来；这里拿同一个识别模型强制解码，给几种读音的同音字写法打分，看念成了哪个
+import polyphone_guard as PGM
+from tone_check import load_readings as _load_readings
+_load_readings(os.path.join(os.path.dirname(os.path.abspath(__file__)), "readings.json"))
+_RD = json.load(open(args.readings, encoding="utf-8")) if args.readings else None
+PGM.apply_readings((_RD or {}).get("readings"))
+REVIEWED = set(_RD.get("reviewed") or []) if _RD else None  # None：没给核过的清单，不拦（只在报告里列可疑的）
+PG = PGM.Scorer(asr)
+SUBST = {}  # 句子 → 配音时给 TTS 的写法（念错换满种子后，把那个字换成该念读音的同音字）
+POLY_LOG = []  # 每次判成念错、换写法的记录，写进 <输出前缀>.polyphones.json
 voice = load_voice(args.voice) if args.voice else load_voice()
 if not args.ref:
     args.ref = voice["ref"]
@@ -207,6 +219,41 @@ squashed = lambda rel: [w["text"] for w in rel if len(w["text"]) == 1 and w["end
 asr_text = lambda path: said_text(asr.generate(path, language="Chinese").text)
 
 
+def poly_ref(R):
+    """多音字参照：同一个音色、固定种子，把一小段（换成同音字的写法）配出来"""
+    def gen(txt):
+        try:
+            mx.random.seed(args.seed)
+            ch = list(tts.generate(text=txt, ref_audio=R["path"], ref_text=R["text"], lang_code="chinese", temperature=args.temperature, max_tokens=int(12.5 * (0.5 * len(txt) + 2))))
+            return np.concatenate([np.array(c.audio) for c in ch]).astype(np.float32), ch[0].sample_rate
+        except Exception:
+            return None
+    return gen
+
+
+def poly_bad(audio, sr_, rel, text, R):
+    """这条声音里核过的多音字有没有念错：返回念错的那几条（polyphone_guard.check_sentence 的结果）。没核过的不拦，可疑的记进报告"""
+    if REVIEWED is None or not PGM.targets(text):
+        return []
+    res = PGM.check_sentence(PG, audio, sr_, text, rel, reviewed=REVIEWED, reference=poly_ref(R))
+    if res and res[0].get("unaligned"):
+        POLY_LOG.append({"kind": "对不上逐字时间、没查", "text": text})
+        return []
+    for r in res:
+        if not r["ok"] and not r["reviewed"]:
+            POLY_LOG.append({"kind": "没核过、可能念错", "text": text, **{k: r[k] for k in ("ctx", "py", "heard", "margin")}})
+    return [r for r in res if r["reviewed"] and not r["ok"]]
+
+
+def poly_say(text, bad):
+    """把念错的字换成该念读音的同音字（只换这一处上下文），给 TTS 用；字幕、对齐、回转比对照旧用原文"""
+    t = SUBST.get(text, text)
+    for r in bad:  # 按原文位置换（同音字一个字换一个字，位置不变；PR #84 审查：按上下文找会因为标点找不到、换错地方）
+        if r.get("pos") is not None and t[r["pos"]] == r["ch"]:
+            t = t[:r["pos"]] + r["say"] + t[r["pos"] + 1:]
+    return t
+
+
 # 一句试满都没有沙沙声低于上限、只好用最干净的一条时，缓存里记下（flatFallback = 当时的上限），以后缓存检查不再因为沙沙声扔掉它：
 # 「这就叫机器学习。」几乎全是 j/q/x，浊音谱平坦度天生偏高，30 多个种子都在 0.09 以上；原来每次跑都扔掉重配、再退回同一条，一次三分钟
 FLAT_FALLBACK = "沙沙声试满都没低于上限，用最干净的一条"
@@ -224,6 +271,8 @@ HYPS = {}  # 句子 → 回转识别没对上时听成的说法，字数差多�
 # 原来卡一句就中断整轮：E04 153 句，跑了 37 分钟才报出一句卡住，改写后又跑 11 分钟报出下一句，一轮只能发现一句
 FAILS = {}
 SPLIT_STUCK = {}  # 句子 → 自动拆成两半后没过的那一半
+POLY_BAD = {}  # 句子 → 每次判成念错的多音字
+POLY_TRIES = 3  # 同一句念错几次就换写法（换写法以后还念错，就照别的关卡一样试满）
 
 
 def reject(text, seed, kind, msg):
@@ -274,7 +323,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         # 12Hz 模型每秒 12.5 个 token，按每字 0.5 秒、另加 2 秒余量封顶
         n_chars = len(re.sub(PUNCT, "", text))
         cap = int(12.5 * (0.5 * n_chars + 2))
-        chunks = list(tts.generate(text=text, ref_audio=R["path"], ref_text=R["text"], lang_code="chinese", temperature=args.temperature, max_tokens=cap))
+        chunks = list(tts.generate(text=SUBST.get(text, text), ref_audio=R["path"], ref_text=R["text"], lang_code="chinese", temperature=args.temperature, max_tokens=cap))
         audio = np.concatenate([np.array(c.audio) for c in chunks]).astype(np.float32)
         sr = chunks[0].sample_rate
         dur = len(audio) / sr
@@ -321,6 +370,15 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         rel = align(audio, sr, text)
         if squashed(rel):
             reject(text, seed, "吞字或对不上", f"：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
+            continue
+        # 多音字（polyphone_guard.py）：核过读音的字念成了别的读音，换种子；同一个字念错满 POLY_TRIES 次，换成同音字再配
+        if (pb := poly_bad(audio, sr, rel, text, R)):
+            reject(text, seed, "多音字念错", "：多音字 " + "、".join(f"{r['ctx']} 该念 {r['py']}，像 {r['heard']}（{r['margin']:+.1f}" + (f"，参照 {r['ref']:+.1f}" if r["ref"] is not None else "") + "）" for r in pb) + "，换种子重来")
+            POLY_BAD.setdefault(text, []).append(pb)
+            if len(POLY_BAD[text]) >= POLY_TRIES and text not in SUBST:
+                SUBST[text] = poly_say(text, pb)
+                POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": SUBST[text], "ctx": [r["ctx"] for r in pb]})
+                print(f"    多音字念错 {POLY_TRIES} 次，换个写法给配音：{SUBST[text]}")
             continue
         # 硬切（成片旁白检查 0k 的同一条规则）：原来只在拼好后和成片里查，这里先挡掉，退路里也就不会有
         if (he := hard_edges(audio, sr)):
@@ -583,6 +641,9 @@ if CHUNK.get("maxSentences", 1) > 1:
             if os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk") or FAST and os.path.exists(os.path.join(CACHE, cache_key(sents[k], False)) + ".nochunk"):
                 continue
             # 一段一起配只按整段验收：切出来的每一句再按成片旁白检查的口径验一遍（语速、硬切按句量），不过的这一句单独配
+            if (pb := poly_bad(take[0], take[1], take[4], sents[k], ref_for(sents[k]))):
+                print(f"    整段切出来的第 {k + 1} 句多音字念错（{'、'.join(r['ctx'] for r in pb)}），这一句单独配")
+                continue
             if not FAST and (lb := line_defects(take[0], take[1], take[4], voice)):
                 print(f"    整段切出来的第 {k + 1} 句{'、'.join(lb)}，这一句单独配")
                 continue
@@ -629,6 +690,9 @@ for i, sent in enumerate(sents):
         elif not FAST and not (os.path.exists(key + ".postfail") and json.load(open(key + ".postfail", encoding="utf-8")).get("seed") == json.load(open(key + ".json", encoding="utf-8")).get("seed")) \
                 and (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
             print(f"  缓存里的「{sent}」{'、'.join(lb)}（成片旁白检查会点名），重新生成")
+            cached = False
+        elif (pb := poly_bad(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], sent, ref_for(sent))):
+            print(f"  缓存里的「{sent}」多音字念错（{'、'.join(r['ctx'] + ' 像 ' + r['heard'] for r in pb)}），重新生成")
             cached = False
         elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO * 1.05:
             print(f"  缓存里的「{sent}」有回声，重新生成")
@@ -959,6 +1023,12 @@ def asr_long(path, spans, max_sec=ASR_CHUNK):
     return "".join(hyp)
 
 
+json.dump({"reviewed": sorted(REVIEWED) if REVIEWED is not None else None, "log": POLY_LOG, "rewritten": SUBST}, open(args.out + ".polyphones.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+if REVIEWED is None:
+    print("  多音字：没给核过的读音（--readings），没拦；" + (f"可疑 {len(POLY_LOG)} 处见 .polyphones.json" if POLY_LOG else "没发现可疑的"))
+else:
+    n_bad = sum(1 for q in POLY_LOG if q["kind"] == "换成同音字再配")
+    print(f"  多音字：核过 {len(REVIEWED)} 种读音，每条候选都查；换成同音字再配 {n_bad} 句" + (f"；没核过、可能念错 {sum(1 for q in POLY_LOG if q['kind'].startswith('没核'))} 处（见 .polyphones.json）" if any(q['kind'].startswith('没核') for q in POLY_LOG) else ""))
 c_all = cer(syl(said_text(args.text)), syl(asr_long(args.out + ".wav", spans)))
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)

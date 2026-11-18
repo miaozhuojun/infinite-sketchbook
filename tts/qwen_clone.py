@@ -372,17 +372,6 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         if squashed(rel):
             reject(text, seed, "吞字或对不上", f"：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
             continue
-        # 多音字（polyphone_guard.py）：核过读音的字念成了别的读音，换种子；同一个字念错满 POLY_TRIES 次，换成同音字再配
-        if (pb := poly_bad(audio, sr, rel, text, R)):
-            reject(text, seed, "多音字念错", "：多音字 " + "、".join(f"{r['ctx']} 该念 {r['py']}，像 {r['heard']}（{r['margin']:+.1f}" + (f"，参照 {r['ref']:+.1f}" if r["ref"] is not None else "") + "）" for r in pb) + "，换种子重来")
-            POLY_BAD.setdefault(text, []).append(pb)
-            if not best_poly or min(r["margin"] - (r["ref"] or 0) for r in pb) > best_poly[0]:
-                best_poly = (min(r["margin"] - (r["ref"] or 0) for r in pb), (audio, sr, seed, note, rel, None), pb)
-            if len(POLY_BAD[text]) >= POLY_TRIES and text not in SUBST:
-                SUBST[text] = poly_say(text, pb)
-                POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": SUBST[text], "ctx": [r["ctx"] for r in pb]})
-                print(f"    多音字念错 {POLY_TRIES} 次，换个写法给配音：{SUBST[text]}")
-            continue
         # 硬切（成片旁白检查 0k 的同一条规则）：原来只在拼好后和成片里查，这里先挡掉，退路里也就不会有
         if (he := hard_edges(audio, sr)):
             reject(text, seed, "硬切", f"：硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in he) + "，换种子重来")
@@ -417,6 +406,18 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             g_ = stray_excess(stray, drawl=DRAWL)
             if not best_stray or g_ < best_stray[0]:
                 best_stray = (g_, (audio, sr, seed, note, rel, bk))
+            continue
+        # 多音字（polyphone_guard.py）：核过读音的字念成了别的读音，换种子；同一个字念错满 POLY_TRIES 次，换成同音字再配。
+        # 放在别的关卡后面（PR #85 审查）：被它拒掉的候选别的都过了，留作退路才干净，也省得给过不了别的关卡的候选打分
+        if (pb := poly_bad(audio, sr, rel, text, R)):
+            reject(text, seed, "多音字念错", "：多音字 " + "、".join(f"{r['ctx']} 该念 {r['py']}，像 {r['heard']}（{r['margin']:+.1f}" + (f"，参照 {r['ref']:+.1f}" if r["ref"] is not None else "") + "）" for r in pb) + "，换种子重来")
+            POLY_BAD.setdefault(text, []).append(pb)
+            if not best_poly or min(r["margin"] - (r["ref"] or 0) for r in pb) > best_poly[0]:
+                best_poly = (min(r["margin"] - (r["ref"] or 0) for r in pb), (audio, sr, seed, note, rel, bk), pb)
+            if len(POLY_BAD[text]) >= POLY_TRIES and text not in SUBST:
+                SUBST[text] = poly_say(text, pb)
+                POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": SUBST[text], "ctx": [r["ctx"] for r in pb]})
+                print(f"    多音字念错 {POLY_TRIES} 次，换个写法给配音：{SUBST[text]}")
             continue
         e = embedding(spk, audio, sr)
         # 配了语速目标时，连贯打分不再拿声音包的基准语速比（量法不同：声音包按「首字到末字」量，逗号停顿算进去，每句都显得慢，候选就偏向快的那条）

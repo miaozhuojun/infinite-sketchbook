@@ -99,6 +99,11 @@ def units(text):
     return out
 
 
+def unit_offsets(text):
+    """每个单位在原文里的位置（和 units 一一对应：标点不算单位）。"""
+    return [m.start() for m in re.finditer(r"[一-鿿]|\d+|[A-Za-z]+", text)]
+
+
 def targets(text):
     """这句里要查的多音字：[(第几个单位, 字, 该念的读音, [别的读音])]。"""
     out = []
@@ -185,8 +190,9 @@ def check_sentence(scorer, x, sr, text, words, offset=0.0, reviewed=None, refere
     reviewed：核过的「字 读音」集合（None 表示都算核过）；reference(window_text) → 声音：拿来配参照的函数（None 不配参照）。"""
     al = align_units(text, words)
     if not al:
-        return []
+        return [dict(ch="", unaligned=True, ok=True, reviewed=False)] if targets(text) else []  # 对不上逐字时间：这句没查，记一条
     us, ws = al
+    offs = unit_offsets(text)
     res = []
     for i, ch, py, others in targets(text):
         a, b = max(0, i - WINDOW), min(len(us) - 1, i + WINDOW)
@@ -194,7 +200,7 @@ def check_sentence(scorer, x, sr, text, words, offset=0.0, reviewed=None, refere
         seg = _crop16(x, sr, ws[a]["start"] - offset - 0.05, ws[b]["end"] - offset + 0.05)
         if len(seg) < 1600:
             continue
-        cands = {r: homophones(r, avoid=left + right) for r in [py] + others}
+        cands = {r: homophones(r, avoid=left + right) or homophones(r) for r in [py] + others}
         margin, best = _margin(scorer, seg, left, right, py, others, cands)
         alt = max(others, key=lambda r: best[r])
         rv = reviewed is None or pair(ch, py) in reviewed
@@ -203,7 +209,7 @@ def check_sentence(scorer, x, sr, text, words, offset=0.0, reviewed=None, refere
             ref = _ref_margin(scorer, reference, left, right, py, others, cands)
             ok = ref is not None and margin >= ref - REF_SLACK
         res.append(dict(ch=ch, at=round(ws[i]["start"], 2), py=py, heard=py if margin > 0 else alt, margin=round(margin, 2), ok=ok, ref=ref,
-                        reviewed=rv, ctx=f"{left}[{ch}]{right}", say=homophones(py, avoid=left + right)[0], scores={r: round(v, 2) for r, v in best.items()}))
+                        reviewed=rv, ctx=f"{left}[{ch}]{right}", say=cands[py][0], pos=offs[i] if i < len(offs) else None, scores={r: round(v, 2) for r, v in best.items()}))
     return res
 
 

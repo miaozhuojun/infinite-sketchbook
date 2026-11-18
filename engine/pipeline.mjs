@@ -103,6 +103,7 @@ let sampleVoice = null;
 const readingsOk = !(beatsOk && beats.narration.script && !beats.narration.synthetic && PY_MLX) ||
   run('多音字读音核对（配音前）', PY_MLX, ['polyphone_guard.py', 'lint', path.resolve(beatsPath)], { cwd: '../tts', listProblems: true });
 const READINGS_FILE = path.resolve('build', `${beats.id}.readings.json`);
+if (beats.narration.readingsReviewed) fs.mkdirSync(path.dirname(READINGS_FILE), { recursive: true });
 if (beats.narration.readingsReviewed) fs.writeFileSync(READINGS_FILE, JSON.stringify({ readings: beats.narration.readings ?? {}, reviewed: beats.narration.readingsReviewed }));
 if (!readingsOk) voiceOk = false;
 if (beatsOk && readingsOk && beats.narration.script && !beats.narration.synthetic) {
@@ -130,7 +131,9 @@ if (beatsOk && readingsOk && beats.narration.script && !beats.narration.syntheti
   // 配音没变就不重跑（用户 2026-11-06：E02 做了快十个小时）：旁白稿、语气、换种子、配音配置和配音程序都和上次配成功时一样，
   // 音频和逐字时间也都在，就直接用上次的。全走缓存时配音这一步也要 3–10 分钟（逐句复查缓存、整段回转识别、拼好后的复查），改版面的那几轮白等
   const keyFiles = ['voice.json', 'qwen_clone.py', 'voice.py', 'polyphone_guard.py', 'readings.json', ...(dialogue ? ['dialogue.py', ...speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice)] : [])];
-  const keyOf = (va) => createHash('sha1').update(JSON.stringify([va, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
+  // 读法改了要重配（PR #84 审查：voiceArgs 里只有读法文件的路径）：核过的清单和改过的读法也算进键里
+  const readingsKey = beats.narration.readingsReviewed ? [JSON.stringify([beats.narration.readings ?? {}, beats.narration.readingsReviewed])] : [];
+  const keyOf = (va) => createHash('sha1').update(JSON.stringify([va, ...readingsKey, ...keyFiles.map((f) => (fs.existsSync(path.resolve('../tts', f)) ? fs.readFileSync(path.resolve('../tts', f), 'utf8') : ''))])).digest('hex');
   const upToDate = (b, k) => fs.existsSync(b + '.voicekey') && fs.readFileSync(b + '.voicekey', 'utf8') === k && fs.existsSync(b + '.wav') && fs.existsSync(b + '.timing.json');
   let voiceKey = keyOf(voiceArgs), sameVoice = upToDate(base, voiceKey);
   if (SAMPLE && !sameVoice) { vb = base + '.sample'; fastV = true; voiceArgs = dialogue ? speakers.map(argsOf) : argsOf(''); voiceKey = keyOf(voiceArgs); sameVoice = upToDate(vb, voiceKey); }

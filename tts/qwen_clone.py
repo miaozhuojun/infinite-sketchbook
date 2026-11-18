@@ -236,6 +236,9 @@ def poly_bad(audio, sr_, rel, text, R):
     if REVIEWED is None or not PGM.targets(text):
         return []
     res = PGM.check_sentence(PG, audio, sr_, text, rel, reviewed=REVIEWED, reference=poly_ref(R))
+    if res and res[0].get("unaligned"):
+        POLY_LOG.append({"kind": "对不上逐字时间、没查", "text": text})
+        return []
     for r in res:
         if not r["ok"] and not r["reviewed"]:
             POLY_LOG.append({"kind": "没核过、可能念错", "text": text, **{k: r[k] for k in ("ctx", "py", "heard", "margin")}})
@@ -245,10 +248,9 @@ def poly_bad(audio, sr_, rel, text, R):
 def poly_say(text, bad):
     """把念错的字换成该念读音的同音字（只换这一处上下文），给 TTS 用；字幕、对齐、回转比对照旧用原文"""
     t = SUBST.get(text, text)
-    for r in bad:
-        l, rest = r["ctx"].split("[", 1)
-        ch, rgt = rest.split("]", 1)
-        t = t.replace(l + ch + rgt, l + r["say"] + rgt, 1) if (l + ch + rgt) in t else t.replace(ch, r["say"], 1)
+    for r in bad:  # 按原文位置换（同音字一个字换一个字，位置不变；PR #84 审查：按上下文找会因为标点找不到、换错地方）
+        if r.get("pos") is not None and t[r["pos"]] == r["ch"]:
+            t = t[:r["pos"]] + r["say"] + t[r["pos"] + 1:]
     return t
 
 

@@ -312,6 +312,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     best_flat = None  # 只差沙沙声的候选里最干净的一条
     best_rate = None  # 只差语速的候选里离目标最近的一条
     best_stray = None  # 只差断句（没标点却停了、字拖长）的候选里断得最轻的一条
+    best_poly = None  # 只差多音字没判过的候选里最像该念读音的一条（换了同音字还判不过，多半是识别模型分不清，不让一句话卡死整集）
     cands = []
     tone = tone or tone_of(text); target = TONES.get(tone, {})
     for attempt in range(args.max_tries):
@@ -375,6 +376,8 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         if (pb := poly_bad(audio, sr, rel, text, R)):
             reject(text, seed, "多音字念错", "：多音字 " + "、".join(f"{r['ctx']} 该念 {r['py']}，像 {r['heard']}（{r['margin']:+.1f}" + (f"，参照 {r['ref']:+.1f}" if r["ref"] is not None else "") + "）" for r in pb) + "，换种子重来")
             POLY_BAD.setdefault(text, []).append(pb)
+            if not best_poly or min(r["margin"] - (r["ref"] or 0) for r in pb) > best_poly[0]:
+                best_poly = (min(r["margin"] - (r["ref"] or 0) for r in pb), (audio, sr, seed, note, rel, None), pb)
             if len(POLY_BAD[text]) >= POLY_TRIES and text not in SUBST:
                 SUBST[text] = poly_say(text, pb)
                 POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": SUBST[text], "ctx": [r["ctx"] for r in pb]})
@@ -447,6 +450,11 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
     if best:
         print(f"    {args.max_tries} 次里没有一条背景分到 {GEN_BAK}，用最干净的种子 {best[2]}（BAK {best[5]:.2f}）")
         return best
+    if best_poly and usable(best_poly[1]):
+        print(f"    {args.max_tries} 次里多音字都没判过（换了写法也没过），用最像的种子 {best_poly[1][2]}：" + "、".join(r["ctx"] for r in best_poly[2]) + "，记进 .polyphones.json，单听确认")
+        POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": text, "ctx": [r["ctx"] for r in best_poly[2]], "margin": [r["margin"] for r in best_poly[2]], "ref": [r["ref"] for r in best_poly[2]]})
+        a_, sr_, sd_, nt_, rel_, bk_ = best_poly[1]
+        return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + "多音字没判过，用最像的一条", rel_, bk_
     if best_stray:
         print(f"    {args.max_tries} 次里每条都断在没标点的地方，用断得最轻的种子 {best_stray[1][2]}（{best_stray[0]:.2f} 倍门槛）")
         a_, sr_, sd_, nt_, rel_, bk_ = best_stray[1]

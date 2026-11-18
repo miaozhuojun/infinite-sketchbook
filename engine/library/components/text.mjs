@@ -68,7 +68,7 @@ export default {
       }
       if (g.approx) {
         // 约等于：上下两道一样的波浪（各一个整周期），中间隔 0.15 字号，居中在小写字母中线（和 =、× 同一高度）
-        const L = x + size * 0.08, w = size * 0.46, mid = baseY - size * 0.245, amp = size * 0.05;
+        const L = x + size * 0.08, w = size * 0.46, mid = baseY - size * 0.245, amp = size * 0.065; // 40 号时 0.05 只有 2px，比笔宽还小，读着像两道粗线（PR #80 审查）
         for (const yy of [mid - size * 0.075, mid + size * 0.075]) {
           const pts = Array.from({ length: 9 }, (_, i) => [L + (w * i) / 8, yy - amp * Math.sin((2 * Math.PI * i) / 8)]);
           push({ kind: 'line', color, width: W, d: k.smoothPath(pts.map((p) => [p[0] + (rnd() - 0.5) * size * 0.01, p[1] + (rnd() - 0.5) * size * 0.01])), normLenRef: size });

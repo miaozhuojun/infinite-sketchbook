@@ -1052,6 +1052,9 @@ expectBeats('旁白稿里写了「就得」（当「必须」讲念 děi）', (b
 expectBeats('旁白稿里写了「调光灯」（当调节讲念 tiáo）', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，换成调光灯。');
 }, validate, /「调光」.*tiáo.*「条光」/, { any: true });
+expectBeats('旁白稿里写了「音调高」（名词「调」念 diào，不该报）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，他的音调高。');
+}, validate, /^(?![\s\S]*「调高」)/, { any: true });
 expectBeats('旁白稿里写了「倒着算」（当反过来讲念 dào）', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，从后面倒着算。');
 }, validate, /「倒着」.*dào.*「到着」/, { any: true });

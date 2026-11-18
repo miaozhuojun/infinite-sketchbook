@@ -191,6 +191,7 @@ export function validateBeats(beats, style, reg) {
     if (p.chapter !== undefined && (typeof p.chapter !== 'string' || ![...p.chapter].length || [...p.chapter].length > style.chapters.titleMax)) E(`${P}.chapter`, `节名要写，最多 ${style.chapters.titleMax} 个字（B 站分段章节标题要少于 16 个汉字）`);
     if (p.block !== undefined && p.block !== true) E(`${P}.block`, '只能写 true（这一句起换一块纸，镜头和铅笔像换节一样飞过去，不另起平台章节）');
     if (p.block !== undefined && p.chapter !== undefined) E(`${P}.block`, '这句已经是新的一节（chapter），不用再写 block');
+    if (p.noLamp !== undefined && (typeof p.noLamp !== 'string' || !p.noLamp.trim())) E(`${P}.noLamp`, '写一句为什么这句说到灯、取景里却不该有灯（scene.lamp 放行）');
     if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
     if (p.camera === 'overview' && (p.actions || []).length) E(`${P}.camera`, 'overview（整张纸全景）的句子不画新东西（actions 要空着）');
     if (p.camera === 'overview' && p.revisit) E(`${P}.camera`, 'overview 和 revisit 不能同时用');

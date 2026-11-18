@@ -114,6 +114,7 @@ for (const p of phrases) {
       prev.actions = [...prev.actions, ...p.actions]; prev.i1 = p.i1; prev.srcEnd = p.srcEnd;
       if (p.role === 'aha' || prev.role === 'aha') prev.role = 'aha'; // 合并后顿悟角色优先保留（否则顿悟句不推近）
       if (p.focus) prev.focus = [...(prev.focus || []), ...p.focus];
+      if (p.noLamp) prev.noLamp ??= p.noLamp; // 并进来的那句写了 noLamp，合并后的整句照样放行（PR #83 审查）
       continue;
     }
     prev.cutOut = cut; p.cutIn = cut;
@@ -1127,12 +1128,13 @@ if (NR.maxSeconds !== undefined && audioEndAll > NR.maxSeconds)
 if (NR.lampWords) {
   const LAMP = new RegExp(NR.lampWords), bulbs = allActions.filter((a) => a.type === 'bulb' && geo.get(a.id)?.length);
   const inView = (id, cam) => {
+    if (!cam) return false;
     const b = geoBox(id), x = ((b.x0 + b.x1) / 2 - cam.x) * cam.z + VIEW.cx, y = ((b.y0 + b.y1) / 2 - cam.y) * cam.z + VIEW.cy;
     return x > FR.l && x < FR.r && y > FR.t && y < FR.b;
   };
   phrases.forEach((p, pi) => {
     if (p.noLamp || !LAMP.test(strip(p.text))) return;
-    if (!bulbs.some((a) => phraseOf.get(a.id) <= pi && inView(a.id, phraseCam[pi])))
+    if (!bulbs.some((a) => phraseOf.get(a.id) <= pi && inView(a.id, targetCam[pi]))) // 实际取景：顿悟句按推近后的（PR #83 审查）
       flag('scene.lamp', `${report.phrases[pi].at}s「${p.text.slice(0, 16)}」说的是灯的事，取景里一盏灯都没有：把那张图放在旁边（复用 copyOf 或镜头回看），讲到哪盏灯就让它亮暗；确实不该有灯的写 noLamp`);
   });
 }

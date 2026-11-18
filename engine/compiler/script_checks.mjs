@@ -181,6 +181,29 @@ export function scriptIssues(beats, style) {
     });
     if (flagged > 3) add('script.retrace', 'phrases', `这一集 ${n} 处回描，${flagged} 处是重复（上面逐条列了）`);
   }
+  // 7. 父子对话（script.dad，有爸爸的句子才查）：爸爸是捧哏，替观众问、往歪处带、复述要点。
+  //    孩子连说太多句没有爸爸（E07 样片 v6 第 5–9 节连说 15 句、31 句，用户：父亲都没怎么「捧哏」）；
+  //    爸爸的句子老用同一个开头（E04 v2 爸爸 26 句里 13 句「合着」开头，用户：感觉不好）
+  if (P.some((p) => p.speaker === 'dad')) {
+    const N = style.narrative?.[beats.kind]?.dadEvery ?? style.narrative?.episode?.dadEvery ?? 12;
+    const OPEN = style.narrative?.[beats.kind]?.dadOpenerMax ?? style.narrative?.episode?.dadOpenerMax ?? 2;
+    const first = P.findIndex((p) => p.speaker === 'dad');
+    const kid = (i) => P[i].speaker !== 'dad' && P[i].camera !== 'overview';
+    for (let i = first; i < P.length; ) {
+      if (!kid(i)) { i++; continue; }
+      let j = i;
+      while (j + 1 < P.length && kid(j + 1)) j++;
+      if (j - i + 1 > N) add('script.dad', `phrases[${i}]–[${j}]`, `孩子连说 ${j - i + 1} 句没有爸爸（「${strip(P[i].text).slice(0, 10)}」到「${strip(P[j].text).slice(0, 10)}」，上限 ${N} 句）：中间插一两句爸爸——替观众问出「那它怎么……」、往观众真会想歪的地方带、或者复述刚才那一步`);
+      i = j + 1;
+    }
+    // 只数垫话的开头（口头禅、「那」这类接话词）；「我」「一」这种句子本身的开头不算
+    const FILLER = ['合着', '那可不', '敢情', '好家伙', '这么说', '我说', '那', '噢', '哦', '嗯', '哎', '得了'];
+    const opener = (t) => FILLER.find((w) => strip(t ?? '').startsWith(w)) ?? '';
+    const byOpen = new Map();
+    P.forEach((p, i) => { if (p.speaker === 'dad') { const w = opener(p.text); if (w) byOpen.set(w, [...(byOpen.get(w) ?? []), i]); } });
+    for (const [w, idx] of byOpen) if (idx.length > OPEN)
+      add('script.dad', `phrases[${idx.join(',')}]`, `爸爸 ${idx.length} 句都以「${w}」开头（上限 ${OPEN} 次）：开头换着用，多数句子不垫话直接说，口头禅留给真正的点睛处（E04「合着」13 次）`);
+  }
   return issues;
 }
 

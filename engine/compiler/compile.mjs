@@ -1065,7 +1065,12 @@ else {
 // ---------- 自检（可失败） ----------
 const downs = penTrack.filter((s) => s.kind === 'down').sort((a, b) => a.t0 - b.t0);
 for (let i = 1; i < downs.length; i++) if (downs[i].t0 < downs[i - 1].t1 - 1e-6) problems.push(`两处同时落笔：${strokes[downs[i - 1].stroke].id} / ${strokes[downs[i].stroke].id}`);
-for (const a of report.actions) if (a.lag > M.maxLag) flag('sync.lag', `画面落后旁白 ${a.lag}s：${a.id}（上限 ${M.maxLag}s）`);
+// 落后太多（sync.lagFar）：说到的东西观众半天看不见。E08 样片 v1 六串乘法落后 5–10 秒，sync.lag 只是建议、一百多条里没人当回事，
+// 用户 5:56：「这里说这算式，图上也没写，完全不知道在说什么了」。长式子拆成几段，每段的 at 落在念到它的词上
+for (const a of report.actions) {
+  if (M.maxLagFar !== undefined && a.lag > M.maxLagFar) flag('sync.lagFar', `画面落后旁白 ${a.lag}s：${a.id}（说到 ${M.maxLagFar}s 后还没开始画；长式子拆成几段，每段 at 在念到它的词上）`);
+  else if (a.lag > M.maxLag) flag('sync.lag', `画面落后旁白 ${a.lag}s：${a.id}（上限 ${M.maxLag}s）`);
+}
 for (const p of report.phrases) {
   if (p.insertedPause > M.maxPause) flag('pace.pause', `「${p.text}」后要等画面 ${p.insertedPause}s（上限 ${M.maxPause}s），旁白和画面没对上，需要拆句或减画`);
   else if (p.role !== 'aha' && p.insertedPause > M.maxPauseNonAha) flag('pace.pause', `「${p.text}」后停顿 ${p.insertedPause}s：长停顿应留给顿悟句（非顿悟句上限 ${M.maxPauseNonAha}s），需要把画面分到前后句或减画`);
@@ -1111,6 +1116,25 @@ if (NR.maxStill !== undefined) {
     if (sec > NR.maxStill) flag('narrative.still', `${report.phrases[i].at}s 起 ${j - i + 1} 句、${r2(sec)}s 一笔不画（「${phrases[i].text.slice(0, 14)}」${j > i ? `到「${phrases[j].text.slice(0, 10)}」` : ''}，上限 ${NR.maxStill}s）：说的是一个动作就画这个动作，串场话删掉；能画就别说`);
     i = j + 1;
   }
+}
+// 一集多长（narrative.length）：用户 2026-11-19 看 E08 样片 v1（16 分 25 秒）：「一集可以少一点内容，但一定要让人把核心理解清楚，
+// 一集后面全部不能超过 10 分钟，内容实在塞不下就分多集」。按最后一句说完算（片尾卡不算）
+if (NR.maxSeconds !== undefined && audioEndAll > NR.maxSeconds)
+  flag('narrative.length', `正片 ${r2(audioEndAll)}s（${Math.floor(audioEndAll / 60)} 分 ${Math.round(audioEndAll % 60)} 秒），超过 ${NR.maxSeconds}s：少讲一点、把核心讲透，装不下就拆成两集`);
+// 说到灯，灯要在画面里（scene.lamp）：E07 样片 v2 拿灯讲扣分、画面上只有表；E08 样片 v1 又犯了两次（4:21 只有亮度曲线、9:38 只有一张表），
+// 用户：「这个切换人脑子不一定反应的过来」「人很难把他和图里的灯对应起来」。这句旁白说到灯（灯、甲、乙、亮度），
+// 说完那一刻的取景里要有一盏这一句以前画过的灯（bulb，复用的也算）。确实不该有灯的句子在分镜里写 noLamp: "为什么"
+if (NR.lampWords) {
+  const LAMP = new RegExp(NR.lampWords), bulbs = allActions.filter((a) => a.type === 'bulb' && geo.get(a.id)?.length);
+  const inView = (id, cam) => {
+    const b = geoBox(id), x = ((b.x0 + b.x1) / 2 - cam.x) * cam.z + VIEW.cx, y = ((b.y0 + b.y1) / 2 - cam.y) * cam.z + VIEW.cy;
+    return x > FR.l && x < FR.r && y > FR.t && y < FR.b;
+  };
+  phrases.forEach((p, pi) => {
+    if (p.noLamp || !LAMP.test(strip(p.text))) return;
+    if (!bulbs.some((a) => phraseOf.get(a.id) <= pi && inView(a.id, phraseCam[pi])))
+      flag('scene.lamp', `${report.phrases[pi].at}s「${p.text.slice(0, 16)}」说的是灯的事，取景里一盏灯都没有：把那张图放在旁边（复用 copyOf 或镜头回看），讲到哪盏灯就让它亮暗；确实不该有灯的写 noLamp`);
+  });
 }
 
 // 字幕：说完后若这句的画面还在画，字幕停留到画完（不晚于下一句字幕出现），避免画面和字幕脱节

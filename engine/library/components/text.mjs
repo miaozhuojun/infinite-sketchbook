@@ -1,22 +1,25 @@
-// 文字：中文用 makemeahanzi 中线（国标笔顺逐笔写），拉丁字母/数字/符号用 Hershey 单线字体；支持下标 x_1、手写 ×、空格。
+// 文字：中文用 makemeahanzi 中线（国标笔顺逐笔写），拉丁字母/数字/符号用 Hershey 单线字体；支持下标 x_1、手写 ×、≈、→、空格。
+// ≈ 和 → Hershey 单线字体里没有（E08：「约0.2」「96 降到 29」只能写字，用户：库里没有就加，哪个表达力好用哪个），和 × 一样手写：≈ 两道波浪，→ 一横加一个箭头。
 // 一支笔：所有字形同一笔宽（style.ink.penWidth），不随字号变粗。字号必须取风格规范的字号阶梯（type.scale）。
 // 为了和乘号 × 分开：变量 x 写成手写代数里的 ")(" 形；小写 w 写成圆底，不像大写 W（审片发现 ×w₁ 读成 xW1）。
 // 每一笔带 gi（第几个字形），组件测试用它检查同一段文字里字形不相交。
 export default {
   meta: {
-    name: 'text', title: '手写文字', desc: '按真实笔顺写出的文字。标题、标签、公式片段都用它。x_1 表示下标，× 是手写乘号（小、居中，和变量 x 字形不同）。',
+    name: 'text', title: '手写文字', desc: '按真实笔顺写出的文字。标题、标签、公式片段都用它。x_1 表示下标，× 是手写乘号（小、居中，和变量 x 字形不同），≈ 是约等于（两道波浪），→ 是箭头（一横加箭头，「96 → 29」「1986 → 2012」）。',
     params: {
       text: { type: 'string', required: true }, x: { type: 'number', required: true }, y: { type: 'number', required: true },
       size: { type: 'typeSize', required: true, desc: '字号，必须在风格规范的字号阶梯上' },
       anchor: { type: 'enum', values: ['l', 'c', 'r'], desc: '对齐，默认 c' },
       color: { type: 'inkColor' }, speed: { type: 'number', desc: '书写速度倍数（标题可略快）' },
       plainX: { type: 'enum', values: [true, false], desc: '为 true 时变量 x 写成普通交叉形（默认 false）' },
+      width: { type: 'number', desc: '笔宽，只给片名、顿悟大字加粗用（kit 读它）；不超过字号的 1/20，否则笔画多的字糊成一团（E06 样片）' },
       grid: { type: 'string', desc: '表格名。同一张表里的格子（grid 相同的几段文字）靠行列对齐来读，互相之间只要求墨迹不碰，不按「挨着会连起来读」加宽间距；格子自己要对齐，编译不替你排' },
     },
     example: { text: '感知机 x_1×w_1=4', x: 0, y: 0, size: 72 },
-    preview: [{ text: '感知机', x: 0, y: -50, size: 72 }, { text: 'x_1×w_1=4', x: 0, y: 40, size: 56 }],
+    preview: [{ text: '感知机', x: 0, y: -95, size: 72 }, { text: 'x_1×w_1=4', x: 0, y: -10, size: 56 }, { text: '≈0.45 96→29', x: 0, y: 65, size: 56 }],
     // 组件测试额外检查的写法（字形间距最容易出问题的组合）
-    cases: [{ text: 'w_1=4 x_2+x_3', x: 0, y: 0, size: 40 }, { text: '1+3+0=4<5', x: 0, y: 0, size: 56 }, { text: '×4 ×1 =7', x: 0, y: 0, size: 112 }],
+    cases: [{ text: 'w_1=4 x_2+x_3', x: 0, y: 0, size: 40 }, { text: '1+3+0=4<5', x: 0, y: 0, size: 56 }, { text: '×4 ×1 =7', x: 0, y: 0, size: 112 },
+      { text: '0.1×0.9×2.2≈0.2', x: 0, y: 0, size: 56 }, { text: '96→29 1986 → 2012', x: 0, y: 0, size: 64 }, { text: '扣分≈坡→下坡', x: 0, y: 0, size: 72 }],
   },
   draw(a, k) {
     const size = a.size, color = k.color, rnd = k.rnd, W = k.width; // k.width：一支笔的笔宽；风格写了 ink.textWidthBySize 时小字写轻一点（见 kit.mjs）
@@ -31,6 +34,8 @@ export default {
       if (k.CJK.test(t.c)) return { ...t, cjk: true, adv: size * 0.96 };
       if (t.c === ' ') return { ...t, space: true, adv: size * 0.3 };
       if (t.c === '×') return { ...t, times: true, adv: size * (0.29 + 0.04 * 2) + W + size * 0.1 }; // 左边 0.04 字号，右边 0.04 字号 + 正常字距，和前一个字形后的字距对称（审片：「0 ×2」像空了一格）
+      if (t.c === '≈') return { ...t, approx: true, adv: size * (0.46 + 0.08 * 2) + W + size * 0.1 }; // 和 = 差不多宽，两侧各留 0.08 字号（挨着汉字时 0.05 只空 1.4px）
+      if (t.c === '→') return { ...t, arrow: true, adv: size * (0.7 + 0.08 * 2) + W + size * 0.1 }; // 比 = 长一半，读得出是箭头；两侧各留 0.08 字号
       const sc = t.sub ? 0.62 : 1; // 下标缩小
       // 字间距按墨迹算：字形包围盒是笔画中线，两侧各有半个笔宽，再加上 ±2.5° 旋转和抖动，所以间距 = 一个笔宽 + 0.1 个字号
       // （审片发现统一笔宽后下标 1 和后面的 = 贴在一起，w₁=4 读成 WF=4）
@@ -59,6 +64,23 @@ export default {
         const q = size * 0.145, c = [x + size * 0.04 + q, baseY - size * 0.245];
         push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[c[0] - q, c[1] - q], [c[0] + q, c[1] + q]], 0.6, rnd, 8)), normLenRef: size });
         push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[c[0] + q, c[1] - q], [c[0] - q, c[1] + q]], 0.6, rnd, 8)), normLenRef: size });
+        x += g.adv; return;
+      }
+      if (g.approx) {
+        // 约等于：上下两道一样的波浪（各一个整周期），中间隔 0.15 字号，居中在小写字母中线（和 =、× 同一高度）
+        const L = x + size * 0.08, w = size * 0.46, mid = baseY - size * 0.245, amp = size * 0.065; // 40 号时 0.05 只有 2px，比笔宽还小，读着像两道粗线（PR #80 审查）
+        for (const yy of [mid - size * 0.075, mid + size * 0.075]) {
+          const pts = Array.from({ length: 9 }, (_, i) => [L + (w * i) / 8, yy - amp * Math.sin((2 * Math.PI * i) / 8)]);
+          push({ kind: 'line', color, width: W, d: k.smoothPath(pts.map((p) => [p[0] + (rnd() - 0.5) * size * 0.01, p[1] + (rnd() - 0.5) * size * 0.01])), normLenRef: size });
+        }
+        x += g.adv; return;
+      }
+      if (g.arrow) {
+        // 箭头：先写一横，再从箭头尖往回写两笔（上一笔、下一笔），尖在右边、中线高度
+        const L = x + size * 0.08, R = L + size * 0.7, mid = baseY - size * 0.245, hl = size * 0.2;
+        push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[L, mid], [R, mid]], 0.6, rnd, 10)), normLenRef: size });
+        push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[R, mid], [R - hl * 0.87, mid - hl * 0.5]], 0.6, rnd, 6)), normLenRef: size });
+        push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[R, mid], [R - hl * 0.87, mid + hl * 0.5]], 0.6, rnd, 6)), normLenRef: size });
         x += g.adv; return;
       }
       if (g.custom) {

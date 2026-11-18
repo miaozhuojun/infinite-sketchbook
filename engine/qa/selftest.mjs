@@ -1099,6 +1099,33 @@ expectBeats('写稿自查：回描这句刚画的东西（重复，不是指回�
   const a0 = p.actions.find((a) => a.type !== 'retrace' && a.type !== 'strike');
   p.actions.push({ id: '_rt', type: 'retrace', at: a0.at, target: a0.id });
 }, validate, /_rt：回描「[^」]+」.*就是这句画的/, { advice: true });
+// 父子对话（script.dad，只给建议）：孩子连说太多句没有爸爸（E07 样片 v6）；爸爸老用同一个垫话开头（E04「合着」13 次）
+expectBeats('写稿自查：孩子连说太多句，爸爸不捧哏', (b) => {
+  b.style = { narrative: { [b.kind]: { dadEvery: 2 } } };
+  b.phrases[0].speaker = 'dad';
+  const kid = b.phrases.find((p, i) => i > 0);
+  b.phrases.push(...[1, 2, 3].map((k) => ({ ...structuredClone(kid), actions: [], text: `孩子又说了第${k}句` })));
+}, validate, /孩子连说 \d+ 句没有爸爸/, { advice: true });
+expectBeats('写稿自查：爸爸老用同一个开头（合着），接话问句「那……」不算', (b) => {
+  b.phrases.push(...[1, 2, 3].map((k) => ({ ...structuredClone(b.phrases[0]), actions: [], speaker: 'dad', text: `合着第${k}回又是这样` })));
+  b.phrases.push(...[1, 2, 3].map((k) => ({ ...structuredClone(b.phrases[0]), actions: [], speaker: 'dad', text: `那它第${k}回怎么办` })));
+}, validate, /^(?![\s\S]*以「那」开头)[\s\S]*爸爸 3 句都以「合着」开头/, { advice: true });
+// 开头一分钟（narrative.opening）、画面停着不动（narrative.still），编译按真实时间算，只给建议
+expectBeats('开头没有收获前置，也没有请观众回答的问题', (b) => {
+  b.style = { narrative: { [b.kind]: { promiseWithin: 15, askWithin: 60 } } };
+  for (const p of b.phrases) p.text = p.text.replace(/看完这一?集|评论/g, '');
+}, compileNoFix(TGT), /开头没有收获前置[\s\S]*没有请观众回答/, { advice: true });
+// 反过来：第一句就是收获前置（brief.promise 带标点也认得出），只缺请观众回答的问题，就只报后一条
+expectBeats('开头有收获前置（带标点的 brief.promise 也认得），只报缺请观众回答的问题', (b) => {
+  b.style = { narrative: { [b.kind]: { promiseWithin: 15, askWithin: 60 } } };
+  for (const p of b.phrases) p.text = p.text.replace(/看完这一?集|评论/g, '');
+  b.brief = { ...(b.brief ?? {}), promise: `${b.phrases[0].text.slice(0, 2)}，${b.phrases[0].text.slice(2, 4)}` };
+}, compileNoFix(TGT), /^(?![\s\S]*收获前置)[\s\S]*没有请观众回答/, { advice: true });
+expectBeats('连着几句一笔不画（画面停着不动）', (b) => {
+  b.style = { narrative: { [b.kind]: { maxStill: 0.5 } } };
+  const p = b.phrases.at(-1);
+  p.actions = []; delete p.revisit; delete p.camera;
+}, compileNoFix(TGT), /一笔不画/, { advice: true });
 expectBeats('写稿自查：只有几个字的问句（配音容易念含糊、被听错）', (b) => {
   b.narration.script = `${b.narration.script}嘎嘣呢？`;
 }, validate, /「嘎嘣呢？」.*只有 3 个字的问句/, { advice: true });

@@ -1048,6 +1048,16 @@ expectBeats('旁白稿里写了「二格」（数量念「两」）', (b) => {
 expectBeats('旁白稿里写了「就得」（当「必须」讲念 děi）', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，那就得重来一遍。');
 }, validate, /「就得」.*děi.*「就要」/, { any: true });
+// 「调光灯」念成 diào、「倒着算」念成 dǎo（用户 2026-11-19 看 E08 样片 v1）
+expectBeats('旁白稿里写了「调光灯」（当调节讲念 tiáo）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，换成调光灯。');
+}, validate, /「调光」.*tiáo.*「条光」/, { any: true });
+expectBeats('旁白稿里写了「音调高」（名词「调」念 diào，不该报）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，他的音调高。');
+}, validate, /^(?![\s\S]*「调高」)/, { any: true });
+expectBeats('旁白稿里写了「倒着算」（当反过来讲念 dào）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，从后面倒着算。');
+}, validate, /「倒着」.*dào.*「到着」/, { any: true });
 // 自测题只考复述（用户：E02 v5 理解度 5/5，可 1958 那段很多人理解不过来）
 if (!(beatsSrc.quiz ?? []).length) skip('自测题全是复述题，没有一道解释或迁移题', '基线分镜没有自测题（演示片段不要求）');
 else expectBeats('自测题全是复述题，没有一道解释或迁移题', (b) => {
@@ -1155,6 +1165,27 @@ expectBeats('连着几句一笔不画（画面停着不动）', (b) => {
   const p = b.phrases.at(-1);
   p.actions = []; delete p.revisit; delete p.camera;
 }, compileNoFix(TGT), /一笔不画/, { advice: true });
+// 一集超过 10 分钟（narrative.length）、说到灯取景里没灯（scene.lamp）、画面落后太多（sync.lagFar）：用户 2026-11-19 看 E08 样片 v1
+// 默认只是建议，私有配置可以设成 hard，所以报成建议或问题都算（any）
+expectBeats('正片超过一集的时长上限', (b) => {
+  b.style = { narrative: { [b.kind]: { maxSeconds: 1 } } };
+}, compileNoFix(TGT), /超过 1s：少讲一点/, { any: true });
+// 注入不改旁白：把第一句里的两个字当成「说到灯」的词，再拿掉所有的灯（演示分镜本来就没有灯）
+const lampless = (b) => {
+  const w = strip(b.phrases[0].text).slice(0, 2);
+  b.style = { narrative: { [b.kind]: { lampWords: w } } };
+  for (const q of b.phrases) q.actions = (q.actions ?? []).filter((a) => !['bulb', 'glow', 'off'].includes(a.type));
+};
+expectBeats('旁白说到灯，取景里一盏灯都没有', lampless, compileNoFix(TGT), /说的是灯的事，取景里一盏灯都没有/, { any: true });
+expectBeats('旁白说到灯，写了 noLamp 就不报', (b) => {
+  lampless(b);
+  for (const q of b.phrases) q.noLamp = '演示：这句不该有灯';
+}, compileNoFix(TGT), /^(?![\s\S]*说的是灯的事)[\s\S]*时长/, { any: true });
+expectBeats('画面落后旁白太多（说到以后好几秒才开始画）', (b) => {
+  b.style = { motion: { maxLagFar: 0.01, maxLag: 0 } };
+  const p = b.phrases.find((q) => (q.actions ?? []).filter((a) => !a.copyOf).length >= 2);
+  for (const a of p.actions) a.at = p.text.slice(0, 2);
+}, compileNoFix(TGT), /说到 0\.01s 后还没开始画/, { any: true });
 expectBeats('写稿自查：只有几个字的问句（配音容易念含糊、被听错）', (b) => {
   b.narration.script = `${b.narration.script}嘎嘣呢？`;
 }, validate, /「嘎嘣呢？」.*只有 3 个字的问句/, { advice: true });

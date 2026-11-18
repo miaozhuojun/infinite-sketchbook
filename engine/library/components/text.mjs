@@ -69,7 +69,7 @@ export default {
       }
       if (g.divide) {
         // 除号：先写一横，再点上面的点、下面的点（点是一小段圈，笔宽下看着像点），居中在小写字母中线
-        const L = x + size * 0.08, w = size * 0.42, mid = baseY - size * 0.245, dr = size * 0.045, gap = size * 0.16;
+        const L = x + size * 0.08, w = size * 0.42, mid = baseY - size * 0.245, dr = size * 0.045, gap = size * 0.18;  // 0.16 时 40 号字点和横线只隔 0.9px（PR #81 审查）
         push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[L, mid], [L + w, mid]], 0.6, rnd, 8)), normLenRef: size });
         for (const cy of [mid - gap, mid + gap]) {
           const cx = L + w / 2;

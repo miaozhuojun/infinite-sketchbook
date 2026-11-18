@@ -103,6 +103,11 @@ for (const p of phrases) {
       cut = (prev.srcEnd + p.srcStart) / 2;
       console.log(`  切点：「${prev.text}」|「${p.text}」换了说话的人，之间没找到静音，切在正中 ${r2(cut)}s`);
     }
+    // 换节、换块的句子也不能并进上一句：并了 chapter 就悄悄少一节，block 丢了镜头会把新旧两块一起框住（PR #82 审查）
+    if (cut === null && (p.chapter || p.block)) {
+      cut = (prev.srcEnd + p.srcStart) / 2;
+      console.log(`  切点：「${prev.text}」|「${p.text}」是新的一${p.chapter ? '节' : '块'}，之间没找到静音，切在正中 ${r2(cut)}s`);
+    }
     if (cut === null) {
       console.log(`  切点：「${prev.text}」|「${p.text}」之间没有静音，合并为一句（中间不插停顿）`);
       prev.text += p.text; prev.caption = (prev.caption || prev.text) + '，' + (p.caption || p.text);
@@ -985,7 +990,7 @@ for (const k of clips) {
       const c = camAt(t), m = (s.width / 2) * c.z;
       const q = s.pts.find(([x, y]) => { const sx = (x - c.x) * c.z + VIEW.cx, sy = (y - c.y) * c.z + VIEW.cy; return sx >= -m && sx <= TGT.w + m && sy >= -m && sy <= TGT.h + m; });
       if (q) {
-        problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(t)}s 出现时就在画面里（纸面 ${r2(q[0])},${r2(q[1])}）：复用写在换节那一句的第一个词上（镜头还停在上一节），或者把这一节摆得离上一节再远一点`);
+        problems.push(`复用冒出来：${s.action}（照搬 ${actionsById.get(s.action).copyOf}）在 ${r2(t)}s 出现时就在画面里（纸面 ${r2(q[0])},${r2(q[1])}）：复用写在换节（或 block 换块）那一句的第一个词上（镜头还停在上一节），或者把这一节摆得离上一节再远一点`);
         seen.add(s.action); break;
       }
     }

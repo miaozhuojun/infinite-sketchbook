@@ -1,11 +1,11 @@
-// 文字：中文用 makemeahanzi 中线（国标笔顺逐笔写），拉丁字母/数字/符号用 Hershey 单线字体；支持下标 x_1、手写 ×、≈、→、空格。
-// ≈ 和 → Hershey 单线字体里没有（E08：「约0.2」「96 降到 29」只能写字，用户：库里没有就加，哪个表达力好用哪个），和 × 一样手写：≈ 两道波浪，→ 一横加一个箭头。
+// 文字：中文用 makemeahanzi 中线（国标笔顺逐笔写），拉丁字母/数字/符号用 Hershey 单线字体；支持下标 x_1、手写 ×、÷、≈、→、空格。
+// ÷、≈ 和 → Hershey 单线字体里没有（E08 又缺 ÷：「0.55 ÷ (0.5×0.5)」「坡 ÷ 100」）（E08：「约0.2」「96 降到 29」只能写字，用户：库里没有就加，哪个表达力好用哪个），和 × 一样手写：≈ 两道波浪，→ 一横加一个箭头。
 // 一支笔：所有字形同一笔宽（style.ink.penWidth），不随字号变粗。字号必须取风格规范的字号阶梯（type.scale）。
 // 为了和乘号 × 分开：变量 x 写成手写代数里的 ")(" 形；小写 w 写成圆底，不像大写 W（审片发现 ×w₁ 读成 xW1）。
 // 每一笔带 gi（第几个字形），组件测试用它检查同一段文字里字形不相交。
 export default {
   meta: {
-    name: 'text', title: '手写文字', desc: '按真实笔顺写出的文字。标题、标签、公式片段都用它。x_1 表示下标，× 是手写乘号（小、居中，和变量 x 字形不同），≈ 是约等于（两道波浪），→ 是箭头（一横加箭头，「96 → 29」「1986 → 2012」）。',
+    name: 'text', title: '手写文字', desc: '按真实笔顺写出的文字。标题、标签、公式片段都用它。x_1 表示下标，× 是手写乘号（小、居中，和变量 x 字形不同），÷ 是除号，≈ 是约等于（两道波浪），→ 是箭头（一横加箭头，「96 → 29」「1986 → 2012」）。',
     params: {
       text: { type: 'string', required: true }, x: { type: 'number', required: true }, y: { type: 'number', required: true },
       size: { type: 'typeSize', required: true, desc: '字号，必须在风格规范的字号阶梯上' },
@@ -16,10 +16,10 @@ export default {
       grid: { type: 'string', desc: '表格名。同一张表里的格子（grid 相同的几段文字）靠行列对齐来读，互相之间只要求墨迹不碰，不按「挨着会连起来读」加宽间距；格子自己要对齐，编译不替你排' },
     },
     example: { text: '感知机 x_1×w_1=4', x: 0, y: 0, size: 72 },
-    preview: [{ text: '感知机', x: 0, y: -95, size: 72 }, { text: 'x_1×w_1=4', x: 0, y: -10, size: 56 }, { text: '≈0.45 96→29', x: 0, y: 65, size: 56 }],
+    preview: [{ text: '感知机', x: 0, y: -95, size: 72 }, { text: 'x_1×w_1=4', x: 0, y: -10, size: 56 }, { text: '≈0.45 9→2 ÷2', x: 0, y: 65, size: 56 }],
     // 组件测试额外检查的写法（字形间距最容易出问题的组合）
     cases: [{ text: 'w_1=4 x_2+x_3', x: 0, y: 0, size: 40 }, { text: '1+3+0=4<5', x: 0, y: 0, size: 56 }, { text: '×4 ×1 =7', x: 0, y: 0, size: 112 },
-      { text: '0.1×0.9×2.2≈0.2', x: 0, y: 0, size: 56 }, { text: '96→29 1986 → 2012', x: 0, y: 0, size: 64 }, { text: '扣分≈坡→下坡', x: 0, y: 0, size: 72 }],
+      { text: '0.1×0.9×2.2≈0.2', x: 0, y: 0, size: 56 }, { text: '96→29 1986 → 2012', x: 0, y: 0, size: 64 }, { text: '扣分≈坡→下坡', x: 0, y: 0, size: 72 }, { text: '0.55÷(0.5×0.5)=2.2 坡÷100', x: 0, y: 0, size: 56 }],
   },
   draw(a, k) {
     const size = a.size, color = k.color, rnd = k.rnd, W = k.width; // k.width：一支笔的笔宽；风格写了 ink.textWidthBySize 时小字写轻一点（见 kit.mjs）
@@ -34,6 +34,7 @@ export default {
       if (k.CJK.test(t.c)) return { ...t, cjk: true, adv: size * 0.96 };
       if (t.c === ' ') return { ...t, space: true, adv: size * 0.3 };
       if (t.c === '×') return { ...t, times: true, adv: size * (0.29 + 0.04 * 2) + W + size * 0.1 }; // 左边 0.04 字号，右边 0.04 字号 + 正常字距，和前一个字形后的字距对称（审片：「0 ×2」像空了一格）
+      if (t.c === '÷') return { ...t, divide: true, adv: size * (0.42 + 0.08 * 2) + W + size * 0.1 }; // 和 × 差不多宽，一横上下各一个点
       if (t.c === '≈') return { ...t, approx: true, adv: size * (0.46 + 0.08 * 2) + W + size * 0.1 }; // 和 = 差不多宽，两侧各留 0.08 字号（挨着汉字时 0.05 只空 1.4px）
       if (t.c === '→') return { ...t, arrow: true, adv: size * (0.7 + 0.08 * 2) + W + size * 0.1 }; // 比 = 长一半，读得出是箭头；两侧各留 0.08 字号
       const sc = t.sub ? 0.62 : 1; // 下标缩小
@@ -64,6 +65,16 @@ export default {
         const q = size * 0.145, c = [x + size * 0.04 + q, baseY - size * 0.245];
         push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[c[0] - q, c[1] - q], [c[0] + q, c[1] + q]], 0.6, rnd, 8)), normLenRef: size });
         push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[c[0] + q, c[1] - q], [c[0] - q, c[1] + q]], 0.6, rnd, 8)), normLenRef: size });
+        x += g.adv; return;
+      }
+      if (g.divide) {
+        // 除号：先写一横，再点上面的点、下面的点（点是一小段圈，笔宽下看着像点），居中在小写字母中线
+        const L = x + size * 0.08, w = size * 0.42, mid = baseY - size * 0.245, dr = size * 0.045, gap = size * 0.16;
+        push({ kind: 'line', color, width: W, d: k.polyPath(k.wobble([[L, mid], [L + w, mid]], 0.6, rnd, 8)), normLenRef: size });
+        for (const cy of [mid - gap, mid + gap]) {
+          const cx = L + w / 2;
+          push({ kind: 'line', color, width: W, d: k.smoothPath(Array.from({ length: 7 }, (_, i) => [cx + dr * Math.cos((2 * Math.PI * i) / 6), cy + dr * Math.sin((2 * Math.PI * i) / 6)])), normLenRef: size });
+        }
         x += g.adv; return;
       }
       if (g.approx) {

@@ -187,22 +187,22 @@ export function scriptIssues(beats, style) {
   if (P.some((p) => p.speaker === 'dad')) {
     const N = style.narrative?.[beats.kind]?.dadEvery ?? style.narrative?.episode?.dadEvery ?? 12;
     const OPEN = style.narrative?.[beats.kind]?.dadOpenerMax ?? style.narrative?.episode?.dadOpenerMax ?? 2;
-    const first = P.findIndex((p) => p.speaker === 'dad');
+    // 片尾的全景长镜头（camera: overview）不算孩子在讲解，把连说断开
     const kid = (i) => P[i].speaker !== 'dad' && P[i].camera !== 'overview';
-    for (let i = first; i < P.length; ) {
+    for (let i = 0; i < P.length; ) {
       if (!kid(i)) { i++; continue; }
       let j = i;
       while (j + 1 < P.length && kid(j + 1)) j++;
       if (j - i + 1 > N) add('script.dad', `phrases[${i}]–[${j}]`, `孩子连说 ${j - i + 1} 句没有爸爸（「${strip(P[i].text).slice(0, 10)}」到「${strip(P[j].text).slice(0, 10)}」，上限 ${N} 句）：中间插一两句爸爸——替观众问出「那它怎么……」、往观众真会想歪的地方带、或者复述刚才那一步`);
       i = j + 1;
     }
-    // 只数垫话的开头（口头禅、「那」这类接话词）；「我」「一」这种句子本身的开头不算
-    const FILLER = ['合着', '那可不', '敢情', '好家伙', '这么说', '我说', '那', '噢', '哦', '嗯', '哎', '得了'];
+    // 只数口头禅式的开头；「那它怎么……」这种接话问句正是要爸爸说的（上面那条就这么建议），「我」「一」这种句子本身的开头也不算
+    const FILLER = ['合着', '那可不', '敢情', '好家伙', '这么说'];
     const opener = (t) => FILLER.find((w) => strip(t ?? '').startsWith(w)) ?? '';
     const byOpen = new Map();
     P.forEach((p, i) => { if (p.speaker === 'dad') { const w = opener(p.text); if (w) byOpen.set(w, [...(byOpen.get(w) ?? []), i]); } });
     for (const [w, idx] of byOpen) if (idx.length > OPEN)
-      add('script.dad', `phrases[${idx.join(',')}]`, `爸爸 ${idx.length} 句都以「${w}」开头（上限 ${OPEN} 次）：开头换着用，多数句子不垫话直接说，口头禅留给真正的点睛处（E04「合着」13 次）`);
+      add('script.dad', `phrases[${idx.join(',')}]`, `爸爸 ${idx.length} 句都以「${w}」开头（上限 ${OPEN} 次）：开头换着用，多数句子不垫话直接说，口头禅留给真正的点睛处（E04「合着」13 次）；「那它怎么……」这类接话问句不算`);
   }
   return issues;
 }

@@ -1086,7 +1086,7 @@ if (NR.hookWithin !== undefined) {
 // 1 分钟内有第一个请观众回答、打在评论区的问题。E05 唯一的提问在 12 分钟的片尾，评论、关注都是 0。
 // 认法：收获前置是 brief.promise 那半句（没写就认「看完这一集」）；请观众回答的问题是 brief.ask 那半句（没写就认带「评论」的句子）
 if (NR.promiseWithin !== undefined || NR.askWithin !== undefined) {
-  const at = (frag, re) => { const i = phrases.findIndex((p) => (frag ? p.text.includes(frag.replace(/[，。？！、：；,.?!]/g, '')) : re.test(p.text))); return i < 0 ? null : report.phrases[i].at; };
+  const at = (frag, re) => { const i = phrases.findIndex((p) => (frag ? strip(p.text).includes(strip(frag)) : re.test(strip(p.text)))); return i < 0 ? null : report.phrases[i].at; };
   const pr = at(beats.brief?.promise, /看完这一?集/), ask = at(beats.brief?.ask, /评论/);
   if (NR.promiseWithin !== undefined && (pr === null || pr > NR.promiseWithin))
     flag('narrative.opening', pr === null ? `开头没有收获前置：钩子之后、${NR.promiseWithin}s 内用一句话说清「看完这一集，你自己就能……」（观众能做到、能复述的一件事）；说法不同就把那半句写进 brief.promise` : `收获前置（「看完这一集……」）在 ${pr}s 才开口（要求 ${NR.promiseWithin}s 内）：钩子之后马上说，别先铺垫`);
@@ -1096,6 +1096,7 @@ if (NR.promiseWithin !== undefined || NR.askWithin !== undefined) {
 // 画面停着不动（E02「一句话没有画面超过 5 秒」、E05 17.7 秒和 14.7 秒、E06 样片 v3 核心四节 19 句什么都不画，第三次出现）：
 // 连着几句一个动作都没有（灯亮灭、回看、全景也算动作），这段旁白加起来超过 maxStill 秒就提醒。能画就画它说的动作；串场话删掉；爸爸插话、请观众算的问句可以不画
 if (NR.maxStill !== undefined) {
+  // phrases 是合并过的（并句时只并了 actions、focus）：被并进去的那句要是只带 revisit 或 camera，会被看成没动，概率低，只是建议级
   const moving = (p) => (p.actions ?? []).length || (p.revisit ?? []).length || p.camera === 'overview';
   for (let i = 0; i < phrases.length; ) {
     if (moving(phrases[i])) { i++; continue; }

@@ -728,6 +728,27 @@ else {
     fs.rmSync('data/_selftest.beats.json', { force: true });
     for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
   }
+  // 换块不换章（block: true）：同样的注入，只把 chapter 换成 block。笔和镜头要像换节一样飞过去，但成片的章节数不变（平台章节有上限）
+  {
+    const b2 = structuredClone(beatsSrc);
+    b2.id = '_selftest';
+    for (const a of acts(b2)) {
+      for (const [keys, ov] of Object.entries(a.layout ?? {})) if (keys.split(',').map((k) => k.trim()).includes(TGT)) Object.assign(a, ov);
+      delete a.layout;
+    }
+    const q = b2.phrases[pi];
+    q.block = true;
+    for (const a of q.actions) for (const k of ['x', 'cx']) if (typeof a[k] === 'number') a[k] += 2400;
+    for (const a of q.actions) for (const k of ['from', 'to']) if (Array.isArray(a[k])) a[k] = [a[k][0] + 2400, a[k][1]];
+    fs.writeFileSync('data/_selftest.beats.json', JSON.stringify(b2));
+    const r2 = spawnSync('node', ['compiler/compile.mjs', 'data/_selftest.beats.json', '--target', TGT, '--no-validate'], { encoding: 'utf8' }), out2 = (r2.stdout || '') + (r2.stderr || '');
+    const tlp2 = `build/_selftest-${TGT}.timeline.json`, tl2 = fs.existsSync(tlp2) ? JSON.parse(fs.readFileSync(tlp2, 'utf8')) : null;
+    const fly2 = tl2?.penTrack.find((m) => m.chapter && m.phrase === pi);
+    const base = (beatsSrc.phrases ?? []).filter((x) => x.chapter).length, got = tl2?.chapters?.length ?? -1;
+    record('换块不换章（block）：笔和镜头像换节一样飞到新的一块，章节数不变', !!fly2 && got === base, out2 + `\n飞行 ${fly2 ? `${fly2.t0}–${fly2.t1}s` : '没有'}，章节 ${got}（基线 ${base}）`);
+    fs.rmSync('data/_selftest.beats.json', { force: true });
+    for (const f of fs.readdirSync('build').filter((f) => f.startsWith('_selftest'))) fs.rmSync(path.join('build', f), { force: true });
+  }
 }
 // 换节起飞前停笔的地方要看接下来的飞行（排程，不是检查；这里防它退回去）。起飞前等够 park.minRest 秒时，笔先退到不压东西的空白处停着，
 // 原来只看上一镜：镜头起步快、笔是对称缓动，笔在屏幕上先往飞行的反方向偏，停在那一侧画边附近的笔飞到一半就出画

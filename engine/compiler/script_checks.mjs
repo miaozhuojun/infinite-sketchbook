@@ -156,7 +156,7 @@ export function scriptIssues(beats, style) {
     const drawnAt = new Map(), chapterOf = [];
     let ch = 0;
     beats.phrases.forEach((p, i) => {
-      if (p.chapter && i) ch++;
+      if ((p.chapter || p.block) && i) ch++;
       chapterOf[i] = ch;
       for (const a of p.actions ?? []) if (a.type !== 'retrace' && !drawnAt.has(a.id)) drawnAt.set(a.id, i);
     });

@@ -1080,6 +1080,15 @@ expectBeats('写稿自查：画面上写了一个旁白没说过的数', (b) => 
   const p = b.phrases.find((q) => q.actions?.length && !q.revisit?.length && !q.camera), a0 = p.actions[0];
   p.actions.push({ id: '_num', type: 'text', at: a0.at, text: '37', x: (a0.x ?? a0.cx ?? 400) + 40, y: (a0.y ?? a0.cy ?? 400) + 160, size: 72 });
 }, validate, /其中的 37 旁白到这句.*还没说到/, { any: true });
+// 复用（copyOf）的 copyOf 写的是原元素 id，表格名 grid 也是名字，不是写在画面上的字：id、表格名里带数字（E02 的 g00）不能报成「画面上写了 00」。
+// 注入：前面一句画一段带表格名的字，后面一句复用它，再另画一个旁白没说过的数当对照——对照要照旧报出来，id 和表格名不能被报
+expectBeats('写稿自查：复用件的 copyOf、表格名里带数字，不算画面上写的数', (b) => {
+  const ps = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length && !q.camera), [p1, p2] = [ps[0], ps.at(-1)], a1 = p1.actions[0], a2 = p2.actions[0];
+  const x = (a1.x ?? a1.cx ?? 400) + 40, y = (a1.y ?? a1.cy ?? 400) + 160;
+  p1.actions.push({ id: 'g0731', type: 'text', at: a1.at, text: '大小', grid: 'row8642', x, y, size: 72 });
+  p2.actions.push({ id: '_copy', type: 'text', at: a2.at, copyOf: 'g0731', shift: [0, 300], text: '大小', grid: 'row8642', x, y: y + 300, size: 72 });
+  p2.actions.push({ id: '_num', type: 'text', at: a2.at, text: '4137', x: x + 400, y, size: 72 });
+}, validate, /^(?![\s\S]*画面上写「(?:g0731|row8642)」)[\s\S]*其中的 4137 旁白到这句/, { any: true });
 expectBeats('写稿自查：开场的小故事后面没再提到', (b) => {
   b.kind = 'episode';
   const p = b.phrases[0];
@@ -1115,6 +1124,22 @@ expectBeats('写稿自查：示意数值的来历在用它之后才交代', (b) 
     record('理解度：题都答对，但有一处跟不上、又不是留给下一集的', r.status !== 0 && out.includes('[失败] 跟不上'), out);
     fs.rmSync(f, { force: true });
   } else skip('理解度：有一处跟不上', '基线分镜没有自测题');
+}
+{
+  // 理解度打分：测试者常把数字和汉字隔开写（「2 天」「100 亿亿」「1 个」），答对了不能判失败（E02：一位测试者 10 题里 4 题这样丢）。
+  // 注入自己带题和答案，不挑基线：前三题答案、关键词里带空白但意思对，必须判通过；第四题答错，仍要判失败（去掉空白不能把什么都放过去）
+  const f = path.resolve('build/_selftest.cmp.beats.json'), g = path.resolve('build/_selftest.cmp.answers.json');
+  fs.writeFileSync(f, JSON.stringify({ quiz: [
+    { q: '要几天？', keywords: [['2天', '两天']] },
+    { q: '有多大？', keywords: [['100亿亿']] },
+    { q: '有几个？', keywords: [['1 个', '一个']] },
+    { q: '再要几天？', keywords: [['2天', '两天']] },
+  ] }));
+  fs.writeFileSync(g, JSON.stringify({ answers: [{ id: 1, a: '大概 2 天' }, { id: 2, a: '100 亿 亿次' }, { id: 3, a: '只有1个' }, { id: 4, a: '3 天' }] }));
+  const r = spawnSync(PY_QA, ['qa/comprehension.py', 'score', f, g], { encoding: 'utf8' }), out = (r.stdout || '') + (r.stderr || '');
+  record('理解度：答案里数字和汉字之间带空格（「2 天」）也算答对，答错的照样判失败', /^\[通过\] 第 1 题.*\n\[通过\] 第 2 题.*\n\[通过\] 第 3 题.*\n\[失败\] 第 4 题/m.test(out) && out.includes('理解度：3/4'), out);
+  fs.rmSync(f, { force: true });
+  fs.rmSync(g, { force: true });
 }
 expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   const p = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length).at(-1), a0 = p.actions[0];

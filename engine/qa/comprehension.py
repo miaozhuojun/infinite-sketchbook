@@ -22,6 +22,11 @@ beats = json.loads(Path(sys.argv[2]).read_text())
 quiz = beats.get("quiz", [])
 
 
+def squash(s):
+    """去掉所有空白（空格、制表、换行、全角空格），判分按去掉空白后的子串比"""
+    return "".join(str(s).split())
+
+
 def merged_subs(tl):
     """一句旁白的字幕可能在标点处拆成几段（maxLines），拆出来的后段带 join：先并回一句一条，再和分镜的句子一一对上。
     原来直接按下标配对，拆过的片子句子和字幕错位，帧截错时刻，后面的句子（片尾回顾）整段丢掉"""
@@ -137,7 +142,10 @@ elif cmd == "score":
     ok = 0
     for i, q in enumerate(quiz):
         a = answers.get(i + 1, "")
-        miss = [g for g in q["keywords"] if not any(k in a for k in g)]
+        # 答案和关键词都先去掉空白再比：测试者常把数字和汉字隔开写（「2 天」「100 亿亿」「1 个」），逐字比会把答对的判成失败
+        # （E02：一位测试者 10 题里 4 题这样丢）。关键词去完空白变成空串的不算命中（空串在任何答案里都「命中」）
+        flat = squash(a)
+        miss = [g for g in q["keywords"] if not any(squash(k) and squash(k) in flat for k in g)]
         ok += not miss
         print(f"[{'通过' if not miss else '失败'}] 第 {i + 1} 题「{q['q']}」：答「{a}」" + (f"；缺少关键词：{' / '.join('或'.join(g) for g in miss)}" if miss else ""))
     print(f"\n理解度：{ok}/{len(quiz)}")

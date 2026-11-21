@@ -1162,13 +1162,13 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
 // 儿化（script.erhua）：旁白里的「哪儿」配音配不出（E04 两句、E08 两句各试满 30 个种子）。「女儿」「儿子」里的「儿」是一个音节，不算
 expectBeats('写稿自查：旁白里有儿化（乘到哪儿，就写在哪儿）', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，乘到哪儿，就写在哪儿。');
-}, validate, /「哪儿」是儿化.*「哪里」/, { any: true });
+}, validate, /^(?![\s\S]*后面没有「里」)[\s\S]*「哪儿」是儿化.*「哪里」/, { any: true });   // 写了「哪儿」的只报儿化，不再报「后面没有里」
 // 稿子没写「儿」、配音自己加的：「从哪」后面不跟「里」（e04-elnino 样片：「不然热从哪冒出来？」快配 8 条全念成「从哪儿」）
 expectBeats('写稿自查：「从哪」后面没有「里」，配音会念成「哪儿」', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，不然热从哪冒出来？');
 }, validate, /「从哪」后面没有「里」.*写成「从哪里」/, { any: true });
-expectBeats('写稿自查：「哪里」「哪个」「哪些」「哪怕」「哪根」不报', (b) => {
-  b.narration.script = b.narration.script.replace(/。/, '，热是哪里来的，哪个哪些都行，哪怕拧哪根。');
+expectBeats('写稿自查：「哪里」「哪个」「哪几步」「哪层」「哪怕」「哪有」不报（问哪一个、反问，不是问地方）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，热是哪里来的，往哪边吹，哪个哪几步都行，到底是哪层，哪怕拧哪根，哪有这种事。');
 }, validate, /^(?![\s\S]*后面没有「里」)/, { any: true });
 expectBeats('写稿自查：「女儿」「儿子」不是儿化，不报', (b) => {
   b.narration.script = b.narration.script.replace(/。/, '，他的女儿和儿子都来了。');

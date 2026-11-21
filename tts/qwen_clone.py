@@ -231,9 +231,32 @@ def poly_ref(R):
     return gen
 
 
+# 这一集核过的读音的指纹：缓存里的句子判过一次就记下它（json 的 poly），读法没变就不再打分。
+# 原来每次跑都把缓存里的句子重判一遍：E08 样片 v2 主讲全走缓存也要 483 秒（一句约 7 秒），改几句话白等 8 分钟
+POLY_SIG = hashlib.sha1(json.dumps([sorted(REVIEWED), (_RD or {}).get("readings") or {}, PGM.MARGIN, PGM.OK_MARGIN, PGM.REF_SLACK], ensure_ascii=False).encode()).hexdigest()[:16] if REVIEWED is not None else None  # 判法的门槛改了，旧的记号也作废
+
+
+def poly_seen(meta_path):
+    """缓存里这一条（句子或整段的 json）按现在的读法判过、没念错"""
+    try:
+        return POLY_SIG is not None and json.load(open(meta_path, encoding="utf-8")).get("poly") == POLY_SIG
+    except (OSError, ValueError):
+        return False
+
+
+def poly_mark(meta_path):
+    if POLY_SIG is None or FAST or not os.path.exists(meta_path):
+        return
+    m = json.load(open(meta_path, encoding="utf-8"))
+    if m.get("poly") != POLY_SIG:
+        m["poly"] = POLY_SIG
+        json.dump(m, open(meta_path, "w", encoding="utf-8"), ensure_ascii=False)
+
+
 def poly_bad(audio, sr_, rel, text, R):
-    """这条声音里核过的多音字有没有念错：返回念错的那几条（polyphone_guard.check_sentence 的结果）。没核过的不拦，可疑的记进报告"""
-    if REVIEWED is None or not PGM.targets(text):
+    """这条声音里核过的多音字有没有念错：返回念错的那几条（polyphone_guard.check_sentence 的结果）。没核过的不拦，可疑的记进报告。
+    样片快配不查（用户 2026-11-21：样片只看内容和风格、要快，制片质量靠成片流程保证）；配音前的读音核对（lint）样片照旧跑"""
+    if FAST or REVIEWED is None or not PGM.targets(text):
         return []
     res = PGM.check_sentence(PG, audio, sr_, text, rel, reviewed=REVIEWED, reference=poly_ref(R))
     if res and res[0].get("unaligned"):
@@ -271,6 +294,7 @@ HYPS = {}  # 句子 → 回转识别没对上时听成的说法，字数差多�
 # 原来卡一句就中断整轮：E04 153 句，跑了 37 分钟才报出一句卡住，改写后又跑 11 分钟报出下一句，一轮只能发现一句
 FAILS = {}
 SPLIT_STUCK = {}  # 句子 → 自动拆成两半后没过的那一半
+POLY_FALLBACK = "多音字没判过，用最像的一条"  # 记在缓存的 note 里，以后每次跑都列出来
 POLY_BAD = {}  # 句子 → 每次判成念错的多音字
 POLY_TRIES = 3  # 同一句念错几次就换写法（换写法以后还念错，就照别的关卡一样试满）
 
@@ -455,7 +479,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         print(f"    {args.max_tries} 次里多音字都没判过（换了写法也没过），用最像的种子 {best_poly[1][2]}：" + "、".join(r["ctx"] for r in best_poly[2]) + "，记进 .polyphones.json，单听确认")
         POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": text, "ctx": [r["ctx"] for r in best_poly[2]], "margin": [r["margin"] for r in best_poly[2]], "ref": [r["ref"] for r in best_poly[2]]})
         a_, sr_, sd_, nt_, rel_, bk_ = best_poly[1]
-        return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + "多音字没判过，用最像的一条", rel_, bk_
+        return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + POLY_FALLBACK, rel_, bk_
     if best_stray:
         print(f"    {args.max_tries} 次里每条都断在没标点的地方，用断得最轻的种子 {best_stray[1][2]}（{best_stray[0]:.2f} 倍门槛）")
         a_, sr_, sd_, nt_, rel_, bk_ = best_stray[1]
@@ -640,23 +664,27 @@ if CHUNK.get("maxSentences", 1) > 1:
                 continue
             res = r[:5]
             sf.write(ckey + ".wav", r[0], r[1])
-            json.dump({"text": text, "seed": r[2], "note": r[3], "words": r[4]}, open(ckey + ".json", "w", encoding="utf-8"), ensure_ascii=False)
+            json.dump({"text": text, "seed": r[2], "note": r[3], "words": r[4], **({"poly": POLY_SIG} if POLY_SIG and not FAST else {})}, open(ckey + ".json", "w", encoding="utf-8"), ensure_ascii=False)  # 整段按 strict 配，多音字已经整段判过
         parts = split_chunk(res, [sents[k] for k in g])
         if not parts:
             print(f"    「{text[:16]}…」句间没有停顿，切不开，退回逐句配")
             continue
+        chunk_seen, chunk_clean = poly_seen(ckey + ".json"), True
         for k, take in zip(g, parts):
             # 这一句拼好后查出过破音、已经单独重配过（.nochunk 标记），就用单独配的那条
             if os.path.exists(os.path.join(CACHE, cache_key(sents[k])) + ".nochunk") or FAST and os.path.exists(os.path.join(CACHE, cache_key(sents[k], False)) + ".nochunk"):
                 continue
             # 一段一起配只按整段验收：切出来的每一句再按成片旁白检查的口径验一遍（语速、硬切按句量），不过的这一句单独配
-            if (pb := poly_bad(take[0], take[1], take[4], sents[k], ref_for(sents[k]))):
+            if not chunk_seen and (pb := poly_bad(take[0], take[1], take[4], sents[k], ref_for(sents[k]))):
                 print(f"    整段切出来的第 {k + 1} 句多音字念错（{'、'.join(r['ctx'] for r in pb)}），这一句单独配")
+                chunk_clean = False
                 continue
             if not FAST and (lb := line_defects(take[0], take[1], take[4], voice)):
                 print(f"    整段切出来的第 {k + 1} 句{'、'.join(lb)}，这一句单独配")
                 continue
             pre[k] = take
+        if chunk_clean and not chunk_seen:
+            poly_mark(ckey + ".json")
         joined.update(k for k in g[:-1] if k in pre and k + 1 in pre)
 
 for i, sent in enumerate(sents):
@@ -700,7 +728,7 @@ for i, sent in enumerate(sents):
                 and (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
             print(f"  缓存里的「{sent}」{'、'.join(lb)}（成片旁白检查会点名），重新生成")
             cached = False
-        elif (pb := poly_bad(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], sent, ref_for(sent))):
+        elif not poly_seen(key + ".json") and (pb := poly_bad(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], sent, ref_for(sent))):
             print(f"  缓存里的「{sent}」多音字念错（{'、'.join(r['ctx'] + ' 像 ' + r['heard'] for r in pb)}），重新生成")
             cached = False
         elif MAX_ECHO and echo_ms(x_c, sr_c, pause_points(json.load(open(key + ".json", encoding="utf-8"))["words"])) > MAX_ECHO * 1.05:
@@ -729,6 +757,9 @@ for i, sent in enumerate(sents):
         meta = json.load(open(key + ".json", encoding="utf-8"))
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
+        poly_mark(key + ".json")  # 走到这里，多音字这一关判过了（或以前判过）：记下，读法不变就不再打分
+        if not FAST and POLY_FALLBACK in (meta.get("note") or ""):  # 上次没判过、用了最像的一条：每次都列出来，等人单听
+            POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": sent, "cached": True})
     else:
         # 默认参考音先多试几轮（每轮 max_tries 个新种子），再自动拆两半：换参考音会让这一句听着像换了个人（用户听 E01 v15）
         # 同一句话在稿子里出现两次、头一次已经卡住：种子是确定的，再试也是同样几十条都不过
@@ -761,7 +792,7 @@ for i, sent in enumerate(sents):
             note = (note + "；" if note else "") + "上一句没配出来，这一句不进缓存，改完重跑时对着新的上一句重挑"
         else:
             sf.write(key + ".wav", audio, sr)
-            json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}),
+            json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}), **({"poly": POLY_SIG} if POLY_SIG and not FAST else {}),
                        **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {}), **({"strayFallback": True} if STRAY_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     after_stuck = False
     takes.append([audio, sr, seed, note, rel])
@@ -1033,7 +1064,9 @@ def asr_long(path, spans, max_sec=ASR_CHUNK):
 
 
 json.dump({"reviewed": sorted(REVIEWED) if REVIEWED is not None else None, "log": POLY_LOG, "rewritten": SUBST}, open(args.out + ".polyphones.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-if REVIEWED is None:
+if FAST:
+    print("  多音字：样片快配不查（成片精配时每条候选都查）")
+elif REVIEWED is None:
     print("  多音字：没给核过的读音（--readings），没拦；" + (f"可疑 {len(POLY_LOG)} 处见 .polyphones.json" if POLY_LOG else "没发现可疑的"))
 else:
     n_bad = sum(1 for q in POLY_LOG if q["kind"] == "换成同音字再配")

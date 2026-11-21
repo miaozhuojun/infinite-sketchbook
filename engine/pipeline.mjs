@@ -210,7 +210,7 @@ if (libOk && beatsOk && voiceOk && !SAMPLE) {
   }));
   for (const t of compiled) stages.push(...pre[t]);
   const mixed = compiled.filter((t) => pre[t][0]?.ok);
-  // 自动换种子重配：旁白检查点名了掉嗓子、破音、硬切、语速不对的句子（<时间线>.revoice.json），就给这几句换种子重配，
+  // 自动换种子重配：旁白检查点名了掉嗓子、破音、硬切、语速不对、逐句回转有出入（关卡 speech.lineAsr 是 hard 时）的句子（<时间线>.revoice.json），就给这几句换种子重配，
   // 重新编译、混音、再查，最多两轮，都在渲染之前。配音按句缓存，只有点名的句子重配；配音那边拼好后已经查过一遍，
   // 成片旁白（重采样、插停顿、片段淡入淡出）上偶尔还会查出来（E02 v5）
   const round = Number(process.env.PIPE_REVOICE ?? 0);
@@ -220,7 +220,7 @@ if (libOk && beatsOk && voiceOk && !SAMPLE) {
     const auto = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
     for (const sent of revoice) auto[sent] = Math.max(auto[sent] ?? 0, beats.narration.reseed?.[sent] ?? 0) + 1;
     fs.writeFileSync(f, JSON.stringify(auto, null, 1));
-    console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切或语速不对），换种子重配、重新混音再查，不渲染（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
+    console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切、语速不对或逐句回转有出入），换种子重配、重新混音再查，不渲染（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
     const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, PIPE_REVOICE: String(round + 1) } });
     process.exit(r.status ?? 1);
   }

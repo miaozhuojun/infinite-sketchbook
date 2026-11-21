@@ -31,7 +31,7 @@ function expectFail(name, mutate, runner, mustSay, from = base) {
   const p = path.resolve('build/_selftest.timeline.json');
   fs.writeFileSync(p, JSON.stringify(tl));
   const r = runner(p), out = (r.stdout || '') + (r.stderr || '');
-  record(name, out.includes(mustSay), out);
+  record(name, extra.expect ? extra.expect(out) : out.includes(mustSay), out); // expect：注入时才知道要点名什么（逐句回转点名的那一句）
   fs.rmSync(p, { force: true });
   for (const f of extra.cleanup || []) fs.rmSync(f, { force: true });
 }
@@ -440,6 +440,53 @@ sf.write(${JSON.stringify(dst)}, np.clip(x, -1, 1), sr)`]);
   delete tl.audio;
   return { cleanup: [dst] };
 }, '[失败] 每句基础音量一致');
+// 逐句回转（speech.lineAsr，tts/line_asr.py）：整段的「总混可懂度」放 2%，e01-benchmark「卷子」的「卷」念成「阵」（707 个字错 1 个）过了；
+// 句首「写」的字头在总混里被背景乐盖住听成「野」，干声对。注入：挑中间一段够长的旁白，把一个字的声音换成另一个字（声母、韵母都不一样，
+// 时长相近，取它中间那一截、两头 5ms 交叉淡化）的声音。干声那条换源配音（不留总混，只查干声）；总混那条只换总混、换这一段的第一个字，
+// 干声不动。检查要点名那一句、写进 revoice.json，总混那条还要说明「只有总混错」。基线的关卡级别可能是建议，注入时设成 hard
+const swapChar = (where) => (tl) => {
+  const from = where === 'src' ? sbase.source : sbase.audio, dst = path.resolve(`public/audio/_selftest.${where}.wav`);
+  const rv = path.resolve('build/_selftest.timeline.revoice.json');
+  const r = spawnSync(PY_MLX, ['-c', `
+import json, numpy as np, soundfile as sf
+from pypinyin import pinyin, Style
+W, S = (lambda t: (t['words'], t['sentences']))(json.load(open(${JSON.stringify(path.resolve('data', sbeatsSrc.narration.timing))})))
+C = json.loads(${JSON.stringify(JSON.stringify(sbase.audioClips))})
+x, sr = sf.read(${JSON.stringify(path.resolve('public', from || ''))}, dtype='float64')
+cjk = lambda t: len(t) == 1 and '一' <= t <= '鿿'
+py = lambda t, st: pinyin(t, style=st, strict=False)[0][0]
+inside = lambda c: [k for k, w in enumerate(W) if w['start'] >= c['srcIn'] - 1e-3 and w['end'] <= c['srcOut'] + 1e-3]
+ci = sorted([i for i, c in enumerate(C) if len(inside(C[i])) >= 8], key=lambda i: abs(i - len(C) / 2))[0]
+c, ks = C[ci], inside(C[ci])
+tk = next(k for k in (ks[:3] if ${where === 'mix' ? 'True' : 'False'} else ks[len(ks) // 3:]) if cjk(W[k]['text']))  # 总混那条换开头的字（开头是数字、字母就往后挪一两个）
+tw = W[tk]; td = tw['end'] - tw['start']
+far = [k for k, w in enumerate(W) if cjk(w['text']) and k not in ks and w['end'] - w['start'] >= td
+       and py(w['text'], Style.INITIALS) != py(tw['text'], Style.INITIALS) and py(w['text'], Style.FINALS) != py(tw['text'], Style.FINALS)]
+dk = min([k for k in far if W[k]['end'] - W[k]['start'] <= 1.6 * td] or far, key=lambda k: abs(W[k]['end'] - W[k]['start'] - td))
+dw = W[dk]; dc = next(q for q in C if q['srcIn'] - 1e-3 <= dw['start'] and dw['end'] <= q['srcOut'] + 1e-3)
+at = (lambda w, q: w['start']) if ${where === 'src' ? 'True' : 'False'} else (lambda w, q: q['at'] + w['start'] - q['srcIn'])
+a, n = int(at(tw, c) * sr), int(td * sr)
+m = int((at(dw, dc) + (dw['end'] - dw['start']) / 2) * sr) - n // 2
+seg = x[m:m + n].copy(); f = int(0.005 * sr); up = np.linspace(0, 1, f)
+up = up if x.ndim == 1 else up[:, None]
+seg[:f] = seg[:f] * up + x[a:a + f] * (1 - up); seg[-f:] = seg[-f:] * up[::-1] + x[a + n - f:a + n] * (1 - up[::-1])
+x[a:a + n] = seg
+sf.write(${JSON.stringify(dst)}, x, sr)
+k = next(k for k, s in enumerate(S) if s['start'] <= (tw['start'] + tw['end']) / 2 < s['end'])
+print(json.dumps({'sentence': S[k]['text'], 'char': tw['text'], 'donor': dw['text']}, ensure_ascii=False))`], { encoding: 'utf8' });
+  let info = null;
+  try { info = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch { console.log((r.stderr || '').slice(-400)); }
+  if (where === 'src') { tl.source = 'audio/_selftest.src.wav'; delete tl.audio; } else tl.audio = 'audio/_selftest.mix.wav';
+  tl.style = { ...tl.style, gates: { ...tl.style?.gates, 'speech.lineAsr': 'hard' } };
+  const named = () => { try { return JSON.parse(fs.readFileSync(rv, 'utf8')).includes(info.sentence); } catch { return false; } };
+  return {
+    cleanup: [dst, rv],
+    expect: (out) => !!info && out.includes('[失败] 逐句回转') && out.includes(`「${info.sentence}」`) && named() && (where === 'src' || out.includes('只有总混错')),
+  };
+};
+speechCase('一段旁白里念错一个字（e01-benchmark「卷子」的「卷」听成「阵」，总混可懂度 0.1% 放过了）：逐句回转点名那一句', swapChar('src'));
+speechCase('总混里一个字头被盖住、干声是对的（e01-benchmark 句首「写」听成「野」）：逐句回转点名那一句，说明只有总混错', swapChar('mix'), '',
+  noSpeech || (sbase.audio ? null : '旁白基线的时间线没有总混'));
 // 像同一个人（VOICE_PIPELINE.md「像同一个人」；用户听 E02 v13「每句话的声音都存在微小差异（包括音色、快慢、音量）」）：
 // 「像这个孩子」是关卡；「相邻两句接得上」「整集不越说越偏」只给建议（这几项变好的配法盲听没赢过 v13）。改的是源配音，挑的是基线中间够长的句子
 const sameSpeakerSrc = (pyBody) => (tl) => {
@@ -1275,6 +1322,46 @@ print(json.dumps({"前后鼻音": s("考零格") == s("考林格") and s("人生
   "平翘舌仍算错": s("一成") != s("一层"), "韵母仍算错": s("才亮") != s("材料"), "字母原样": s("AI") == ["a", "i"]}))`], { encoding: 'utf8', cwd: '../tts' });
   let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
   record('回转比对：前后鼻音不分、别的读错仍算错（单元检查）', Object.keys(got).length === 6 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
+}
+// 逐句回转的比法和点名（tts/line_asr.py，识别换成桩，不载模型）：一个片段里两句，念错的字只点名它在的那一句；
+// 稿子「1、1、0」「两千五百」「AI」和识别写的「一一零」「2500」「AI」算一致（片段 phrase 去了标点是 110，要按逐字拼稿子）；
+// 只有总混错、错在开头的单独标出来；短于 3 个字的片段跳过并计数
+if (SKIP.has('speech') || !PY_MLX) skip('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
+else {
+  const r = spawnSync(PY_MLX, ['-c', `
+import sys, json
+sys.path.insert(0, '.')
+from line_asr import check_lines
+S = ["它俩本事没变，新卷子要是更难，它俩也该掉分。", "有1、1、0个AI，2500道。", "写代码这类卷子。", "哦。"]
+words, sents, t = [], [], 0.0
+for s in S:
+    a = t
+    toks, i = [], 0
+    while i < len(s):
+        for tok in ("AI", "2500"):
+            if s.startswith(tok, i): toks.append(tok); i += len(tok); break
+        else:
+            if s[i] not in "，。、": toks.append(s[i])
+            i += 1
+    for tok in toks: words.append({"text": tok, "start": t, "end": t + 0.18}); t += 0.2
+    sents.append({"text": s, "start": a, "end": t}); t += 0.5
+strip = lambda s: "".join(ch for ch in s if ch not in "，。、")
+clips = [{"phrase": strip(S[0] + S[1]), "at": 0, "srcIn": sents[0]["start"], "srcOut": sents[1]["end"]},
+         {"phrase": strip(S[2]), "at": 20, "srcIn": sents[2]["start"], "srcOut": sents[2]["end"]},
+         {"phrase": strip(S[3]), "at": 30, "srcIn": sents[3]["start"], "srcOut": sents[3]["end"]}]
+def run(dry, mix):  # 桩：dry、mix 是每段识别出的字，片段的「音频」就是这段字
+    return check_lines(clips, {"words": words, "sentences": sents}, lambda i, c: (dry[i], 0), lambda i, c: (mix[i], 0), lambda x, sr: x)
+ok = ["它俩本事没变，新卷子要是更难，它俩也该掉分。有一一零个AI，2500道。", "写代码这类卷子。", "哦。"]
+ok2 = ["它俩本事没变新卷子要是更难它俩也该掉分，有一、一、零个AI两千五百道", "写代码这类卷子", "噢"]
+juan = [ok[0].replace("新卷子", "新阵子")] + ok[1:]
+ye = [ok[0], "野代码这类卷子。", ok[2]]
+a, b, c, d = run(ok, ok2), run(juan, juan), run(ok, ye), run(ok2, ok)
+pick = lambda res: [(x["clip"], x["ks"], x["dryDiff"], x["mixDiff"], x["mixOnly"], x["atStart"]) for x in res["bad"]]
+print(json.dumps({"ok": not a["bad"] and not d["bad"] and a["checked"] == 2 and a["skipped"] == 1,
+  "juan": pick(b) == [(0, [0], ["卷→阵"], ["卷→阵"], False, False)],
+  "ye": pick(c) == [(1, [2], [], ["写→野"], True, True)]}, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts' });
+  let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
+  record('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', Object.keys(got).length === 3 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
 }
 
 // ---------- 旁白检查按时刻点名到句（tts/sentence_map.py，单元检查）：一个片段里有两句时，前一句句尾的收音硬切要点名前一句，

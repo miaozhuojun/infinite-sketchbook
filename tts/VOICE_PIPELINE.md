@@ -106,6 +106,7 @@ E01 先后踩过的坑，都是同一个原因的不同表现——按句生成�
 
 ## 五、成片检查（和生成时同一套函数、同一份阈值）
 - 硬关卡：每句音色一致（对声音包、对整集）、像这个孩子（CAM++）、每句基础响度差、回声、沙沙声、掉嗓子、吞字、拼接、总混可懂度。
+- 逐句回转（`line_asr.py`，关卡 `speech.lineAsr`：默认风格只给建议，私有配置可以设成 hard）：每段旁白单独切出来，干声、总混各识别一遍，按拼音和这一段的稿子零出入；和配音时逐句回转同一个比法，另外不比拉丁字母词、「两」当「二」。有出入的句子点名进自动换种子重配；只有总混错的（字头被背景乐盖住）提示改写，别把擦音开头的字放句首。整段的「总混可懂度」放 2%，单个关键词念错（e01-benchmark「卷」听成「阵」）放得过去。
 - 建议：语气是否贴合标注、整集起伏够不够、相邻两句接得上、整集不越说越偏。
 
 ## 六、人只做两件事
@@ -129,7 +130,7 @@ E01 先后踩过的坑，都是同一个原因的不同表现——按句生成�
 | 语气 | 分镜 `narration.tone`「整句: 语气」；语气目标在 `voice.json` 的 `tones` |
 | 候选和关卡 | `voice.json`：`candidates`、`takeMaxFlat`、`takeMaxEcho`、`takeMinConsistency`、`pitchFloorHz`、`maxTries`、`extraRounds` |
 | 后处理 | `voice.json`：`sentenceLevelDb`（每句基础响度）、`spectralMatchDb`（频谱对齐上限） |
-| 成片检查 | `speech_check.py`，阈值在 `voice.json`：`minSimilarity`、`minConsistency`、`maxEcho`、`maxLevelSpreadDb`、`maxFlatMedian`、`minBak`、`sameSpeaker` |
+| 成片检查 | `speech_check.py`，阈值在 `voice.json`：`minSimilarity`、`minConsistency`、`maxEcho`、`maxLevelSpreadDb`、`maxFlatMedian`、`minBak`、`sameSpeaker`；逐句回转的级别在风格规范 `gates` 的 `speech.lineAsr` |
 | 像同一个人的数 | `consistency.py <配音.wav> <配音.timing.json>`：音色（Qwen3、CAM++）、像这个孩子、响度、语速、漂移；配音实验都按它出数 |
 | 检查器自测 | `node qa/selftest.mjs <画面基线> --speech-base <按本规范配过音的一集的时间线>` |
 

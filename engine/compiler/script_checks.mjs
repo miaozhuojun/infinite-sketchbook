@@ -8,7 +8,8 @@
 //                explain 是旁白里讲清它的那半句，bridge（新例子）是把它和前面熟悉的例子接上的那半句；
 //   facts[].from（kind: example 的示意数值）：{ "4": "天黑最要紧，给它4", … }——每个数在旁白里交代它从哪来的那半句；
 //   brief.payoff（可选）：片中回收开场小故事的那半句，回收句和开场没有共用三个字以上时写。
-// 另有两条不用写字段：回描是不是重复（script.retrace），配音风险（script.tts）：很短的问句，和含有以前被听错过的字的句子（tts/misheard.json）。
+// 另有三条不用写字段：回描是不是重复（script.retrace），配音风险（script.tts）：很短的问句，和含有以前被听错过的字的句子（tts/misheard.json），
+// 儿化（script.erhua）：旁白里的「哪儿」「一点儿」配不出来。
 import fs from 'node:fs';
 import { strip } from './validate.mjs';
 
@@ -141,6 +142,13 @@ export function scriptIssues(beats, style) {
     const n = strip(s).length;
     if (/[？?]$/.test(s.trim()) && n <= SHORT_Q) add('script.tts', `narration.script ${quote(k)}`, `只有 ${n} 个字的问句：配音容易念含糊、句末掉下去，回转识别也容易听错（E03「那，拧哪个？」听成「那您哪个」）。把问的东西说全（「那该拧哪一个旋钮？」），或者定稿前单听这一句`);
   });
+  // 5b. 儿化（script.erhua）：配音把「儿」吞掉或拖成一个字，回转识别写成没有「儿」的说法，换多少种子都对不上
+  //     （E04 精配两句各试满 30 个种子；E08 成片精配「乘到哪儿，就写在哪儿」两句又各试满 30 个，主讲配音多跑了一个多小时）。
+  //     「儿」自己是一个音节的词（儿子、女儿、婴儿……）不算
+  sents.forEach((s, k) => {
+    const er = [...new Set([...strip(s).replace(ER_WORDS, (m) => '＿'.repeat(m.length)).matchAll(/[一-鿿]儿/g)].map((m) => m[0]))];
+    if (er.length) add('script.erhua', `narration.script ${quote(k)}`, `「${er.join('」「')}」是儿化：配音会把「儿」吞掉，回转识别对不上，种子换满也配不出。写成不带「儿」的说法（${er.map((w) => `「${ER_FIX[w] ?? w[0]}」`).join('、')}）`);
+  });
   const byNeedle = new Map();
   for (const p of misheard()) for (const w of (p.risky?.length ? p.risky : [strip(p.said ?? '')]).filter(Boolean)) {
     const hit = sents.map((s, k) => [s, k]).filter(([s]) => strip(s).includes(w)).map(([, k]) => k);
@@ -206,6 +214,10 @@ export function scriptIssues(beats, style) {
   }
   return issues;
 }
+
+// 「儿」自己念一个音节的词，不是儿化
+const ER_WORDS = /儿[子童女歌时科孙媳戏化郎]|(?:新生|混血|[女婴幼孤胎少宠健小育托患弃产])儿/g; // 「孩儿」「男儿」不收：「小孩儿」「男孩儿」是儿化
+const ER_FIX = { 哪儿: '哪里', 这儿: '这里', 那儿: '那里' }; // 别的去掉「儿」就行（一点儿 → 一点）
 
 // 以前被听错过的说法：仓库里的 tts/misheard.example.json 加上本机私有的 tts/misheard.json（配音试满都没过时 qwen_clone.py 自动追加）。
 // TTS_MISHEARD 只读指定的那个文件（自测用）

@@ -11,7 +11,7 @@
   "sync.trail": "advice", "sync.lag": "advice", "sync.silent": "advice", "pace.pause": "advice",
   "pencil.park": "advice", "camera.idle": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
   "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
-  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice", "script.retrace": "advice", "script.dad": "advice",
+  "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice", "script.erhua": "advice", "script.retrace": "advice", "script.dad": "advice",
   "narrative.length": "advice", "scene.lamp": "advice", "sync.lagFar": "advice"
  },
 

@@ -1094,13 +1094,17 @@ elif REVIEWED is None:
 else:
     n_bad = sum(1 for q in POLY_LOG if q["kind"] == "换成同音字再配")
     print(f"  多音字：核过 {len(REVIEWED)} 种读音，每条候选都查；换成同音字再配 {n_bad} 句" + (f"；没核过、可能念错 {sum(1 for q in POLY_LOG if q['kind'].startswith('没核'))} 处（见 .polyphones.json）" if any(q['kind'].startswith('没核') for q in POLY_LOG) else ""))
-c_all = cer(syl(said_text(args.text)), syl(asr_long(args.out + ".wav", spans)))
+_ref_all = syl(said_text(args.text))
+c_all = cer(_ref_all, syl(asr_long(args.out + ".wav", spans)))
+# 整段只有一两百个音节时（爸爸一集十句上下），0.5% 不到一个音节，等于一个都不许差：E08 爸爸 126 个音节，整段识别把「同一道」听成「从一到」，
+# 逐句都过了还是整段失败，重跑也不会变。短的整段至少容一个音节
+C_ALL_MAX = max(0.005, 1.0 / max(1, len(_ref_all)) + 1e-9)
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-# 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡
-if c_all > 0.005 and FAST:
+# 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%（短的整段至少容一个音节，见上面 C_ALL_MAX），成片的总混可懂度另有 2% 的关卡
+if c_all > C_ALL_MAX and FAST:
     print(f"  整段回转拼音错误率 {c_all:.3f}（样片不拦，精配时再查）")
-elif c_all > 0.005:
+elif c_all > C_ALL_MAX:
     raise SystemExit(f"整段回转拼音错误率 {c_all:.3f}（逐句都通过，但拼起来后识别有出入），需要人工检查")
 # 音色一致性：和真人录音质心比，防止参考音或模型改动让音色悄悄漂移
 sim = similarity(spk, full, sr, voice)

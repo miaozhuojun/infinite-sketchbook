@@ -1132,6 +1132,13 @@ expectBeats('标签在旁白说完后才写（关闭自动修复）', (b) => {
   }, compileNoFix(TGT), new RegExp(`「${head}」说完后还要等画面`), { any: true });
 }
 // 配音风险（script.tts，只给建议）：很短的问句、含以前被听错过的字的句子（E03 两句爸爸的短问句被听错）。注入的句子和听错记录都自己带
+// 儿化（script.erhua）：旁白里的「哪儿」配音配不出（E04 两句、E08 两句各试满 30 个种子）。「女儿」「儿子」里的「儿」是一个音节，不算
+expectBeats('写稿自查：旁白里有儿化（乘到哪儿，就写在哪儿）', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，乘到哪儿，就写在哪儿。');
+}, validate, /「哪儿」是儿化.*「哪里」/, { any: true });
+expectBeats('写稿自查：「女儿」「儿子」不是儿化，不报', (b) => {
+  b.narration.script = b.narration.script.replace(/。/, '，他的女儿和儿子都来了。');
+}, validate, /^(?![\s\S]*是儿化)/, { any: true });
 // 回描（script.retrace，只给建议）：刚画完、就在画面里的东西又描一遍（E03 样片 28 句 36 处回描，用户：太多了）。注入：一句不是顿悟的句子，回描它自己刚画的东西
 expectBeats('写稿自查：回描这句刚画的东西（重复，不是指回旧东西，也不是顿悟）', (b) => {
   const p = b.phrases.find((q) => q.role !== 'aha' && (q.actions ?? []).some((a) => a.type !== 'retrace' && a.type !== 'strike'));

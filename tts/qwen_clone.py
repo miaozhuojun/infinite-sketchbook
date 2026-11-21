@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 from mlx_audio.stt import load as load_stt
 from mlx_audio.tts.utils import load_model
-from voice import phrasing, stray_text, stray_excess, read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
+from voice import tail_burst, trim_tail, phrasing, stray_text, stray_excess, read_numbers, said_text, pitch_breaks, hard_edges, soften_edges, art_rate, line_defects, load_voice, similarity, pitch_drops, weak_chars, voiced_flatness, embedding, echo_ms, pause_points, prosody, tone_cost, flow_cost, active_level_db, spectral_match, ltas
 
 ap = argparse.ArgumentParser()
 ap.add_argument("text")
@@ -400,6 +400,13 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         if squashed(rel):
             reject(text, seed, "吞字或对不上", f"：对齐时「{'」「'.join(squashed(rel))}」不到 50ms（吞字或对不上），换种子重来")
             continue
+        # 句尾响声（voice.py 的 tail_burst；E07 成片 7:04 爸爸一句话说完以后一下响声）：先把句尾剪到最后一个字后 0.12 秒、淡出，剪不掉的换种子。样片不查
+        if not FAST and tail_burst(audio, sr, rel):
+            audio = trim_tail(audio, sr, rel)
+            if (tb := tail_burst(audio, sr, rel)):
+                reject(text, seed, "句尾响声", f"：最后一个字说完以后有响声（{tb[0]:.2f}s，比说话响度高 {tb[1]:.0f}dB），剪不掉，换种子重来")
+                continue
+            note = (note + "；" if note else "") + "句尾响声已剪掉"
         # 硬切（成片旁白检查 0k 的同一条规则）：原来只在拼好后和成片里查，这里先挡掉，退路里也就不会有
         if (he := hard_edges(audio, sr)):
             reject(text, seed, "硬切", f"：硬切 " + "、".join(f"{k}音 {t:.2f}s {d:.0f}dB" for k, t, d in he) + "，换种子重来")
@@ -688,6 +695,9 @@ if CHUNK.get("maxSentences", 1) > 1:
                 continue
             if sents[k] in POLY_SKIP:
                 chunk_clean = False
+            if not FAST and (tb := tail_burst(take[0], take[1], take[4])):
+                print(f"    整段切出来的第 {k + 1} 句说完以后有响声（{tb[0]:.2f}s），这一句单独配")
+                continue
             if not FAST and (lb := line_defects(take[0], take[1], take[4], voice)):
                 print(f"    整段切出来的第 {k + 1} 句{'、'.join(lb)}，这一句单独配")
                 continue
@@ -736,6 +746,9 @@ for i, sent in enumerate(sents):
         elif not FAST and not (os.path.exists(key + ".postfail") and json.load(open(key + ".postfail", encoding="utf-8")).get("seed") == json.load(open(key + ".json", encoding="utf-8")).get("seed")) \
                 and (lb := line_defects(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], voice)):
             print(f"  缓存里的「{sent}」{'、'.join(lb)}（成片旁白检查会点名），重新生成")
+            cached = False
+        elif not FAST and tail_burst(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"]):
+            print(f"  缓存里的「{sent}」说完以后有响声，重新生成")
             cached = False
         elif not poly_seen(key + ".json") and (pb := poly_bad(x_c, sr_c, json.load(open(key + ".json", encoding="utf-8"))["words"], sent, ref_for(sent))):
             print(f"  缓存里的「{sent}」多音字念错（{'、'.join(r['ctx'] + ' 像 ' + r['heard'] for r in pb)}），重新生成")

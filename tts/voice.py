@@ -468,6 +468,46 @@ def line_defects(x, sr, words, voice, floor_hz=None):
     return out
 
 
+# ---------- 句尾响声 ----------
+def _frame_db(x, sr, win=0.04, hop=0.01):
+    n, h = int(win * sr), int(hop * sr)
+    if len(x) < n:
+        return np.zeros(0), np.zeros(0)
+    idx = np.arange(0, len(x) - n + 1, h)
+    c = np.concatenate([[0.0], np.cumsum(np.asarray(x, dtype=np.float64) ** 2)])
+    return idx / sr, 10 * np.log10((c[idx + n] - c[idx]) / n + 1e-12)
+
+
+def tail_burst(x, sr, words, after=0.05, win=0.04, margin_db=4.0):
+    """句尾响声：最后一个字说完 after 秒以后，有没有一段 win 秒比这句说话时的中位响度还高 margin_db。
+    E07 成片 7:04：爸爸「合着乙能只投个零头了」最后一个字说完以后一下响声，用户听成咳嗽；别的关卡（回转识别、掉音、硬切）都不看字说完以后的那一段。
+    x 是这一句的声音（到下一句开口之前），words 是这一句的逐字时间（相对 x）。返回 (时刻, 比说话中位响度高几 dB)，没有返回 None"""
+    if not words:
+        return None
+    t, lv = _frame_db(x, sr, win)
+    if not len(t):
+        return None
+    a, b = words[0]["start"], words[-1]["end"]
+    sp = lv[(t >= a) & (t + win <= b)]
+    sp = sp[sp > sp.max() - 35] if len(sp) else sp   # 只算嘴在动的帧
+    tail = (t >= b + after)
+    if not len(sp) or not tail.any():
+        return None
+    med = float(np.median(sp))
+    k = np.where(tail & (lv > med + margin_db))[0]
+    return (round(float(t[k[0]]), 3), round(float(lv[k].max() - med), 1)) if len(k) else None
+
+
+def trim_tail(x, sr, words, keep=0.12, fade=0.04):
+    """把句尾剪到最后一个字说完 keep 秒，末尾 fade 秒淡出（句间停顿拼接时另补）"""
+    end = min(len(x), int((words[-1]["end"] + keep) * sr))
+    y = np.array(x[:end], dtype=x.dtype, copy=True)
+    n = min(len(y), int(fade * sr))
+    if n:
+        y[-n:] = y[-n:] * np.linspace(1.0, 0.0, n, dtype=np.float32)
+    return y
+
+
 # ---------- 变速不变调（旁白检查自测的注入用它造「换了个嗓子」的声音；VOICE_PIPELINE.md「像同一个人」） ----------
 def stretch(x, rate, sr, frame=0.03, tol=0.012):
     """WSOLA 变速不变调：rate > 1 变快（时长 ÷ rate），< 1 变慢。frame 秒汉宁窗、半帧重叠，每帧在 ±tol 秒里找和上一帧接得最顺的位置。

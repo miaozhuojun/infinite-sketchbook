@@ -374,6 +374,27 @@ for spk in speakers:
     check("语速一致" + who(spk), not off, (f"{len(off)} 句离 {RATE['target']} 字/秒超过 {RATE.get('maxDev', 0.10):.0%}：" + "；".join(f"「{sp['text'][:10]}」{r:.2f}" for _, r, sp in off[:6]) + "；")
           * bool(off) + f"全片每句 {min(rs):.2f}–{max(rs):.2f} 字/秒，波动 {np.std(rs) / np.mean(rs):.2f}")
 
+# 0l2. 句尾没有响声：每句最后一个字说完以后、下一句开口之前，没有一段比这句说话的中位响度还高 4dB 的声音（voice.py 的 tail_burst）。
+#      用户听 E07 成片 v2、v3：7:04「咳嗽声」是爸爸一句话说完以后的一下响声，别的检查都不看字说完以后的那一段；配音生成时已经剪或换种子，这里在源配音上再查一遍
+from voice import tail_burst, _frame_db
+if timing0.get("sentences"):
+    xs_t, sr_t = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
+    S_t, tb = timing0["sentences"], []
+    for k, sp in enumerate(S_t):
+        ws = [w for w in timing0["words"] if sp["start"] - 0.01 <= w["start"] < sp["end"] + 0.01]
+        if not ws:
+            continue
+        nxt = [w["start"] for w in timing0["words"] if w["start"] >= ws[-1]["end"] - 1e-6 and w is not ws[-1]]
+        # 这一句的句尾只算到「最后一个字说完」和「下一句第一个字」之间最安静的那一刻（两句拼接的地方）：
+        # 对齐给的下一句起点常晚 0.2 秒左右，照它算会把下一句的起音当成这一句的句尾响声（E08 样片上试：80 句误报 2 句）
+        ga, gb = ws[-1]["end"], (nxt[0] if nxt else len(xs_t) / sr_t)
+        tg, lg = _frame_db(xs_t[int(ga * sr_t):int(gb * sr_t)], sr_t)
+        a, b = ws[0]["start"], (ga + float(tg[int(np.argmin(lg))]) + 0.02 if len(tg) else gb)
+        hit = tail_burst(xs_t[int(a * sr_t):int(b * sr_t)], sr_t, [dict(w, start=w["start"] - a, end=w["end"] - a) for w in ws])
+        if hit:
+            tb.append((k, hit, sp)); revoice_k.add(k)
+    check("句尾没有响声", not tb, (f"{len(tb)} 句说完以后有响声：" + "；".join(f"「{sp['text'][-10:]}」后 {h[0]:.2f}s 高 {h[1]:.0f}dB" for _, h, sp in tb[:6])) if tb else f"{len(S_t)} 句最后一个字说完以后都没有比说话还响的声音")
+
 # 0m. 像同一个人在自然地说话（VOICE_PIPELINE.md「像同一个人」）。用户听 E02 v13：「每句话的声音都存在微小差异（包括音色、快慢、音量），
 #     给人一种不是同一个人在自然的说话的感觉」。音色用 CAM++（campplus.py）量：0f 用的 Qwen3 嵌入在同一个声音和别人的声音之间只差 0.987 对 0.932，
 #     又是生成时挑候选的那把尺子；CAM++ 是 0.78 对 0.16。

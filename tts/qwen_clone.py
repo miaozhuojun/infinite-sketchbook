@@ -233,7 +233,7 @@ def poly_ref(R):
 
 # 这一集核过的读音的指纹：缓存里的句子判过一次就记下它（json 的 poly），读法没变就不再打分。
 # 原来每次跑都把缓存里的句子重判一遍：E08 样片 v2 主讲全走缓存也要 483 秒（一句约 7 秒），改几句话白等 8 分钟
-POLY_SIG = hashlib.sha1(json.dumps([sorted(REVIEWED), (_RD or {}).get("readings") or {}, PGM.MARGIN, PGM.OK_MARGIN, PGM.REF_SLACK], ensure_ascii=False).encode()).hexdigest()[:16] if REVIEWED is not None else None  # 判法的门槛改了，旧的记号也作废
+POLY_SIG = hashlib.sha1(json.dumps([sorted(REVIEWED), (_RD or {}).get("readings") or {}, PGM.MARGIN, PGM.OK_MARGIN, PGM.REF_SLACK], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16] if REVIEWED is not None else None  # 判法的门槛改了，旧的记号也作废
 
 
 def poly_seen(meta_path):
@@ -250,7 +250,8 @@ def poly_mark(meta_path):
     m = json.load(open(meta_path, encoding="utf-8"))
     if m.get("poly") != POLY_SIG:
         m["poly"] = POLY_SIG
-        json.dump(m, open(meta_path, "w", encoding="utf-8"), ensure_ascii=False)
+        json.dump(m, open(meta_path + ".tmp", "w", encoding="utf-8"), ensure_ascii=False)
+        os.replace(meta_path + ".tmp", meta_path)  # 先写临时文件再换：中途断了不留半截 json
 
 
 def poly_bad(audio, sr_, rel, text, R):
@@ -261,6 +262,7 @@ def poly_bad(audio, sr_, rel, text, R):
     res = PGM.check_sentence(PG, audio, sr_, text, rel, reviewed=REVIEWED, reference=poly_ref(R))
     if res and res[0].get("unaligned"):
         POLY_LOG.append({"kind": "对不上逐字时间、没查", "text": text})
+        POLY_SKIP.add(text)  # 没查成，不算判过：缓存里不记号，下次再试
         return []
     for r in res:
         if not r["ok"] and not r["reviewed"]:
@@ -295,6 +297,8 @@ HYPS = {}  # 句子 → 回转识别没对上时听成的说法，字数差多�
 FAILS = {}
 SPLIT_STUCK = {}  # 句子 → 自动拆成两半后没过的那一半
 POLY_FALLBACK = "多音字没判过，用最像的一条"  # 记在缓存的 note 里，以后每次跑都列出来
+POLY_SKIP = set()  # 对不上逐字时间、没查成的句子
+POLY_OK = set()  # (句子, 种子)：这一条候选过了多音字这一关，或者是上面那条退路（有意留下、不再重判）。别的退路（语速、沙沙声、背景、断句）没走到这一关，不算
 POLY_BAD = {}  # 句子 → 每次判成念错的多音字
 POLY_TRIES = 3  # 同一句念错几次就换写法（换写法以后还念错，就照别的关卡一样试满）
 
@@ -443,6 +447,8 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
                 POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": SUBST[text], "ctx": [r["ctx"] for r in pb]})
                 print(f"    多音字念错 {POLY_TRIES} 次，换个写法给配音：{SUBST[text]}")
             continue
+        if text not in POLY_SKIP:
+            POLY_OK.add((text, seed))
         e = embedding(spk, audio, sr)
         # 配了语速目标时，连贯打分不再拿声音包的基准语速比（量法不同：声音包按「首字到末字」量，逗号停顿算进去，每句都显得慢，候选就偏向快的那条）
         score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, None if RATE.get("target") else BASE_RATE, target.get("rate"))
@@ -479,6 +485,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         print(f"    {args.max_tries} 次里多音字都没判过（换了写法也没过），用最像的种子 {best_poly[1][2]}：" + "、".join(r["ctx"] for r in best_poly[2]) + "，记进 .polyphones.json，单听确认")
         POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": text, "ctx": [r["ctx"] for r in best_poly[2]], "margin": [r["margin"] for r in best_poly[2]], "ref": [r["ref"] for r in best_poly[2]]})
         a_, sr_, sd_, nt_, rel_, bk_ = best_poly[1]
+        POLY_OK.add((text, sd_))  # 留下这一条，以后走缓存不再重判（种子是确定的，重配也是同样的结果），每次列进报告等人单听
         return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + POLY_FALLBACK, rel_, bk_
     if best_stray:
         print(f"    {args.max_tries} 次里每条都断在没标点的地方，用断得最轻的种子 {best_stray[1][2]}（{best_stray[0]:.2f} 倍门槛）")
@@ -664,7 +671,7 @@ if CHUNK.get("maxSentences", 1) > 1:
                 continue
             res = r[:5]
             sf.write(ckey + ".wav", r[0], r[1])
-            json.dump({"text": text, "seed": r[2], "note": r[3], "words": r[4], **({"poly": POLY_SIG} if POLY_SIG and not FAST else {})}, open(ckey + ".json", "w", encoding="utf-8"), ensure_ascii=False)  # 整段按 strict 配，多音字已经整段判过
+            json.dump({"text": text, "seed": r[2], "note": r[3], "words": r[4], **({"poly": POLY_SIG} if POLY_SIG and not FAST and (text, r[2]) in POLY_OK else {})}, open(ckey + ".json", "w", encoding="utf-8"), ensure_ascii=False)  # 整段按 strict 配，多音字已经整段判过
         parts = split_chunk(res, [sents[k] for k in g])
         if not parts:
             print(f"    「{text[:16]}…」句间没有停顿，切不开，退回逐句配")
@@ -679,6 +686,8 @@ if CHUNK.get("maxSentences", 1) > 1:
                 print(f"    整段切出来的第 {k + 1} 句多音字念错（{'、'.join(r['ctx'] for r in pb)}），这一句单独配")
                 chunk_clean = False
                 continue
+            if sents[k] in POLY_SKIP:
+                chunk_clean = False
             if not FAST and (lb := line_defects(take[0], take[1], take[4], voice)):
                 print(f"    整段切出来的第 {k + 1} 句{'、'.join(lb)}，这一句单独配")
                 continue
@@ -757,7 +766,8 @@ for i, sent in enumerate(sents):
         meta = json.load(open(key + ".json", encoding="utf-8"))
         seed, note, rel = meta["seed"], "缓存", meta["words"]
         n_cached += 1
-        poly_mark(key + ".json")  # 走到这里，多音字这一关判过了（或以前判过）：记下，读法不变就不再打分
+        if sent not in POLY_SKIP:
+            poly_mark(key + ".json")  # 走到这里，多音字这一关判过了（或以前判过）：记下，读法不变就不再打分
         if not FAST and POLY_FALLBACK in (meta.get("note") or ""):  # 上次没判过、用了最像的一条：每次都列出来，等人单听
             POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": sent, "cached": True})
     else:
@@ -792,7 +802,7 @@ for i, sent in enumerate(sents):
             note = (note + "；" if note else "") + "上一句没配出来，这一句不进缓存，改完重跑时对着新的上一句重挑"
         else:
             sf.write(key + ".wav", audio, sr)
-            json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}), **({"poly": POLY_SIG} if POLY_SIG and not FAST else {}),
+            json.dump({"text": sent, "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {}), **({"poly": POLY_SIG} if POLY_SIG and not FAST and (sent, seed) in POLY_OK else {}),
                        **({"flatFallback": MAX_FLAT} if FLAT_FALLBACK in (note or "") else {}), **({"strayFallback": True} if STRAY_FALLBACK in (note or "") else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
     after_stuck = False
     takes.append([audio, sr, seed, note, rel])

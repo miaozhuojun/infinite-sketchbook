@@ -1101,7 +1101,7 @@ c_all = cer(_ref_all, syl(asr_long(args.out + ".wav", spans)))
 C_ALL_MAX = max(0.005, 1.0 / max(1, len(_ref_all)) + 1e-9)
 json.dump({"source": f"qwen3-tts-1.7b-base clone 按句生成 gap={args.gap}s + qwen3-forcedaligner", "text": args.text, "ref_text": ref_text, "words": words, "sentences": spans},
           open(args.out + ".timing.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-# 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%，成片的总混可懂度另有 2% 的关卡
+# 逐句都已是 0；整段长了识别偶尔差一两个音节（E01 v15 670 个音节里差 1 个），放到 0.5%（短的整段至少容一个音节，见上面 C_ALL_MAX），成片的总混可懂度另有 2% 的关卡
 if c_all > C_ALL_MAX and FAST:
     print(f"  整段回转拼音错误率 {c_all:.3f}（样片不拦，精配时再查）")
 elif c_all > C_ALL_MAX:

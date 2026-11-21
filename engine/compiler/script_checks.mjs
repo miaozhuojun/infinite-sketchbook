@@ -216,8 +216,8 @@ export function scriptIssues(beats, style) {
 }
 
 // 「儿」自己念一个音节的词，不是儿化
-const ER_WORDS = /儿[子童女歌时科孙媳戏化]|(?:新生|混血|[女婴幼孤胎少宠健男孩小])儿/g;
-const ER_FIX = { 哪儿: '哪里', 这儿: '这里', 那儿: '那里', 点儿: '一点', 会儿: '一会', 事儿: '这件事' };
+const ER_WORDS = /儿[子童女歌时科孙媳戏化郎]|(?:新生|混血|[女婴幼孤胎少宠健小育托患弃产])儿/g; // 「孩儿」「男儿」不收：「小孩儿」「男孩儿」是儿化
+const ER_FIX = { 哪儿: '哪里', 这儿: '这里', 那儿: '那里' }; // 别的去掉「儿」就行（一点儿 → 一点）
 
 // 以前被听错过的说法：仓库里的 tts/misheard.example.json 加上本机私有的 tts/misheard.json（配音试满都没过时 qwen_clone.py 自动追加）。
 // TTS_MISHEARD 只读指定的那个文件（自测用）

@@ -1082,7 +1082,9 @@ expectBeats('写稿自查：画面上写了一个旁白没说过的数', (b) => 
 }, validate, /其中的 37 旁白到这句.*还没说到/, { any: true });
 // 复用（copyOf）的 copyOf 写的是原元素 id，表格名 grid 也是名字，不是写在画面上的字：id、表格名里带数字（E02 的 g00）不能报成「画面上写了 00」。
 // 注入：前面一句画一段带表格名的字，后面一句复用它，再另画一个旁白没说过的数当对照——对照要照旧报出来，id 和表格名不能被报
-expectBeats('写稿自查：复用件的 copyOf、表格名里带数字，不算画面上写的数', (b) => {
+const reusable = beatsSrc.phrases.filter((q) => q.actions?.length && !q.revisit?.length && !q.camera).length >= 2; // 复用要有「前面一句」可抄
+if (!reusable) skip('写稿自查：复用件的 copyOf、表格名里带数字，不算画面上写的数', '基线分镜带动作的句子不到两句');
+else expectBeats('写稿自查：复用件的 copyOf、表格名里带数字，不算画面上写的数', (b) => {
   const ps = b.phrases.filter((q) => q.actions?.length && !q.revisit?.length && !q.camera), [p1, p2] = [ps[0], ps.at(-1)], a1 = p1.actions[0], a2 = p2.actions[0];
   const x = (a1.x ?? a1.cx ?? 400) + 40, y = (a1.y ?? a1.cy ?? 400) + 160;
   p1.actions.push({ id: 'g0731', type: 'text', at: a1.at, text: '大小', grid: 'row8642', x, y, size: 72 });

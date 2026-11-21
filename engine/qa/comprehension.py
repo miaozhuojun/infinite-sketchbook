@@ -143,7 +143,8 @@ elif cmd == "score":
     for i, q in enumerate(quiz):
         a = answers.get(i + 1, "")
         # 答案和关键词都先去掉空白再比：测试者常把数字和汉字隔开写（「2 天」「100 亿亿」「1 个」），逐字比会把答对的判成失败
-        # （E02：一位测试者 10 题里 4 题这样丢）。关键词去完空白变成空串的不算命中（空串在任何答案里都「命中」）
+        # （E02：一位测试者 10 题里 4 题这样丢）。关键词去完空白变成空串的不算命中（空串在任何答案里都「命中」）。
+        # 取舍：数字之间的空白也一并去掉（「2 3 天」会命中「3天」），测试者几乎不会这样写，换来的是不用逐种空白写法去认
         flat = squash(a)
         miss = [g for g in q["keywords"] if not any(squash(k) and squash(k) in flat for k in g)]
         ok += not miss

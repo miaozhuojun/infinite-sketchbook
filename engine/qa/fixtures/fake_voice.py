@@ -1,14 +1,14 @@
-"""假配音环境：不载模型，把 tts/qwen_clone.py 整个跑一遍，给检查器自测（qa/selftest.mjs）验配音的流程（卡句早报、拼好后只重配一次）。
+"""假配音环境：不载模型，把 tts/qwen_clone.py 整个跑一遍，给检查器自测（qa/selftest.mjs）验配音的流程（卡句早报、拼好后换种子配不出来就不再重配）。
 CI 和工作树里没有模型、参考音、音色配置，也没有 mlx（只有 Apple Silicon 上有）：这里把 mlx、mlx_audio 换成桩，pypinyin 没装时也换成桩（逐字算一个音节），
 voice.py、qwen_clone.py 里的检查都是真的。
 
 桩怎么做：
   - 配音（TTS）：每个字一段 0.2 秒的纯音，频率按字分（每个字一个频率），逗号处停 0.25 秒，有声的段两头淡入淡出（不算硬切），没声的地方垫一层很轻的底噪（不算掉音）。
-    剧本（rules）可以让某几个种子把某个词念成别的词（say），或者把某个字念得很轻（weak，比别的字低 40dB）。
+    剧本（rules）可以让某几个种子（from ≤ 种子 < below）把某个词念成别的词（say），或者把某个字念得很轻（weak，比别的字低 40dB）。
   - 回转识别（ASR）和逐字对齐：按频率把字认回来（每 10ms 一帧，取最响的频率，落到最近的那个字上），对齐就用认出来的每个字的起止。
     同一个字不能紧挨着出现两次（认不开），剧本里的句子要避开。
 用法：python fake_voice.py <工作目录> <剧本.json>
-  剧本：{"text": 旁白稿, "rules": [{"has": "球只", "say": "我只", "below": 种子上限（不写就是每个种子都这样）}, {"has": "十", "weak": true}],
+  剧本：{"text": 旁白稿, "rules": [{"has": "球只", "say": "我只", "from": 种子下限, "below": 种子上限（都不写就是每个种子都这样）}, {"has": "十", "weak": true}],
          "voice": {覆盖音色配置}, "args": [qwen_clone.py 另加的参数]}
   配音输出前缀是 <工作目录>/out/fake；qwen_clone.py 的输出原样打出来，退出码也照传。听错的说法记在 <工作目录>/misheard.json（TTS_MISHEARD），不碰本机那份
 """
@@ -120,7 +120,7 @@ class FakeTTS:
     def generate(self, text, **_):
         said, weak = text, set()
         for r in scen.get("rules", []):
-            if r["has"] in said and SEED[0] < r.get("below", 1 << 30):
+            if r["has"] in said and r.get("from", 0) <= SEED[0] < r.get("below", 1 << 30):
                 if r.get("weak"):
                     p = said.index(r["has"]); weak.update(range(p, p + len(r["has"])))
                 elif "say" in r:

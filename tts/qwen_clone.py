@@ -330,8 +330,8 @@ LIMIT = args.max_tries * (1 + voice.get("extraRounds", 0))
 WATCH = {}  # 句子 → 这一次配它的记录：从 FAILS、HYPS 的第几条算起，第几句（label），有没有一条过关，「卡句」打过没有
 
 
-def watch(text, label):
-    WATCH[text] = {"from": len(FAILS.get(text, [])), "hyp": len(HYPS.get(text, [])), "label": label, "passed": False, "warned": False}
+def watch(text, label, then):
+    WATCH[text] = {"from": len(FAILS.get(text, [])), "hyp": len(HYPS.get(text, [])), "label": label, "then": then, "passed": False, "warned": False}
 
 
 def reject(text, seed, kind, msg):
@@ -342,7 +342,7 @@ def reject(text, seed, kind, msg):
     if w and not w["passed"] and not w["warned"] and len(FAILS[text]) - w["from"] >= (LIMIT + 1) // 2:
         w["warned"] = True
         print(f"[卡句] {w['label']}「{text.strip()}」试了 {len(FAILS[text]) - w['from']} 个种子还没有一条过关（一句先试 {LIMIT} 个、不行再拆两半配，还在接着试；"
-              f"配不出来的话这一轮配完一起报）：{tally(text, w['from'])}{heard_as(text, w['hyp'])}")
+              f"{w['then']}）：{tally(text, w['from'])}{heard_as(text, w['hyp'])}")
 
 
 def note_misheard(sent):
@@ -575,10 +575,10 @@ def stray_cached(key, sent):
     return bool(st)
 
 
-def make_take(sent, seed0, strict=False, label=""):
+def make_take(sent, seed0, strict=False, label="", then="配不出来的话这一轮配完一起报"):
     """配一句的完整做法（主循环、拼好后的吞字重配、音色一致重配都用它）：先按 seed0 起试一轮，不过就再试 extraRounds 轮新种子，
-    还不过就自动拆成两半配；都不行返回 None。label 是「第几句、为什么配」，试到上限一半还没过时打在「[卡句]」那一行里"""
-    watch(sent, label)
+    还不过就自动拆成两半配；都不行返回 None。label 是「第几句、为什么配」，then 是配不出来会怎样，试到上限一半还没过时都打在「[卡句]」那一行里"""
+    watch(sent, label, then)
     for r in range(1 + voice.get("extraRounds", 0)):
         try:
             res = synth_sentence(sent, seed0 + r * args.max_tries, ref_for(sent), strict)
@@ -963,12 +963,15 @@ def assemble():
     return np.concatenate(pieces), words, spans
 
 
-# 拼好后查出问题（字偏弱、拼好后的掉嗓子破音硬切语速回声、音色不像整集）的句子，每句最多换种子重配一次，不自动多轮硬试：
-# 种子是确定的，原来三轮里有两轮是从同一个种子起、把同样几十条再试一遍（e02-voyager 一句「十」偏弱，重配三轮各试满 50 条，主讲配音 2 小时 29 分才报）。
-# 重配一次还不行就报：字偏弱的列成 [错误] 非零退出；别的几项留原来那条，交给成片旁白检查点名、流水线自动换种子
+# 拼好后查出问题（字偏弱、拼好后的掉嗓子破音硬切语速回声、音色不像整集）的句子换种子重配，每句最多 REVOICE_MAX 次；
+# 一次重配连一条全部关卡都过的都没配出来，这一句就不再重配：种子是确定的，下一次还是从同一个种子起、把同样几十条再试一遍。
+# 字偏弱原来没管这一条：e02-voyager 一句「十」偏弱，重配换种子没配出来，留原来那条，下一轮又从同一个种子起，三轮各试满 50 条，主讲配音 2 小时 29 分才报。
+# 配出来了只是还有问题的，下一次从新那条的种子往后试，是真的新种子，照旧再试（PR #93 审查：原来能自动配通的不能改成直接失败）。
+# 停下来的报出来：字偏弱的列成 [错误] 非零退出；别的几项留这一条、打 [警告]，交给成片旁白检查点名、流水线自动换种子
+REVOICE_MAX = 3
 
 # 吞字要和成片旁白检查一个口径：拿整段所有字的响度中位数做参照（单句里看不出来），所以拼好后再查一遍，有字偏弱的句子换下一个种子重配
-weak_tried = {}  # 句号 → 那一次重配：{"seed": 新那条的种子，没配出来是 None；"from"、"hyp"：从 FAILS、HYPS 的第几条算起}
+weak_tried = {}  # 句号 → 重配了几次、最后那一次：{"n"; "seed": 新那条的种子，没配出来是 None；"from"、"hyp"：那一次从 FAILS、HYPS 的第几条算起}
 while True:
     full, words, spans = assemble()
     if FAST:
@@ -976,24 +979,26 @@ while True:
     _, weak = weak_chars(full, sr, [{"text": w["text"], "t0": w["start"], "t1": w["end"]} for w in words])
     bad = sorted({words[k]["sent"] for k, _ in weak})
     what = lambda i: "；".join(m for k, m in weak if words[k]["sent"] == i)
-    todo = [i for i in bad if i not in weak_tried]
+    done = lambda i: i in weak_tried and (weak_tried[i]["seed"] is None or weak_tried[i]["n"] >= REVOICE_MAX)
+    todo = [i for i in bad if not done(i)]
     if not todo:
         if bad:
             rows = []
             for i in bad:
                 t_ = weak_tried[i]
-                how = (f"换种子重配了一次也没配出全部关卡都过的一条（{why_stuck(sents[i], t_['from'], t_['hyp'])}）" if t_["seed"] is None
-                       else f"换种子重配了一次，新的一条（种子 {t_['seed']}）还是偏弱")
+                how = (f"换种子重配{'了 ' + str(t_['n']) + ' 次，最后一次' if t_['n'] > 1 else ''}没配出全部关卡都过的一条（{why_stuck(sents[i], t_['from'], t_['hyp'])}），再试也是同样的种子" if t_["seed"] is None
+                       else f"换种子重配了 {t_['n']} 次，最后一条（种子 {t_['seed']}）还是偏弱")
                 print(f"[错误] 第 {i + 1}/{len(sents)} 句拼好后有字偏弱（{what(i)}），{how}：「{sents[i].strip()}」")
                 rows.append(stuck_row(sents[i], [i + 1], t_["from"], t_["hyp"], after=f"拼好后有字偏弱：{what(i)}"))
             json.dump({"sentences": len(sents), "stuck": rows}, open(STUCK_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-            raise SystemExit(f"{len(bad)} 句拼好后有字偏弱，换种子重配一次也没好（上面 [错误] 各行；每个种子的原因在 {STUCK_FILE}）。"
+            raise SystemExit(f"{len(bad)} 句拼好后有字偏弱，换种子重配也没好（上面 [错误] 各行；每个种子的原因在 {STUCK_FILE}）。"
                              "需要人工处理：改写这一句（偏弱的那个字换个说法、同一个词别在一句里说好几遍、拆短），先单独试配几分钟再重跑")
         break
     for i in todo:
         print(f"  拼好后第 {i + 1} 句有字偏弱（{what(i)}），换下一个种子重配")
-        weak_tried[i] = {"seed": None, "from": len(FAILS.get(sents[i], [])), "hyp": len(HYPS.get(sents[i], []))}
-        res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（拼好后有字偏弱，换种子重配）")
+        weak_tried[i] = {"n": weak_tried.get(i, {}).get("n", 0) + 1, "seed": None, "from": len(FAILS.get(sents[i], [])), "hyp": len(HYPS.get(sents[i], []))}
+        res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（拼好后有字偏弱，第 {weak_tried[i]['n']} 次换种子重配）",
+                        then="配不出来就不再重配，整段查完报 [错误]、停下")
         if not res:
             print(f"    第 {i + 1} 句换种子没配出来，留原来那条"); continue
         audio, sr, seed, note, rel, bk = res
@@ -1004,7 +1009,7 @@ while True:
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
 # 拼好后在整段上按成片旁白检查的口径再查一遍（一段一起配的声音切开、对齐响度以后，个别卡在线上的会冒出来；E02 v4「定在5」破音），
-# 查出来的句子单独换种子重配，每句最多一次（见上面「不自动多轮硬试」）——不用人去成片里找、手动换种子
+# 查出来的句子单独换种子重配，每句最多 REVOICE_MAX 次、配不出来的不再重配（见上面）——不用人去成片里找、手动换种子
 # 也查成片旁白检查要查的其余几项（掉嗓子用成片的下限、每句回声）：E02 v4 有一句生成时过了、拼好后掉嗓子 139Hz，一句回声 122ms
 FINAL_ECHO = 0 if FAST else voice.get("maxEcho", 0)
 def assembled_defects(full, spans, words):
@@ -1032,20 +1037,21 @@ if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
     # 原来每跑一次都对它试满几十个种子，一轮里三轮还各试一遍（E02 父子对话样稿「一开始，旋钮是随便拧的。」，主讲配音每次多花几分钟）
     post_key = lambda i: os.path.join(CACHE, cache_key(sents[i])) + ".postfail"
     gave_up = {i for i in range(len(sents)) if os.path.exists(post_key(i)) and json.load(open(post_key(i), encoding="utf-8")).get("seed") == takes[i][2]}
-    revoiced = set()  # 拼好后已经重配过一次的句子
+    revoiced = {}  # 句号 → 拼好后重配了几次
     while True:
         full, words, spans = assemble()
         defects = assembled_defects(full, spans, words)
-        bad = sorted(set(defects) - gave_up - revoiced)
+        bad = sorted(i for i in defects if i not in gave_up and revoiced.get(i, 0) < REVOICE_MAX)
         if not bad:
-            for i in sorted(defects):  # 重配过一次还有、或者换种子配不出来的：报出来，留原来那条
+            for i in sorted(defects):  # 换种子配不出来、或者重配满了还有的：报出来，留这一条
                 print(f"[警告] 拼好后第 {i + 1}/{len(sents)} 句{'、'.join(defects[i])}："
-                      + ("换种子配不出全部关卡都过的一条" if i in gave_up else "换种子重配过一次还是这样") + f"，留这一条，成片旁白检查会点名、流水线自动换种子再配（{sents[i].strip()}）")
+                      + ("换种子配不出全部关卡都过的一条" if i in gave_up else f"换种子重配了 {revoiced[i]} 次还是这样") + f"，留这一条，成片旁白检查会点名、流水线自动换种子再配（{sents[i].strip()}）")
             break
         for i in bad:
-            revoiced.add(i)
+            revoiced[i] = revoiced.get(i, 0) + 1
             print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}，单独换种子重配：{sents[i]}")
-            res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（拼好后{'、'.join(d.split(' ')[0] for d in defects[i])}，换种子重配）")
+            res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（拼好后{'、'.join(d.split(' ')[0] for d in defects[i])}，第 {revoiced[i]} 次换种子重配）",
+                            then="配不出来就留原来那条，以后不再重配")
             if not res:
                 gave_up.add(i)
                 note_misheard(sents[i])
@@ -1061,7 +1067,7 @@ if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
             pre.pop(i, None)
 
 # 每句都是同一个人：按句生成时每句是单独采样的，音色会一句一句地飘，听着像几个人你一句我一句（用户听 E01 v15）。
-# 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，每句最多一次（见上面「不自动多轮硬试」）；还不够就留最像的那条
+# 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，每句最多 REVOICE_MAX 次、配不出来的不再重配（见上面）；还不够就留最像的那条
 MIN_CONS = 0 if FAST else voice.get("takeMinConsistency", 0)
 if MIN_CONS:
     embs = [None] * len(sents)
@@ -1069,7 +1075,7 @@ if MIN_CONS:
     # 已经为音色一致重配过、留下了最像的一条的句子，缓存里记着 consChecked，以后不再重配：种子是确定的，再试也是同样几条（原来每次跑都重来，一次三分钟）
     meta_of = lambda i: (lambda k: json.load(open(k, encoding="utf-8")) if os.path.exists(k) else {})(os.path.join(CACHE, cache_key(sents[i])) + ".json")
     settled = {i for i in range(len(sents)) if meta_of(i).get("consChecked")}
-    tried = set()
+    tried = {}  # 句号 → 为音色一致重配了几次
     while True:
         for i, tk in enumerate(takes):
             if embs[i] is None:
@@ -1079,15 +1085,16 @@ if MIN_CONS:
         for i, c in enumerate(cos):
             if i not in best_c or c > best_c[i][0]:
                 best_c[i] = (c, list(takes[i]))
-        bad = [i for i, c in enumerate(cos) if c < MIN_CONS and i not in settled and i not in tried]  # 重配过一次的不再重配
+        bad = [i for i, c in enumerate(cos) if c < MIN_CONS and i not in settled and tried.get(i, 0) < REVOICE_MAX]
         if not bad:
             break
         for i in bad:
             print(f"  第 {i + 1} 句音色和整集不太像（{cos[i]:.3f}，要 ≥{MIN_CONS}），换下一个种子重配：{sents[i]}")
-            tried.add(i)
-            res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（音色和整集不太像，换种子重配）")
+            tried[i] = tried.get(i, 0) + 1
+            res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（音色和整集不太像，第 {tried[i]} 次换种子重配）",
+                            then="配不出来就留原来那条，以后不再重配")
             if not res:
-                settled.add(i)  # 全部关卡都过的一条都没有：留原来那条
+                settled.add(i)  # 全部关卡都过的一条都没有：再试也是从同一个种子起，不再试，留原来那条
                 print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res
             takes[i] = [audio, sr, seed, note, rel]; embs[i] = None
@@ -1097,7 +1104,7 @@ if MIN_CONS:
         if c < MIN_CONS and best_c[i][0] > c:
             takes[i] = best_c[i][1]; final[i] = best_c[i][0]
             joined.discard(i); joined.discard(i - 1)
-            print(f"  第 {i + 1} 句重配一次仍不到 {MIN_CONS}，用最像的一条（{best_c[i][0]:.3f}）")
+            print(f"  第 {i + 1} 句重配后仍不到 {MIN_CONS}，用最像的一条（{best_c[i][0]:.3f}）")
     for i, tk in enumerate(takes):
         key = os.path.join(CACHE, cache_key(sents[i]))
         meta = json.load(open(key + ".json", encoding="utf-8")) if os.path.exists(key + ".json") else {}

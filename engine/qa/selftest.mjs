@@ -1431,13 +1431,15 @@ print(json.dumps(out, ensure_ascii=False))`], { encoding: 'utf8' });
   record('配音断句：逗号前、句末拖长不算，drawl.minSec 填 0 不查（不误报）', !!o && !o.beforeComma.length && !o.last.length && !o.off.length, out);
 }
 
-// ---------- 配音卡句早报、拼好后每句只重配一次（tts/qwen_clone.py 整个跑一遍，模型换成桩：qa/fixtures/fake_voice.py，不要配音环境）----------
-// e02-voyager：一句「十」拼好后偏弱，重配三轮、每轮从同一个种子起试满 50 条，主讲配音 2 小时 29 分才报失败，中间看不出卡在哪一句。
+// ---------- 配音卡句早报、拼好后换种子配不出来就不再重配（tts/qwen_clone.py 整个跑一遍，模型换成桩：qa/fixtures/fake_voice.py，不要配音环境）----------
+// e02-voyager：一句「十」拼好后偏弱，重配换种子没配出来，又从同一个种子起再试两轮（每轮 50 条），主讲配音 2 小时 29 分才报失败，中间看不出卡在哪一句。
 // 剧本一（stuck）：第 2 句每个种子都把「球只」念成「我只」（配不出来）；第 3 句前 16 个种子把「尺子」念成「绳子」（试到一半还没过，后来过了）。
 //   两句都要在第 15 个种子（上限 10×3 的一半）时打一行「[卡句]」，写明试了几个、原因、听成什么；第 2 句的那一行要在它配完之前打出来，只打一次；
 //   整轮配完列出第 2 句（[错误]、stuck.json）、非零退出，第 3 句照样配出来。
-// 剧本二（weak）：第 2 句的「十」每个种子都念得很轻（逐句的关卡都过，拼好后才查出字偏弱）：只重配一次，还偏弱就报 [错误]、非零退出（原来重配三轮）。
-// 剧本三（clean）：同样的稿子不念轻：整个配通。上面两条失败的不是桩
+// 剧本二（weak，就是 e02-voyager 那样）：第 2 句的「十」念得很轻（逐句的关卡都过，拼好后才查出字偏弱），种子 3 起还念成「四」（重配换种子配不出来）：
+//   重配一次、当中打「[卡句]」，配不出来就不再重配，报 [错误]、非零退出（原来留原来那条，又从同一个种子起再试两轮）。
+// 剧本三（weak2，PR #93 审查）：「十」只有种子 2、3 念得轻：重配出来的那条还偏弱，就从它的下一个种子再配，第二次配通，整个过（不能改成直接失败）。
+// 剧本四（clean）：同样的稿子不念轻：整个配通。上面几条失败的不是桩
 {
   const os = await import('node:os');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-voice-'));
@@ -1465,20 +1467,26 @@ print(json.dumps(out, ensure_ascii=False))`], { encoding: 'utf8' });
       a.status !== 0 && L.some((l) => l.startsWith(`[错误] 第 2/4 句配不出来：「${S2}」试了 30 条`)) && !a.out.includes('[错误] 第 3/4 句')
       && stuck?.stuck.map((x) => x.text).join() === S2, a.out);
 
-    const b = play('weak', { text: T, rules: [{ has: '十', weak: true }] });
-    record('配音拼好后查出字偏弱只重配一次：还偏弱就报 [错误]、非零退出（原来重配三轮、每轮从同一个种子起）',
-      b.status !== 0 && (b.out.match(/拼好后第 2 句有字偏弱/g) || []).length === 1 && b.out.split('\n').some((l) => l.startsWith('[错误] 第 2/3 句拼好后有字偏弱（「十」') && l.includes('还是偏弱')), b.out);
+    const b = play('weak', { text: T, rules: [{ has: '十', weak: true }, { has: '十', say: '四', from: 3 }] });
+    record('配音拼好后查出字偏弱、重配换种子配不出来：不再从同一个种子起重配，当中打「[卡句]」，报 [错误]、非零退出（原来又试两轮）',
+      b.status !== 0 && (b.out.match(/拼好后第 2 句有字偏弱/g) || []).length === 1 && b.out.includes('[卡句] 第 2/3 句（拼好后有字偏弱，第 1 次换种子重配）')
+      && b.out.split('\n').some((l) => l.startsWith('[错误] 第 2/3 句拼好后有字偏弱（「十」') && l.includes('没配出全部关卡都过的一条') && l.includes('听成「这根绳子有几四米长」')), b.out);
+    const w2 = play('weak2', { text: T, rules: [{ has: '十', weak: true, below: 4 }] });
+    record('配音拼好后字偏弱、重配出来的那条还偏弱：从它的下一个种子接着配，配通了照样过（不改成直接失败）',
+      w2.status === 0 && (w2.out.match(/拼好后第 2 句有字偏弱/g) || []).length === 2 && w2.out.includes('通过：3 句'), w2.out);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 // ---------- 配音日志边跑边写（compiler/live_log.mjs，流水线的配音几步用它写 tts/out/<id>.<说话人>.voice.log）：子进程还没跑完，
-// 「[卡句]」那一行已经在日志里、已经交给 onLine；stderr 的半行和下一块拼成一整行；一个汉字的字节分在两块里也不乱码；退出码照传；append 接着往下写 ----------
+// 「[卡句]」那一行已经在日志里、已经交给 onLine；stderr 的半行和下一块拼成一整行；一个汉字的字节分在两块里也不乱码；
+// stdout 写了半行时 stderr 插进来一行，「[错误]」那一行仍然完整、在行首（流水线按行首认待改）；退出码照传；append 接着往下写 ----------
 {
   const { runLogged } = await import('../compiler/live_log.mjs');
   const log = path.resolve('build/_selftest.voice.log');
   const child = `const o = process.stdout, e = process.stderr, han = Buffer.from('汉');
 o.write('第 1 句\\n');
 setTimeout(() => { o.write('[卡句] 第 2 句「十」\\n'); e.write('警告：一半');
-  setTimeout(() => { e.write('的行\\n'); o.write(han.subarray(0, 2)); setTimeout(() => { o.write(han.subarray(2)); o.write('字\\n'); process.exitCode = 3; }, 50); }, 300); }, 100);`;
+  setTimeout(() => { e.write('的行\\n'); o.write(han.subarray(0, 2)); setTimeout(() => { o.write(han.subarray(2)); o.write('字\\n');
+    o.write('[错误] 甲'); setTimeout(() => { e.write('乙\\n'); setTimeout(() => { o.write('\\n'); process.exitCode = 3; }, 30); }, 30); }, 50); }, 300); }, 100);`;
   const seen = [];
   let mid = null;
   fs.mkdirSync('build', { recursive: true });
@@ -1488,7 +1496,7 @@ setTimeout(() => { o.write('[卡句] 第 2 句「十」\\n'); e.write('警告：
   fs.rmSync(log, { force: true });
   record('配音日志边跑边写：没跑完就能在日志里看到「[卡句]」，整行交给 onLine，汉字不乱码，退出码照传，重配那一轮接着写',
     r1.status === 3 && !!mid && mid.includes('[卡句] 第 2 句「十」') && !mid.includes('汉字') && seen.includes('警告：一半的行') && seen.includes('汉字')
-    && r1.out.includes('汉字') && body.includes('退出码 3') && body.indexOf('第 1 句') < body.indexOf('# 第 1 轮自动换种子重配') && body.includes('第二轮') && r2.status === 0,
+    && r1.out.includes('汉字') && /^\[错误\] 甲$/m.test(r1.out) && /^\[错误\] 甲$/m.test(body) && body.includes('退出码 3') && body.indexOf('第 1 句') < body.indexOf('# 第 1 轮自动换种子重配') && body.includes('第二轮') && r2.status === 0,
     JSON.stringify({ r1, seen, mid, body }));
 }
 // ---------- 旁白检查点名回声、沙沙声超标的句子（tts/revoice.py，单元检查）：回声管最长一句，超过上限的每句都重配；

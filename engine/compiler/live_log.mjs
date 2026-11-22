@@ -20,19 +20,20 @@ export function runLogged(cmd, args, { cwd, env, log, append = false, header = '
     const ch = spawn(cmd, args, { cwd, env: { ...process.env, PYTHONUNBUFFERED: '1', ...env } });
     let out = '';
     const rest = { stdout: '', stderr: '' };
+    // 只把整行写进日志和 out：Python 一个 print 分两次写（正文、换行），stdout 和 stderr 同时在写时，按块拼会把另一路的半行插进来，
+    // 「[错误]」不在行首，流水线的 record() 就漏了这条待改（PR #93 审查压测：两路同时写，1.6% 的行串了）
+    const emit = (l) => { out += l; write(l); };
     const take = (which) => (s) => {
-      out += s;
-      write(s);
       const lines = (rest[which] + s).split('\n');
       rest[which] = lines.pop();
-      for (const l of lines) onLine(l);
+      for (const l of lines) { emit(`${l}\n`); onLine(l); }
     };
     // 按流各自解码、各自断行：一个汉字的几个字节可能分在两块里，stdout 和 stderr 的半行也不能拼在一起
     ch.stdout.setEncoding('utf8').on('data', take('stdout'));
     ch.stderr.setEncoding('utf8').on('data', take('stderr'));
-    ch.on('error', (e) => { out += `${e}\n`; write(`${e}\n`); });
+    ch.on('error', (e) => emit(`${e}\n`));
     ch.on('close', (code, signal) => {
-      for (const k of ['stdout', 'stderr']) if (rest[k]) onLine(rest[k]);
+      for (const k of ['stdout', 'stderr']) if (rest[k]) { emit(`${rest[k]}\n`); onLine(rest[k]); } // 最后没换行的半行
       write(`\n# 退出码 ${code ?? signal}，${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
       fs.closeSync(fd);
       resolve({ status: code, out });

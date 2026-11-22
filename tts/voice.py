@@ -125,6 +125,30 @@ def weak_chars(x, sr, items):
                  if (it["dur"] < 0.05 and not merged(k)) or (it["dur"] >= 0.05 and it["db"] < med - 18)]
 
 
+def zero_dropouts(x, sr, items=(), joints=(), min_sec=0.005, side_db=-40.0):
+    """字中间掉音：≥ min_sec 的全零段，两侧 20ms 都在发声（> side_db）。返回 [(起点秒, 时长秒)]。
+    TTS 在停顿处本来就输出全零，下面两种不算：
+    - 句与句的接缝处（joints：两段配音首尾相接的时刻，前后 10ms）留下的是配音自带的句间静音（E01 第 27/28 句）；
+    - 一大半落在两个字之间的（items：x 上的逐字时间 [{"t0", "t1"}]，和吞字检查同一份）：那是字间的停顿。逗号前的字收得快，
+      全零段前 20ms 里还剩 -34dB，原来照样算掉音（e03-coldest 成片 v1「皮开尔文，那是」的逗号停顿 294ms，只有 6ms 落在「那」里）。
+    对齐的字范围常会多划进停顿，所以只靠逐字时间也不够，两侧发声这一条照留。"""
+    def db(seg): return 20 * np.log10(np.sqrt((seg ** 2).mean()) + 1e-12) if len(seg) else -240.0
+    x = x.mean(1) if x.ndim > 1 else x
+    edge = np.diff(np.concatenate([[0], (np.abs(x) < 1e-7).astype(np.int8), [0]]))
+    w2, out = int(0.02 * sr), []
+    for i, j in zip(np.flatnonzero(edge == 1), np.flatnonzero(edge == -1)):
+        a, b = i / sr, j / sr
+        if j - i < int(min_sec * sr) or any(a - 0.01 <= jt <= b + 0.01 for jt in joints):
+            continue
+        if db(x[max(0, i - w2):i]) <= side_db or db(x[j:j + w2]) <= side_db:
+            continue
+        inside = sum(max(0.0, min(b, it["t1"]) - max(a, it["t0"])) for it in items)
+        if items and inside < 0.5 * (b - a):
+            continue
+        out.append((a, b - a))
+    return out
+
+
 def voiced_flatness(x, sr):
     """说话时的「沙沙声」：浊音帧 1–4kHz 的谱平坦度中位数（谐波之间被噪声填平时变大）。
     干净的童声真人录音约 0.03–0.045；用户听出「一开口就有背景噪声、说完就没」的配音 0.11–0.18，听着干净的 0.04–0.09。

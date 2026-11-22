@@ -148,6 +148,11 @@ export function scriptIssues(beats, style) {
   sents.forEach((s, k) => {
     const er = [...new Set([...strip(s).replace(ER_WORDS, (m) => '＿'.repeat(m.length)).matchAll(/[一-鿿]儿/g)].map((m) => m[0]))];
     if (er.length) add('script.erhua', `narration.script ${quote(k)}`, `「${er.join('」「')}」是儿化：配音会把「儿」吞掉，回转识别对不上，种子换满也配不出。写成不带「儿」的说法（${er.map((w) => `「${ER_FIX[w] ?? w[0]}」`).join('、')}）`);
+    // 稿子里没写「儿」，配音自己加：问地方的「从哪、在哪、去哪、到哪、往哪」和「哪来、哪去」，后面不跟「里」，配音常念成「哪儿」，
+    // 回转识别也写成「哪儿」，和稿子对不上（e04-elnino 样片「不然热从哪冒出来？」快配 8 条全念成「从哪儿冒出来」，拆成两半也没过）。
+    // 只查问地方的这几种：「哪个、哪几步、哪层」这类问「哪一个」的不会念成「哪儿」（PR #90 审查：只看后一个字，量词、数词列不全）
+    const na = [...new Set([...s.matchAll(/(.?)哪(.?)/g)].filter((m) => (NA_PLACE.test(m[1]) || /[来去]/.test(m[2])) && !NA_OK.test(m[2])).map((m) => `${m[1]}哪`))];
+    if (na.length) add('script.erhua', `narration.script ${quote(k)}`, `「${na.join('」「')}」后面没有「里」：配音常念成「哪儿」，回转识别对不上（e04-elnino「从哪冒出来」8 条全念成「从哪儿」）。写成「${na.map((w) => `${w}里`).join('」「')}」`);
   });
   const byNeedle = new Map();
   for (const p of misheard()) for (const w of (p.risky?.length ? p.risky : [strip(p.said ?? '')]).filter(Boolean)) {
@@ -218,6 +223,9 @@ export function scriptIssues(beats, style) {
 // 「儿」自己念一个音节的词，不是儿化
 const ER_WORDS = /儿[子童女歌时科孙媳戏化郎]|(?:新生|混血|[女婴幼孤胎少宠健小育托患弃产])儿/g; // 「孩儿」「男儿」不收：「小孩儿」「男孩儿」是儿化
 const ER_FIX = { 哪儿: '哪里', 这儿: '这里', 那儿: '那里' }; // 别的去掉「儿」就行（一点儿 → 一点）
+// 问地方的「哪」前面常跟的字（从哪、在哪、去哪、到哪、往哪、向哪、朝哪）；后面跟这些就不会念成「哪儿」：哪里、哪边、哪个、哪一……，「哪儿」本身由上面的儿化查
+const NA_PLACE = /[从在去到往向朝]/;
+const NA_OK = /[里边个些一几两儿面头方]/;
 
 // 以前被听错过的说法：仓库里的 tts/misheard.example.json 加上本机私有的 tts/misheard.json（配音试满都没过时 qwen_clone.py 自动追加）。
 // TTS_MISHEARD 只读指定的那个文件（自测用）

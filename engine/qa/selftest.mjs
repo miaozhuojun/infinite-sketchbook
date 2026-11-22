@@ -1325,7 +1325,7 @@ print(json.dumps({"前后鼻音": s("考零格") == s("考林格") and s("人生
 }
 // 逐句回转的比法和点名（tts/line_asr.py，识别换成桩，不载模型）：一个片段里两句，念错的字只点名它在的那一句；
 // 稿子「1、1、0」「两千五百」「AI」和识别写的「一一零」「2500」「AI」算一致（片段 phrase 去了标点是 110，要按逐字拼稿子）；
-// 只有总混错、错在开头的单独标出来；短于 3 个字的片段跳过并计数
+// 只有总混错、错在开头的单独标出来；多听到的字算在它前面那个字所在的那一句；短于 3 个字的片段跳过并计数
 if (SKIP.has('speech') || !PY_MLX) skip('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
 else {
   const r = spawnSync(PY_MLX, ['-c', `
@@ -1355,13 +1355,15 @@ ok = ["它俩本事没变，新卷子要是更难，它俩也该掉分。有一�
 ok2 = ["它俩本事没变新卷子要是更难它俩也该掉分，有一、一、零个AI两千五百道", "写代码这类卷子", "噢"]
 juan = [ok[0].replace("新卷子", "新阵子")] + ok[1:]
 ye = [ok[0], "野代码这类卷子。", ok[2]]
-a, b, c, d = run(ok, ok2), run(juan, juan), run(ok, ye), run(ok2, ok)
+en = [ok[0].replace("零个", "零个嗯")] + ok[1:]  # 多听到一个字：算在它前面那个字所在的那一句
+a, b, c, d, e = run(ok, ok2), run(juan, juan), run(ok, ye), run(ok2, ok), run(en, ok)
 pick = lambda res: [(x["clip"], x["ks"], x["dryDiff"], x["mixDiff"], x["mixOnly"], x["atStart"]) for x in res["bad"]]
 print(json.dumps({"ok": not a["bad"] and not d["bad"] and a["checked"] == 2 and a["skipped"] == 1,
   "juan": pick(b) == [(0, [0], ["卷→阵"], ["卷→阵"], False, False)],
-  "ye": pick(c) == [(1, [2], [], ["写→野"], True, True)]}, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts' });
+  "ye": pick(c) == [(1, [2], [], ["写→野"], True, True)],
+  "extra": pick(e) == [(0, [1], ["多了「嗯」"], [], False, False)]}, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts' });
   let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
-  record('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', Object.keys(got).length === 3 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
+  record('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', Object.keys(got).length === 4 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
 }
 
 // ---------- 旁白检查按时刻点名到句（tts/sentence_map.py，单元检查）：一个片段里有两句时，前一句句尾的收音硬切要点名前一句，

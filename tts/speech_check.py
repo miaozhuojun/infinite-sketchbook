@@ -373,6 +373,8 @@ except (OSError, ValueError):
 n_heard = [0]
 def hear(seg, rate):
     seg = np.ascontiguousarray(seg, dtype=np.float32)
+    if len(seg) < int(0.05 * rate):  # 切出来是空的（时间线和音频对不上），不送去识别；和稿子比就是整段没听到
+        return ""
     key = hashlib.sha1(f"{ASR_DIR.name}|{rate}|".encode() + seg.tobytes()).hexdigest()
     if key in asr_cache:
         asr_cache[key] = asr_cache.pop(key)  # 用过的挪到最后，清旧的时留着
@@ -431,6 +433,8 @@ if LINE_HARD:
         revoice_k.update(b["ks"])
 else:
     print(f"[{'通过' if not bad_l else '建议'}] 逐句回转：{line_detail}" + ("（默认风格只给建议；私有配置 gates 里写 \"speech.lineAsr\": \"hard\" 就拦下、换种子重配）" if bad_l else ""))
+for b in bad_l:  # 上面一行只列前 8 段，这里每段一行
+    print(f"  逐句回转有出入：{_line_item(b)}")
 
 # 0k. 起音收音不硬切：声音从纯静音 2ms 里就起到 -35dB 以上，或者说着说着一下子断成纯静音（voice.py 的 hard_edges）。
 #     用户听 E02 v5「1:20 有个突兀的声音」：「权重越大」的「权」2ms 里从静音跳到 -20dB，剪开头串进来的字时切在了发声处

@@ -296,25 +296,10 @@ for c in tl["audioClips"]:
         lost.append(f"「{c['phrase'][:6]}」@{c['at'] + k * 0.01:.2f}s 起 {int(drop.sum()) * 10}ms 比源音频弱 10dB 以上")
 check("拼接后声音完整", not lost, "；".join(lost) if lost else f"{len(tl['audioClips'])} 段与源配音一致")
 
-# 3. 断音 / 爆音：≥5ms 的全零段，只有"两侧 20ms 都在发声（> -40dB）"才算字中间掉音
-#   （TTS 在停顿处本来就输出全零，对齐的字范围常会多划进停顿，不能一律算断音）
-#   句与句的接缝处（两段配音首尾相接、中间没插停顿）留下的是配音自带的句间静音，不是字中间掉音，跳过（E01 第 27/28 句）
-z = np.abs(x) < 1e-7
-joints = [c["at"] for c in tl["audioClips"][1:]]
-dropouts, i = [], 0
-while i < len(z):
-    if z[i]:
-        j = i
-        while j < len(z) and z[j]:
-            j += 1
-        if j - i >= int(0.005 * sr):
-            w2 = int(0.02 * sr)
-            at_joint = any(i / sr - 0.01 <= jt <= j / sr + 0.01 for jt in joints)
-            if not at_joint and db(x[max(0, i - w2):i]) > -40 and db(x[j:j + w2]) > -40:
-                dropouts.append(f"{i / sr:.2f}s({(j - i) / sr * 1000:.0f}ms)")
-        i = j
-    else:
-        i += 1
+# 3. 断音 / 爆音：≥5ms 的全零段，两侧 20ms 都在发声（> -40dB）、又不在字与字之间的停顿里，才算字中间掉音
+#   （TTS 在停顿处本来就输出全零；句与句的接缝处留下的是配音自带的句间静音。判法见 voice.zero_dropouts）
+from voice import zero_dropouts
+dropouts = [f"{a:.2f}s({d * 1000:.0f}ms)" for a, d in zero_dropouts(x, sr, items, [c["at"] for c in tl["audioClips"][1:]])]
 jumps = int((np.abs(np.diff(x)) > 0.5).sum())
 check("发声中无断音/爆音", not dropouts and jumps == 0, f"字中间掉音 {len(dropouts)} 处{('：' + '、'.join(dropouts)) if dropouts else ''}，突跳 {jumps} 处")
 

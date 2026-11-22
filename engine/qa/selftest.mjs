@@ -1429,6 +1429,36 @@ print(json.dumps(out, ensure_ascii=False))`], { encoding: 'utf8' });
   record('配音断句：没标点却停了 0.3 秒', !!o && kinds(o.pause) === '天黑|不天黑:停', out);
   record('配音断句：逗号前、句末拖长不算，drawl.minSec 填 0 不查（不误报）', !!o && !o.beforeComma.length && !o.last.length && !o.off.length, out);
 }
+// ---------- 字中间掉音（tts/voice.py 的 zero_dropouts，单元检查）：字里挖 40ms 全零要报；逗号停顿处整段全零（TTS 本来就这样输出）、
+// 前一个字收得快（20ms 窗里还在发声）的不报（e03-coldest 成片 v1「皮开尔文，那是」的逗号停顿被当成掉音，整片停在渲染前）----------
+{
+  const r = spawnSync(PY_QA, ['-c', `
+import sys, types, json
+sys.modules['mlx'] = types.ModuleType('mlx'); sys.modules['mlx.core'] = types.ModuleType('mlx.core'); sys.modules['mlx'].core = sys.modules['mlx.core']
+sys.path.insert(0, '../tts')
+import numpy as np
+from voice import zero_dropouts
+sr = 16000
+def take(durs, gaps):
+    # 每个字一段 0.3 振幅的浊音、首尾 10ms 线性淡入淡出；gaps：{第几个字后面: 全零秒数}
+    xs, items, t = [], [], 0.0
+    for i, d in enumerate(durs):
+        n, f = int(d * sr), int(0.01 * sr)
+        s = 0.3 * np.sin(2 * np.pi * 220 * np.arange(n) / sr); s[:f] *= np.linspace(0, 1, f); s[-f:] *= np.linspace(1, 0, f)
+        xs.append(s); items.append({'t0': t, 't1': t + d}); t += d
+        g = gaps.get(i, 0.0)
+        if g: xs.append(np.zeros(int(g * sr))); t += g
+    return np.concatenate(xs), items
+x, items = take([0.24] * 6, {3: 0.3})        # 「皮开尔文，那是」：第 4 个字后面逗号停 0.3 秒
+hole = x.copy(); m = int(0.36 * sr); hole[m:m + int(0.04 * sr)] = 0   # 第 2 个字正中挖 40ms
+print(json.dumps({'pause': zero_dropouts(x, sr, items), 'pauseNoTiming': zero_dropouts(x, sr), 'hole': zero_dropouts(hole, sr, items),
+                  'joint': zero_dropouts(x, sr, (), [1.11])}))`], { encoding: 'utf8' }); // joint：没有逐字时间，停顿正好是两段配音的接缝
+  let o = null;
+  try { o = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch { /* 下面按漏掉记，打出 stderr */ }
+  const out = (r.stdout || '') + (r.stderr || '');
+  record('字中间掉音：字里挖 40ms 全零（单元检查）', !!o && o.hole.length === 1 && Math.abs(o.hole[0][0] - 0.36) < 0.002, out);
+  record('字中间掉音：逗号停顿处整段全零不算，接缝处的也不算（不误报；没有逐字时间时照旧按两侧发声判）', !!o && !o.pause.length && !o.joint.length && o.pauseNoTiming.length === 1, out);
+}
 
 // ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------
 {

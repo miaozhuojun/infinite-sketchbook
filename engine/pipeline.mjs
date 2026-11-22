@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { PY_QA, PY_MLX } from './qa/pyenv.mjs';
 import { loadStyle } from './compiler/validate.mjs';
 import { isDialogue, sentenceSpeakers, turnStarts, voicesOf } from './compiler/speakers.mjs';
+import { runLogged } from './compiler/live_log.mjs';
 
 const beatsPath = process.argv[2];
 const beats = JSON.parse(fs.readFileSync(beatsPath, 'utf8'));
@@ -30,6 +31,8 @@ const outDir = arg('--out') ?? path.join('out', SAMPLE ? SAMPLE_ID : beats.id);
 fs.mkdirSync(path.join(outDir, 'review'), { recursive: true });
 
 const stages = [];
+// 第几轮自动换种子重配（见文末：旁白检查点名了句子，流水线带着 PIPE_REVOICE 重跑自己）
+const round = Number(process.env.PIPE_REVOICE ?? 0);
 // 渲染用的混音（时间线里写的，相对 public/）；分段渲染把它整条配到拼好的画面上
 const audioOf = (tl) => { const j = JSON.parse(fs.readFileSync(tl, 'utf8')), a = j.audio ?? j.narration; return a ? ['--audio', path.join('public', a)] : []; };
 const fpsOf = (tl) => JSON.parse(fs.readFileSync(tl, 'utf8')).fps;
@@ -46,6 +49,20 @@ function run(name, cmd, args, opts = {}) {
   const ok = record(name, r.status, (r.stdout || '') + (r.stderr || ''), t0, stages);
   // 配音：没配出来的句子在终端里也一条条列全（报告里本来就逐条写进「待改」），不用翻报告才知道卡了哪几句
   if (!ok && opts.listProblems) for (const p of stages.at(-1).problems) console.log(`    待改：${p}`);
+  return ok;
+}
+// 配音这几步（一跑几十分钟到几小时）：完整输出边跑边写进 log（tts/out/<id>.<说话人>.voice.log，跑的时候 tail -f 看进度），报告里写上这个路径；
+// 「[卡句]」那一行（qwen_clone.py：一句试到上限的一半还没有一条过关）当场打在终端上，不等这一步跑完。
+// 原来用 spawnSync，跑完才有输出，报告只留最后 1500 字：e02-voyager 主讲配音 2 小时 29 分后才报失败，看不出别的句子试了多少个种子
+async function runVoice(name, cmd, args, log, opts = {}) {
+  const t0 = Date.now();
+  console.log(`… ${name}：完整输出边跑边写在 ${log}`);
+  const { status, out } = await runLogged(cmd, args, { cwd: opts.cwd, log, append: round > 0, header: round ? `\n# ———— 第 ${round} 轮自动换种子重配 ————` : '',
+    onLine: (l) => { if (l.startsWith('[卡句]')) console.log(`    ${l}`); } });
+  const ok = record(name, status, out, t0, stages);
+  stages.at(-1).log = log;
+  if (!ok && opts.listProblems) for (const p of stages.at(-1).problems) console.log(`    待改：${p}`);
+  if (!ok) console.log(`    完整输出：${log}`);
   return ok;
 }
 // 同一步骤的异步版：各画幅的混音、渲染、检查同时跑（原来一个画幅做完才做下一个，两个画幅约 20 分钟）。结果记进这个画幅自己的列表，报告里仍按画幅顺序排
@@ -68,7 +85,8 @@ function record(name, status, out, t0, list) {
   const problems = [...(out.match(/问题 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\[错误\] (.*)$/gm)].map((m) => m[1])]
     .map((l) => l.trim()).filter(Boolean);
   const artifacts = [...out.matchAll(/^(?:设备预览|联系表|理解度测试材料|组件预览|存证)：(\S+)/gm)].map((m) => m[1]);
-  const notes = [...out.matchAll(/^((?:书写声|音乐|分段渲染)：.*|\[警告\] .*)$/gm)].map((m) => m[1]); // 混音用了哪些素材、分段渲染复用了几段，写进报告
+  // 混音用了哪些素材、分段渲染复用了几段、配音时卡过的句子（[卡句]：试到一半还没过，后来过了的也列上），写进报告
+  const notes = [...out.matchAll(/^((?:书写声|音乐|分段渲染)：.*|\[(?:警告|卡句)\] .*)$/gm)].map((m) => m[1]);
   // 建议：创作取舍（风格规范 gates 里的 advice 级），写进报告，不判失败
   const advice = [...(out.match(/建议 \d+ 项：\n((?:\s+.*\n?)*)/) || [, ''])[1].trim().split('\n'), ...[...out.matchAll(/^\s*\[建议\] (.*)$/gm)].map((m) => m[1])]
     .map((l) => l.trim()).filter(Boolean);
@@ -117,6 +135,7 @@ if (beatsOk && readingsOk && beats.narration.script && !beats.narration.syntheti
   const speakers = dialogue ? ['', ...Object.keys(voicesOf(beats))].filter((sp) => sents.some((s) => s.speaker === sp)) : [''];
   let vb = base, fastV = false; // vb：这次配到哪个前缀；样片快配时是 <配音>.sample，不覆盖精配的那份
   const partOf = (sp) => (dialogue ? `${vb}.${sp || 'main'}` : vb);
+  const logOf = (sp) => `${vb}.${sp || 'main'}.voice.log`; // 配音的完整输出（边跑边写）
   const whoSays = (sp) => (sp ? voicesOf(beats)[sp].label ?? sp : '主讲');
   const argsOf = (sp) => {
     const keep = (t) => !dialogue || sents.some((s) => s.speaker === sp && s.text === t);
@@ -142,13 +161,15 @@ if (beatsOk && readingsOk && beats.narration.script && !beats.narration.syntheti
   const missing = dialogue ? speakers.filter(Boolean).map((sp) => voicesOf(beats)[sp].voice).filter((f) => !fs.existsSync(path.resolve('../tts', f))) : [];
   if (PY_MLX && missing.length) { voiceOk = false; stages.push({ name: '配音生成', ok: false, secs: '0.0', checks: [], fixes: [], artifacts: [], tail: '', problems: [`没有音色配置 ${missing.join('、')}（narration.voices 里写的，相对 tts/）`] }); }
   else if (PY_MLX && sameVoice) { skip('配音生成', `旁白稿、语气、换种子、配音配置和程序都和上次配成功时一样，直接用上次的${fastV ? '样片快配' : ''}配音`); fs.copyFileSync(vb + '.wav', voicedAudio); }
-  else if (PY_MLX && !dialogue) { if (voiceOk = run(`配音生成（${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, voiceArgs, { cwd: '../tts', listProblems: true })) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); } }
+  else if (PY_MLX && !dialogue) { if (voiceOk = await runVoice(`配音生成（${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, voiceArgs, logOf(''), { cwd: '../tts', listProblems: true })) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); } }
   else if (PY_MLX) {
     // 一个人有句子没配出来，其余的人照样配完：卡住的句子一轮列全（原来第一个人失败就停，后面的人卡不卡要等下一轮才知道）
-    voiceOk = speakers.map((sp) => run(`配音生成（${whoSays(sp)}，${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, argsOf(sp), { cwd: '../tts', listProblems: true })).every(Boolean);
+    const oks = [];
+    for (const sp of speakers) oks.push(await runVoice(`配音生成（${whoSays(sp)}，${fastV ? '样片快配，' : ''}按句缓存）`, PY_MLX, argsOf(sp), logOf(sp), { cwd: '../tts', listProblems: true }));
+    voiceOk = oks.every(Boolean);
     if (voiceOk) {
       fs.writeFileSync(vb + '.order.json', JSON.stringify(sents, null, 1));
-      voiceOk = run('对话拼接（按旁白稿顺序）', PY_MLX, ['dialogue.py', vb, vb + '.order.json', ...speakers.flatMap((sp) => ['--part', `${sp}=${partOf(sp)}`])], { cwd: '../tts' });
+      voiceOk = await runVoice('对话拼接（按旁白稿顺序）', PY_MLX, ['dialogue.py', vb, vb + '.order.json', ...speakers.flatMap((sp) => ['--part', `${sp}=${partOf(sp)}`])], `${vb}.dialogue.voice.log`, { cwd: '../tts' });
     }
     if (voiceOk) { fs.copyFileSync(vb + '.wav', voicedAudio); fs.writeFileSync(keyFile, voiceKey); }
   }
@@ -210,17 +231,16 @@ if (libOk && beatsOk && voiceOk && !SAMPLE) {
   }));
   for (const t of compiled) stages.push(...pre[t]);
   const mixed = compiled.filter((t) => pre[t][0]?.ok);
-  // 自动换种子重配：旁白检查点名了掉嗓子、破音、硬切、语速不对、逐句回转有出入（关卡 speech.lineAsr 是 hard 时）的句子（<时间线>.revoice.json），就给这几句换种子重配，
+  // 自动换种子重配：旁白检查点名了掉嗓子、破音、硬切、语速不对、回声超标、沙沙声超标（中位数超了时最高的那几句）、逐句回转有出入（关卡 speech.lineAsr 是 hard 时）的句子（<时间线>.revoice.json），就给这几句换种子重配，
   // 重新编译、混音、再查，最多两轮，都在渲染之前。配音按句缓存，只有点名的句子重配；配音那边拼好后已经查过一遍，
   // 成片旁白（重采样、插停顿、片段淡入淡出）上偶尔还会查出来（E02 v5）
-  const round = Number(process.env.PIPE_REVOICE ?? 0);
   const revoice = [...new Set(speechFailed.flatMap((t) => { const f = `build/${beats.id}-${t}.timeline.revoice.json`; return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; }))];
   if (revoice.length && round < 2 && PY_MLX) {
     const f = path.resolve('../tts/out', path.basename(audioPath, path.extname(audioPath))) + '.autoreseed.json';
     const auto = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
     for (const sent of revoice) auto[sent] = Math.max(auto[sent] ?? 0, beats.narration.reseed?.[sent] ?? 0) + 1;
     fs.writeFileSync(f, JSON.stringify(auto, null, 1));
-    console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切、语速不对或逐句回转有出入），换种子重配、重新混音再查，不渲染（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
+    console.log(`\n↻ 旁白检查点名 ${revoice.length} 句（掉嗓子、破音、硬切、语速不对、回声、沙沙声或逐句回转有出入），换种子重配、重新混音再查，不渲染（第 ${round + 1} 轮，最多 2 轮）：${revoice.map((x) => `「${x.slice(0, 12)}」`).join('')}`);
     const r = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, PIPE_REVOICE: String(round + 1) } });
     process.exit(r.status ?? 1);
   }
@@ -268,6 +288,7 @@ for (const s of stages) {
   for (const a of s.advice ?? []) lines.push(`- 建议：${a}`);
   for (const a of s.artifacts) lines.push(`- 产物：${a}`);
   for (const n of s.notes ?? []) lines.push(`- ${n}`);
+  if (s.log) lines.push(`- 完整输出：\`${s.log}\``);
   if (s.tail) lines.push('', '```', s.tail, '```');
   lines.push('');
 }

@@ -13,7 +13,12 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
+
+# 按行刷新：输出接到管道或文件时（流水线把它边跑边写进 tts/out/<id>.<说话人>.voice.log），Python 默认攒满 8KB 才写一次，
+# tail 着看半天没动静，「卡句」那一行也要等好几分钟才出来
+sys.stdout.reconfigure(line_buffering=True)
 
 import mlx.core as mx
 import numpy as np
@@ -288,7 +293,8 @@ DRAWL = voice.get("drawl")
 # 配音容易听错的说法（tts/misheard.json，本机私有；没有时从 misheard.example.json 起头）：一句试满都没过、回转识别至少两次听成同一个说法，
 # 就把「稿子 / 听成 / 听错的字」追加进去。分镜校验的写稿自查（engine/compiler/script_checks.mjs 的 script.tts）以后提醒含这些字的句子。
 # E03：「那，拧哪个？」听成「那您哪个」，「往哪边拧？」听成「往哪边去」
-MISHEARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "misheard.json")
+# TTS_MISHEARD：只写指定的那个文件（自测用，和分镜校验 script_checks.mjs 的同名变量一样），不碰本机那份
+MISHEARD = os.environ.get("TTS_MISHEARD") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "misheard.json")
 HEARD = {}  # 句子 → 这次各个种子回转识别没对上时听成的说法（只收字数对得上的那种，给 misheard.json 用）
 HYPS = {}  # 句子 → 回转识别没对上时听成的说法，字数差多少都记，卡句清单用（识别自己多加了符号、多念漏念几个字的，在清单里一眼看得出）
 # 句子 → 这次没过关的种子 [(种子, 哪一类, 那一行说明)]。一句试满都没过时不再当场中断：记下来接着配后面的句子，
@@ -303,10 +309,40 @@ POLY_BAD = {}  # 句子 → 每次判成念错的多音字
 POLY_TRIES = 3  # 同一句念错几次就换写法（换写法以后还念错，就照别的关卡一样试满）
 
 
+def tally(text, since=0):
+    """这句话各个种子没过关的原因（从 FAILS 的第 since 条算起），按次数从多到少：「掉嗓子 18 次、回转识别没对上 9 次」"""
+    from collections import Counter
+    return "、".join(f"{k} {n} 次" for k, n in Counter(k for _, k, _ in FAILS.get(text, [])[since:]).most_common())
+
+
+def heard_as(text, since=0):
+    """这句话回转识别最常听成的两种说法：「；回转识别听成「……」5 次」，没有就是空串"""
+    from collections import Counter
+    top = Counter(HYPS.get(text, [])[since:]).most_common(2)
+    return "；回转识别听成" + "、".join(f"「{h}」{n} 次" for h, n in top) if top else ""
+
+
+# 卡句早报（第四次白等：E05、E07、E08 各一次，e02-voyager 主讲配音跑了 2 小时 29 分才报出一句配不出来）：
+# 一句话从 make_take 开始配（主循环、拼好后的重配都是），试到上限（maxTries × (1 + extraRounds) 个种子）的一半还没有一条过关，
+# 立刻打一行「[卡句]」：原文、试了几个种子、各类原因的次数、回转识别听成了什么。不停下，接着试完；
+# 流水线把这一行当场打在终端上，完整输出边跑边写在 tts/out/<id>.<说话人>.voice.log，几分钟就知道是哪一句、为什么，可以先去改写它
+LIMIT = args.max_tries * (1 + voice.get("extraRounds", 0))
+WATCH = {}  # 句子 → 这一次配它的记录：从 FAILS、HYPS 的第几条算起，第几句（label），有没有一条过关，「卡句」打过没有
+
+
+def watch(text, label):
+    WATCH[text] = {"from": len(FAILS.get(text, [])), "hyp": len(HYPS.get(text, [])), "label": label, "passed": False, "warned": False}
+
+
 def reject(text, seed, kind, msg):
-    """一个种子没过关：照旧打印那一行，同时按类别记下，卡句清单要用"""
+    """一个种子没过关：照旧打印那一行，同时按类别记下，卡句清单要用；试到上限的一半还没有一条过关，打「[卡句]」"""
     FAILS.setdefault(text, []).append((seed, kind, msg))
     print(f"    种子 {seed}{msg}")
+    w = WATCH.get(text)
+    if w and not w["passed"] and not w["warned"] and len(FAILS[text]) - w["from"] >= (LIMIT + 1) // 2:
+        w["warned"] = True
+        print(f"[卡句] {w['label']}「{text.strip()}」试了 {len(FAILS[text]) - w['from']} 个种子还没有一条过关（一句先试 {LIMIT} 个、不行再拆两半配，还在接着试；"
+              f"配不出来的话这一轮配完一起报）：{tally(text, w['from'])}{heard_as(text, w['hyp'])}")
 
 
 def note_misheard(sent):
@@ -389,11 +425,11 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
             if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, GEN_FLOOR)):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
-            reject(text, seed, "回转识别没对上" if c > 0 else "掉音", f" 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
-            if c > 0:
+            if c > 0:  # 先记听成了什么再 reject：「卡句」那一行要写上
                 HYPS.setdefault(text, []).append(hyp)
             if c > 0 and abs(len(hs) - len(rs)) <= 1:  # 开头串进多余字的那种（只多出字）不算听错
                 HEARD.setdefault(text, []).append(hyp)
+            reject(text, seed, "回转识别没对上" if c > 0 else "掉音", f" 未通过（拼音错误率 {c:.3f}，掉音 {dz}）：{hyp}")
             continue
         audio = soften_edges(trim_edges(audio, sr), sr)
         rel = align(audio, sr, text)
@@ -461,6 +497,8 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         score = tone_cost(pr, target, BASE_F0, BASE_RATE) + 300 * (1 - float(e @ PACK_EMB)) + flow_cost(pr, PREV, FLOW, None if RATE.get("target") else BASE_RATE, target.get("rate"))
         pr["missed"] = len(missed)  # 逗号处一口气念过去的个数：挑候选时先比它，再比语气分（该断的地方要断）
         cands.append((score, (audio, sr, seed, note, rel, bk), pr))
+        if text in WATCH:
+            WATCH[text]["passed"] = True  # 有一条过关了：再凑候选时没过的种子不算卡
     if cands:
         cands.sort(key=lambda q: (q[2].get("missed", 0), q[0]))
         sc, pick, pr = cands[0]
@@ -537,9 +575,10 @@ def stray_cached(key, sent):
     return bool(st)
 
 
-def make_take(sent, seed0, strict=False):
+def make_take(sent, seed0, strict=False, label=""):
     """配一句的完整做法（主循环、拼好后的吞字重配、音色一致重配都用它）：先按 seed0 起试一轮，不过就再试 extraRounds 轮新种子，
-    还不过就自动拆成两半配；都不行返回 None"""
+    还不过就自动拆成两半配；都不行返回 None。label 是「第几句、为什么配」，试到上限一半还没过时打在「[卡句]」那一行里"""
+    watch(sent, label)
     for r in range(1 + voice.get("extraRounds", 0)):
         try:
             res = synth_sentence(sent, seed0 + r * args.max_tries, ref_for(sent), strict)
@@ -786,7 +825,7 @@ for i, sent in enumerate(sents):
     else:
         # 默认参考音先多试几轮（每轮 max_tries 个新种子），再自动拆两半：换参考音会让这一句听着像换了个人（用户听 E01 v15）
         # 同一句话在稿子里出现两次、头一次已经卡住：种子是确定的，再试也是同样几十条都不过
-        res = None if sent in stuck_at else make_take(sent, seed_of(sent))
+        res = None if sent in stuck_at else make_take(sent, seed_of(sent), label=f"第 {i + 1}/{len(sents)} 句")
         if not res and sent not in stuck_at and FALLBACK and sent.strip() not in mood_of:
             print(f"  「{sent}」用默认参考音 {args.max_tries} 次都没过，改用「{FALLBACK}」参考音")
             open(fb_mark, "w").write(FALLBACK)
@@ -825,17 +864,22 @@ for i, sent in enumerate(sents):
     print(f"  第 {i + 1}/{len(sents)} 句（{('情绪「' + mood + '」，') if mood else ''}种子 {seed}，{len(audio) / sr:.2f}s，{time.time() - t0:.1f}s）{('：' + note) if note else ''}  {sent}")
 
 
-def tally(text):
-    """这句话各个种子没过关的原因，按次数从多到少：「掉嗓子 18 次、回转识别没对上 9 次」"""
-    from collections import Counter
-    return "、".join(f"{k} {n} 次" for k, n in Counter(k for _, k, _ in FAILS.get(text, [])).most_common())
+def why_stuck(sent, since=0, hyp=0):
+    """一句配不出来的原因（从 FAILS、HYPS 的第 since、hyp 条算起）：试了几条、各类原因几次、听成了什么、拆两半是哪一半没过"""
+    why = f"试了 {len(FAILS.get(sent, [])) - since} 条：{tally(sent, since) or '没有记录'}{heard_as(sent, hyp)}"
+    if sent in SPLIT_STUCK:
+        half = SPLIT_STUCK[sent]
+        return why + f"；拆成两半，「{half}」这一半也没过" + (f"（{tally(half)}{heard_as(half)}）" if tally(half) else "")
+    return why + "；句子里没有能拆成两半的逗号"
 
 
-def heard_as(text):
-    """这句话回转识别最常听成的两种说法：「；回转识别听成「……」5 次」，没有就是空串"""
+def stuck_row(sent, index, since=0, hyp=0, **extra):
+    """卡句清单 <输出前缀>.stuck.json 里的一句：每个种子的原因"""
     from collections import Counter
-    top = Counter(HYPS.get(text, [])).most_common(2)
-    return "；回转识别听成" + "、".join(f"「{h}」{n} 次" for h, n in top) if top else ""
+    seeds = lambda t, a=0: [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(t, [])[a:]]
+    return {"index": index, "text": sent.strip(), **extra, "reasons": dict(Counter(k for _, k, _ in FAILS.get(sent, [])[since:])),
+            "heard": [{"text": h, "times": n} for h, n in Counter(HYPS.get(sent, [])[hyp:]).most_common()], "seeds": seeds(sent, since),
+            **({"half": {"text": SPLIT_STUCK[sent], "seeds": seeds(SPLIT_STUCK[sent])}} if sent in SPLIT_STUCK else {})}
 
 
 # 卡句清单：试满都没配出来的句子一次列全，每句一行 [错误]（流水线把这些行原样记进报告的「待改」），每个种子的原因另存 <输出前缀>.stuck.json。
@@ -843,20 +887,10 @@ def heard_as(text):
 # 没配全就不拼接、不做后面的整段检查（吞字、音色一致），那些检查在重跑配全后才做，可能再重配几句
 STUCK_FILE = args.out + ".stuck.json"
 if stuck_at:
-    from collections import Counter
     rows = []
     for sent, idx in stuck_at.items():
-        why = f"试了 {len(FAILS.get(sent, []))} 条：{tally(sent) or '没有记录'}{heard_as(sent)}"
-        if sent in SPLIT_STUCK:
-            half = SPLIT_STUCK[sent]
-            why += f"；拆成两半，「{half}」这一半也没过" + (f"（{tally(half)}{heard_as(half)}）" if tally(half) else "")
-        else:
-            why += "；句子里没有能拆成两半的逗号"
-        print(f"[错误] 第 {'、'.join(str(k + 1) for k in idx)}/{len(sents)} 句配不出来：「{sent.strip()}」{why}")
-        rows.append({"index": [k + 1 for k in idx], "text": sent.strip(), "reasons": dict(Counter(k for _, k, _ in FAILS.get(sent, []))),
-                     "heard": [{"text": h, "times": n} for h, n in Counter(HYPS.get(sent, [])).most_common()],
-                     "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(sent, [])],
-                     **({"half": {"text": SPLIT_STUCK[sent], "seeds": [{"seed": sd, "reason": k, "detail": m.lstrip("： ")} for sd, k, m in FAILS.get(SPLIT_STUCK[sent], [])]}} if sent in SPLIT_STUCK else {})})
+        print(f"[错误] 第 {'、'.join(str(k + 1) for k in idx)}/{len(sents)} 句配不出来：「{sent.strip()}」{why_stuck(sent)}")
+        rows.append(stuck_row(sent, [k + 1 for k in idx]))
     if stopped_at:
         print(f"[错误] 配到第 {stopped_at}/{len(sents)} 句就停了：已经卡了 {len(stuck_at)} 句，比这一轮新配出来的（{fresh_ok} 句）还多，"
               f"多半是参考音或 voice.json 的阈值出了问题，先查配置；后面 {len(sents) - stopped_at} 句没试")
@@ -929,30 +963,48 @@ def assemble():
     return np.concatenate(pieces), words, spans
 
 
+# 拼好后查出问题（字偏弱、拼好后的掉嗓子破音硬切语速回声、音色不像整集）的句子，每句最多换种子重配一次，不自动多轮硬试：
+# 种子是确定的，原来三轮里有两轮是从同一个种子起、把同样几十条再试一遍（e02-voyager 一句「十」偏弱，重配三轮各试满 50 条，主讲配音 2 小时 29 分才报）。
+# 重配一次还不行就报：字偏弱的列成 [错误] 非零退出；别的几项留原来那条，交给成片旁白检查点名、流水线自动换种子
+
 # 吞字要和成片旁白检查一个口径：拿整段所有字的响度中位数做参照（单句里看不出来），所以拼好后再查一遍，有字偏弱的句子换下一个种子重配
-for rnd in range(4):
+weak_tried = {}  # 句号 → 那一次重配：{"seed": 新那条的种子，没配出来是 None；"from"、"hyp"：从 FAILS、HYPS 的第几条算起}
+while True:
     full, words, spans = assemble()
     if FAST:
         break  # 样片不为字偏弱重配
     _, weak = weak_chars(full, sr, [{"text": w["text"], "t0": w["start"], "t1": w["end"]} for w in words])
     bad = sorted({words[k]["sent"] for k, _ in weak})
-    if not bad:
+    what = lambda i: "；".join(m for k, m in weak if words[k]["sent"] == i)
+    todo = [i for i in bad if i not in weak_tried]
+    if not todo:
+        if bad:
+            rows = []
+            for i in bad:
+                t_ = weak_tried[i]
+                how = (f"换种子重配了一次也没配出全部关卡都过的一条（{why_stuck(sents[i], t_['from'], t_['hyp'])}）" if t_["seed"] is None
+                       else f"换种子重配了一次，新的一条（种子 {t_['seed']}）还是偏弱")
+                print(f"[错误] 第 {i + 1}/{len(sents)} 句拼好后有字偏弱（{what(i)}），{how}：「{sents[i].strip()}」")
+                rows.append(stuck_row(sents[i], [i + 1], t_["from"], t_["hyp"], after=f"拼好后有字偏弱：{what(i)}"))
+            json.dump({"sentences": len(sents), "stuck": rows}, open(STUCK_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            raise SystemExit(f"{len(bad)} 句拼好后有字偏弱，换种子重配一次也没好（上面 [错误] 各行；每个种子的原因在 {STUCK_FILE}）。"
+                             "需要人工处理：改写这一句（偏弱的那个字换个说法、同一个词别在一句里说好几遍、拆短），先单独试配几分钟再重跑")
         break
-    if rnd == 3:
-        raise SystemExit("重配 3 轮后仍有字偏弱：" + "；".join(m for _, m in weak))
-    for i in bad:
-        print(f"  拼好后第 {i + 1} 句有字偏弱（{'；'.join(m for k, m in weak if words[k]['sent'] == i)}），换下一个种子重配")
-        res = make_take(sents[i], takes[i][2] + 1, strict=True)
+    for i in todo:
+        print(f"  拼好后第 {i + 1} 句有字偏弱（{what(i)}），换下一个种子重配")
+        weak_tried[i] = {"seed": None, "from": len(FAILS.get(sents[i], [])), "hyp": len(HYPS.get(sents[i], []))}
+        res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（拼好后有字偏弱，换种子重配）")
         if not res:
             print(f"    第 {i + 1} 句换种子没配出来，留原来那条"); continue
         audio, sr, seed, note, rel, bk = res
+        weak_tried[i]["seed"] = seed
         takes[i] = [audio, sr, seed, note, rel]
         joined.discard(i); joined.discard(i - 1)  # 单独重配了，前后按句间停顿拼
         key = os.path.join(CACHE, cache_key(sents[i]))
         sf.write(key + ".wav", audio, sr)
         json.dump({"text": sents[i], "seed": seed, "note": note, "words": rel, **({"bak": round(bk, 3)} if bk is not None else {})}, open(key + ".json", "w", encoding="utf-8"), ensure_ascii=False)
 # 拼好后在整段上按成片旁白检查的口径再查一遍（一段一起配的声音切开、对齐响度以后，个别卡在线上的会冒出来；E02 v4「定在5」破音），
-# 查出来的句子单独换种子重配，最多 3 轮——不用人去成片里找、手动换种子
+# 查出来的句子单独换种子重配，每句最多一次（见上面「不自动多轮硬试」）——不用人去成片里找、手动换种子
 # 也查成片旁白检查要查的其余几项（掉嗓子用成片的下限、每句回声）：E02 v4 有一句生成时过了、拼好后掉嗓子 139Hz，一句回声 122ms
 FINAL_ECHO = 0 if FAST else voice.get("maxEcho", 0)
 def assembled_defects(full, spans, words):
@@ -980,17 +1032,20 @@ if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
     # 原来每跑一次都对它试满几十个种子，一轮里三轮还各试一遍（E02 父子对话样稿「一开始，旋钮是随便拧的。」，主讲配音每次多花几分钟）
     post_key = lambda i: os.path.join(CACHE, cache_key(sents[i])) + ".postfail"
     gave_up = {i for i in range(len(sents)) if os.path.exists(post_key(i)) and json.load(open(post_key(i), encoding="utf-8")).get("seed") == takes[i][2]}
-    for rnd in range(3):
+    revoiced = set()  # 拼好后已经重配过一次的句子
+    while True:
         full, words, spans = assemble()
         defects = assembled_defects(full, spans, words)
-        for i in sorted(set(defects) & gave_up):
-            print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}：以前换种子试满都没配出来，留原来那条（{sents[i]}）")
-        bad = sorted(set(defects) - gave_up)
+        bad = sorted(set(defects) - gave_up - revoiced)
         if not bad:
+            for i in sorted(defects):  # 重配过一次还有、或者换种子配不出来的：报出来，留原来那条
+                print(f"[警告] 拼好后第 {i + 1}/{len(sents)} 句{'、'.join(defects[i])}："
+                      + ("换种子配不出全部关卡都过的一条" if i in gave_up else "换种子重配过一次还是这样") + f"，留这一条，成片旁白检查会点名、流水线自动换种子再配（{sents[i].strip()}）")
             break
         for i in bad:
+            revoiced.add(i)
             print(f"  拼好后第 {i + 1} 句{'、'.join(defects[i])}，单独换种子重配：{sents[i]}")
-            res = make_take(sents[i], takes[i][2] + 1, strict=True)
+            res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（拼好后{'、'.join(d.split(' ')[0] for d in defects[i])}，换种子重配）")
             if not res:
                 gave_up.add(i)
                 note_misheard(sents[i])
@@ -1006,7 +1061,7 @@ if NO_BREAKS or FLOOR or FINAL_ECHO or RATE.get("target"):
             pre.pop(i, None)
 
 # 每句都是同一个人：按句生成时每句是单独采样的，音色会一句一句地飘，听着像几个人你一句我一句（用户听 E01 v15）。
-# 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，最多 3 轮；还不够就留最像的那条
+# 每句的说话人嵌入和整集的平均比，低于 takeMinConsistency 的句子换下一个种子重配，每句最多一次（见上面「不自动多轮硬试」）；还不够就留最像的那条
 MIN_CONS = 0 if FAST else voice.get("takeMinConsistency", 0)
 if MIN_CONS:
     embs = [None] * len(sents)
@@ -1015,7 +1070,7 @@ if MIN_CONS:
     meta_of = lambda i: (lambda k: json.load(open(k, encoding="utf-8")) if os.path.exists(k) else {})(os.path.join(CACHE, cache_key(sents[i])) + ".json")
     settled = {i for i in range(len(sents)) if meta_of(i).get("consChecked")}
     tried = set()
-    for rnd in range(4):
+    while True:
         for i, tk in enumerate(takes):
             if embs[i] is None:
                 e = embedding(spk, tk[0], tk[1]); embs[i] = e / np.linalg.norm(e)
@@ -1024,15 +1079,15 @@ if MIN_CONS:
         for i, c in enumerate(cos):
             if i not in best_c or c > best_c[i][0]:
                 best_c[i] = (c, list(takes[i]))
-        bad = [i for i, c in enumerate(cos) if c < MIN_CONS and i not in settled]
-        if not bad or rnd == 3:
+        bad = [i for i, c in enumerate(cos) if c < MIN_CONS and i not in settled and i not in tried]  # 重配过一次的不再重配
+        if not bad:
             break
         for i in bad:
             print(f"  第 {i + 1} 句音色和整集不太像（{cos[i]:.3f}，要 ≥{MIN_CONS}），换下一个种子重配：{sents[i]}")
             tried.add(i)
-            res = make_take(sents[i], takes[i][2] + 1, strict=True)
+            res = make_take(sents[i], takes[i][2] + 1, strict=True, label=f"第 {i + 1}/{len(sents)} 句（音色和整集不太像，换种子重配）")
             if not res:
-                settled.add(i)  # 这一轮全部关卡都过的一条都没有，再试下一轮也是从同一个种子起，不再试
+                settled.add(i)  # 全部关卡都过的一条都没有：留原来那条
                 print(f"    第 {i + 1} 句换种子没配出全部关卡都过的，留原来那条"); continue
             audio, sr, seed, note, rel, bk = res
             takes[i] = [audio, sr, seed, note, rel]; embs[i] = None
@@ -1042,7 +1097,7 @@ if MIN_CONS:
         if c < MIN_CONS and best_c[i][0] > c:
             takes[i] = best_c[i][1]; final[i] = best_c[i][0]
             joined.discard(i); joined.discard(i - 1)
-            print(f"  第 {i + 1} 句重配 3 轮仍不到 {MIN_CONS}，用最像的一条（{best_c[i][0]:.3f}）")
+            print(f"  第 {i + 1} 句重配一次仍不到 {MIN_CONS}，用最像的一条（{best_c[i][0]:.3f}）")
     for i, tk in enumerate(takes):
         key = os.path.join(CACHE, cache_key(sents[i]))
         meta = json.load(open(key + ".json", encoding="utf-8")) if os.path.exists(key + ".json") else {}

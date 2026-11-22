@@ -45,6 +45,10 @@ const SKIP = new Set(process.argv.includes('--skip') ? process.argv[process.argv
 const noSpeech = SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : sbeatsSrc.narration?.synthetic ? '配音是合成提示音，没有人声可查' : PY_MLX ? null : '没有本地配音环境（PY_MLX）';
 const OTHER_VOICE = path.resolve('qa/fixtures/other-voice.mp3');
 const speechCase = (name, mutate, mustSay, why = noSpeech) => (why ? skip(name, why) : expectFail(name, mutate, speech, mustSay, sbase));
+// 旁白检查写的 <时间线>.revoice.json（流水线据此自动换种子重配）：注入用例要它点名该点的句子。基线的 timing 没有 sentences 时旁白检查不点名，返回 null
+const REVOICE = path.resolve('build/_selftest.timeline.revoice.json');
+const revoiced = () => { try { return JSON.parse(fs.readFileSync(REVOICE, 'utf8')); } catch { return []; } };
+const sentencesOf = () => JSON.parse(fs.readFileSync(path.resolve('data', sbeatsSrc.narration.timing), 'utf8')).sentences ?? null;
 
 // 挑注入目标用的几何：和渲染、检查共用同一套镜头
 const toScreen = (tl, [x, y], t) => { const c = cameraAt(tl.camera, t); return [(x - c.x) * c.z + tl.view.cx, (y - c.y) * c.z + tl.view.cy]; };
@@ -387,7 +391,8 @@ x = x + (n if x.ndim == 1 else n[:, None])
 sf.write(${JSON.stringify(dst)}, x, sr)`]);
   tl.source = 'audio/_selftest.source.wav';
   delete tl.audio;
-  return { cleanup: [dst] };
+  // 中位数超了：最高的那几句要进 revoice.json 自动换种子重配（tts/revoice.py 的 median_over）
+  return { cleanup: [dst, REVOICE], expect: (out) => out.includes('[失败] 说话时没有沙沙声') && (!sentencesOf() || revoiced().length > 0) };
 }, '[失败] 说话时没有沙沙声');
 speechCase('有一句换成了别人的声音（像几个人你一句我一句；用户听 E01 v15）', (tl) => {
   // 源配音里最后一段旁白换成另一个人的声音（同样长、同样响），别的句子不动
@@ -425,7 +430,10 @@ else: x[a:b, :] = w[:, None]
 sf.write(${JSON.stringify(dst)}, x, sr)`]);
   tl.source = 'audio/_selftest.source.wav';
   delete tl.audio;
-  return { cleanup: [dst] };
+  // 超过上限的那一句（最后一段里的句子）要进 revoice.json 自动换种子重配（e02-voyager 一句 112ms，原来只能手写 reseed）
+  const S = sentencesOf(), c = sbase.audioClips.at(-1);
+  const last = (S ?? []).filter((s) => s.end > c.srcIn + 0.05 && s.start < c.srcOut - 0.05).map((s) => s.text);
+  return { cleanup: [dst, REVOICE], expect: (out) => out.includes('[失败] 每句没有回声') && (!S || revoiced().some((t) => last.includes(t))) };
 }, '[失败] 每句没有回声');
 speechCase('有一句比别的句子响 6dB（句与句音量不一样）', (tl) => {
   const src = path.resolve('public', sbase.source), dst = path.resolve('public/audio/_selftest.source.wav');
@@ -1421,6 +1429,89 @@ print(json.dumps(out, ensure_ascii=False))`], { encoding: 'utf8' });
   record('配音断句：字拖长 0.56 秒、没有静音（「天黑|不天黑」）', !!o && kinds(o.drawl) === '天黑|不天黑:拖' && !o.clean.length, out);
   record('配音断句：没标点却停了 0.3 秒', !!o && kinds(o.pause) === '天黑|不天黑:停', out);
   record('配音断句：逗号前、句末拖长不算，drawl.minSec 填 0 不查（不误报）', !!o && !o.beforeComma.length && !o.last.length && !o.off.length, out);
+}
+
+// ---------- 配音卡句早报、拼好后每句只重配一次（tts/qwen_clone.py 整个跑一遍，模型换成桩：qa/fixtures/fake_voice.py，不要配音环境）----------
+// e02-voyager：一句「十」拼好后偏弱，重配三轮、每轮从同一个种子起试满 50 条，主讲配音 2 小时 29 分才报失败，中间看不出卡在哪一句。
+// 剧本一（stuck）：第 2 句每个种子都把「球只」念成「我只」（配不出来）；第 3 句前 16 个种子把「尺子」念成「绳子」（试到一半还没过，后来过了）。
+//   两句都要在第 15 个种子（上限 10×3 的一半）时打一行「[卡句]」，写明试了几个、原因、听成什么；第 2 句的那一行要在它配完之前打出来，只打一次；
+//   整轮配完列出第 2 句（[错误]、stuck.json）、非零退出，第 3 句照样配出来。
+// 剧本二（weak）：第 2 句的「十」每个种子都念得很轻（逐句的关卡都过，拼好后才查出字偏弱）：只重配一次，还偏弱就报 [错误]、非零退出（原来重配三轮）。
+// 剧本三（clean）：同样的稿子不念轻：整个配通。上面两条失败的不是桩
+{
+  const os = await import('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-voice-'));
+  const play = (name, scen) => {
+    const f = path.join(dir, `${name}.json`);
+    fs.writeFileSync(f, JSON.stringify(scen));
+    const r = spawnSync(PY_QA, ['qa/fixtures/fake_voice.py', path.join(dir, name), f], { encoding: 'utf8' });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || ''), dir: path.join(dir, name) };
+  };
+  try {
+    const T = '我们先看一个小圆。这根绳子有几十米长。这样就看清楚了。';
+    const c = play('clean', { text: T, rules: [] });
+    record('假配音环境：没有毛病的稿子整个配通（下面几条的失败不是桩造成的）', c.status === 0 && c.out.includes('通过：3 句'), c.out);
+
+    const S2 = '红球比蓝球大很多倍，蓝球只占一点地方。', S3 = '再拿一根尺子量它。';
+    const a = play('stuck', { text: `我们先看一个小圆。${S2}${S3}这样就看清楚了。`, rules: [{ has: '球只', say: '我只' }, { has: '尺子', say: '绳子', below: 18 }] });
+    const L = a.out.split('\n'), at = (p) => L.findIndex((l) => l.includes(p));
+    const k2 = at(`[卡句] 第 2/4 句「${S2}」试了 15 个种子还没有一条过关`), k3 = at(`[卡句] 第 3/4 句「${S3}」试了 15 个种子还没有一条过关`);
+    let stuck = null;
+    try { stuck = JSON.parse(fs.readFileSync(path.join(a.dir, 'out/fake.stuck.json'), 'utf8')); } catch { /* 下面按漏掉记 */ }
+    record('配音卡句早报：一句试到上限的一半还没过，当场打「[卡句]」（第几句、原文、试了几个、原因、听成什么），只打一次，接着试完',
+      k2 >= 0 && k2 < at('第 2/4 句没配出来') && L[k2].includes('回转识别没对上 15 次') && L[k2].includes('听成「红球比蓝球大很多倍蓝我只占一点地方」15 次')
+      && L.filter((l) => l.startsWith('[卡句] 第 2/4 句')).length === 1 && k3 >= 0 && k3 < at('第 3/4 句（种子 18，'), a.out);
+    record('配音整轮配完一次列出没过的句子、非零退出，试到一半卡过、后来过了的句子照样配出来',
+      a.status !== 0 && L.some((l) => l.startsWith(`[错误] 第 2/4 句配不出来：「${S2}」试了 30 条`)) && !a.out.includes('[错误] 第 3/4 句')
+      && stuck?.stuck.map((x) => x.text).join() === S2, a.out);
+
+    const b = play('weak', { text: T, rules: [{ has: '十', weak: true }] });
+    record('配音拼好后查出字偏弱只重配一次：还偏弱就报 [错误]、非零退出（原来重配三轮、每轮从同一个种子起）',
+      b.status !== 0 && (b.out.match(/拼好后第 2 句有字偏弱/g) || []).length === 1 && b.out.split('\n').some((l) => l.startsWith('[错误] 第 2/3 句拼好后有字偏弱（「十」') && l.includes('还是偏弱')), b.out);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+// ---------- 配音日志边跑边写（compiler/live_log.mjs，流水线的配音几步用它写 tts/out/<id>.<说话人>.voice.log）：子进程还没跑完，
+// 「[卡句]」那一行已经在日志里、已经交给 onLine；stderr 的半行和下一块拼成一整行；一个汉字的字节分在两块里也不乱码；退出码照传；append 接着往下写 ----------
+{
+  const { runLogged } = await import('../compiler/live_log.mjs');
+  const log = path.resolve('build/_selftest.voice.log');
+  const child = `const o = process.stdout, e = process.stderr, han = Buffer.from('汉');
+o.write('第 1 句\\n');
+setTimeout(() => { o.write('[卡句] 第 2 句「十」\\n'); e.write('警告：一半');
+  setTimeout(() => { e.write('的行\\n'); o.write(han.subarray(0, 2)); setTimeout(() => { o.write(han.subarray(2)); o.write('字\\n'); process.exitCode = 3; }, 50); }, 300); }, 100);`;
+  const seen = [];
+  let mid = null;
+  fs.mkdirSync('build', { recursive: true });
+  const r1 = await runLogged(process.execPath, ['-e', child], { log, onLine: (l) => { seen.push(l); if (l.startsWith('[卡句]')) mid = fs.readFileSync(log, 'utf8'); } });
+  const r2 = await runLogged(process.execPath, ['-e', 'console.log("第二轮")'], { log, append: true, header: '# 第 1 轮自动换种子重配' });
+  const body = fs.readFileSync(log, 'utf8');
+  fs.rmSync(log, { force: true });
+  record('配音日志边跑边写：没跑完就能在日志里看到「[卡句]」，整行交给 onLine，汉字不乱码，退出码照传，重配那一轮接着写',
+    r1.status === 3 && !!mid && mid.includes('[卡句] 第 2 句「十」') && !mid.includes('汉字') && seen.includes('警告：一半的行') && seen.includes('汉字')
+    && r1.out.includes('汉字') && body.includes('退出码 3') && body.indexOf('第 1 句') < body.indexOf('# 第 1 轮自动换种子重配') && body.includes('第二轮') && r2.status === 0,
+    JSON.stringify({ r1, seen, mid, body }));
+}
+// ---------- 旁白检查点名回声、沙沙声超标的句子（tts/revoice.py，单元检查）：回声管最长一句，超过上限的每句都重配；
+// 沙沙声管全片中位数，没超不点名（个别句子高也不点），超了只点最高的那几句、够把中位数拉回上限以内（e02-voyager 一句回声 112ms、上限 110，原来只能手写 reseed）----------
+{
+  const r = spawnSync(PY_QA, ['-c', `
+import sys, json, random, statistics
+sys.path.insert(0, '../tts')
+from revoice import over, median_over
+V = lambda xs: list(enumerate(xs))
+fixed_ok = True
+rng = random.Random(7)
+for _ in range(300):  # 随便造几百组：点名的那几句换成上限以下以后，中位数一定回到上限以内；中位数本来没超就不点名
+    xs = [rng.uniform(0.05, 0.14) for _ in range(rng.randint(1, 40))]
+    ks = median_over(V(xs), 0.095)
+    ys = [0.0 if k in ks else x for k, x in enumerate(xs)]
+    fixed_ok &= statistics.median(ys) <= 0.095 and (bool(ks) == (statistics.median(xs) > 0.095))
+print(json.dumps({"echo": over(V([90, 112, 105, 130]), 110) == [1, 3], "echoOk": over(V([90, 100, 110]), 110) == [],
+  "medOk": median_over(V([0.08, 0.09, 0.12, 0.13, 0.07]), 0.095) == [], "medOdd": median_over(V([0.08, 0.10, 0.12, 0.13, 0.07]), 0.095) == [3],
+  "medEven": median_over(V([0.08, 0.10, 0.12, 0.13, 0.07, 0.096]), 0.095) == [3, 2], "empty": median_over([], 0.095) == [], "fixed": fixed_ok}))`], { encoding: 'utf8' });
+  let o = null;
+  try { o = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch { /* 下面按漏掉记 */ }
+  record('旁白检查点名：回声超标的每句、沙沙声中位数超了时最高的几句进 revoice.json（单元检查）', !!o && Object.keys(o).length === 7 && Object.values(o).every(Boolean), (r.stdout || '') + (r.stderr || ''));
 }
 
 // ---------- 墨迹叠色：换回 v9 以前每个元素一层、层间相乘的叠法，渲染小样上两项都必须失败 ----------

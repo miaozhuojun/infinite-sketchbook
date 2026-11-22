@@ -143,11 +143,17 @@ for sp in speakers:
     if not max_flat:
         continue
     from voice import voiced_flatness
+    from revoice import median_over
     xs1, ssr1 = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))
-    spans1 = [s for k, s in enumerate(timing0["sentences"]) if mine(sp, k)] if timing0.get("sentences") else [{"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]} for c in tl["audioClips"]]
-    fl = sorted(((voiced_flatness(xs1[int(s["start"] * ssr1):int(s["end"] * ssr1)], ssr1), s["text"]) for s in spans1), reverse=True)
-    med_fl = float(np.median([v for v, _ in fl]))
-    check("说话时没有沙沙声" + who(sp), med_fl <= max_flat, f"{len(fl)} 句浊音谱平坦度中位 {med_fl:.3f}（上限 {max_flat}；真人录音约 0.03–0.045），最高的：" + "、".join(f"「{t[:8]}」{v:.3f}" for v, t in fl[:3]))
+    # (句号, 句子)：有 sentences 时句号是它在 timing 里的下标，超标的句子要写进 revoice.json；旧的 timing 按片段量，不点名
+    spans1 = [(k, s) for k, s in enumerate(timing0["sentences"]) if mine(sp, k)] if timing0.get("sentences") else [(None, {"text": c["phrase"], "start": c["srcIn"], "end": c["srcOut"]}) for c in tl["audioClips"]]
+    fl = sorted(((voiced_flatness(xs1[int(s["start"] * ssr1):int(s["end"] * ssr1)], ssr1), s["text"], k) for k, s in spans1), key=lambda q: -q[0])
+    med_fl = float(np.median([v for v, _, _ in fl]))
+    # 中位数超了：最高的那几句（够把中位数拉回上限以内）写进 revoice.json，流水线自动换种子重配（原来只能手写 narration.reseed）
+    rv_fl = median_over([(k, v) for v, _, k in fl if k is not None], max_flat)
+    revoice_k.update(rv_fl)
+    check("说话时没有沙沙声" + who(sp), med_fl <= max_flat, f"{len(fl)} 句浊音谱平坦度中位 {med_fl:.3f}（上限 {max_flat}；真人录音约 0.03–0.045），最高的：" + "、".join(f"「{t[:8]}」{v:.3f}" for v, t, _ in fl[:3])
+          + (f"；最高的 {len(rv_fl)} 句换种子重配" if rv_fl else ""))
 
 # 0f. 每句都是同一个人：源配音逐句的说话人嵌入和整集平均的余弦相似度，最低的一句不低于 minConsistency。
 #     按句生成时音色会一句一句地飘（用户听 E01 v15：像几个人你一句我一句）；整段的「音色一致性」只看平均，看不出来
@@ -181,7 +187,12 @@ if any(voices[sp].get("maxEcho", 0) for sp in speakers) or max_spread:
         ec = sorted(((e, t) for e, t, k3 in ec_all if not timing0.get("sentences") or mine(sp, k3)), reverse=True)
         if not max_echo or not ec:
             continue
-        check("每句没有回声" + who(sp), ec[0][0] <= max_echo, f"{len(ec)} 句停顿处衰减 20dB 的时间最长 {ec[0][0]:.0f}ms（上限 {max_echo}；干声约 60–90ms），中位 {np.median([e for e, _ in ec]):.0f}ms；最长的：" + "、".join(f"「{t[:8]}」{e:.0f}ms" for e, t in ec[:3]))
+        # 超过上限的每一句都写进 revoice.json，流水线自动换种子重配（e02-voyager 一句 112ms、上限 110，原来只能手写 narration.reseed 再跑一轮）
+        from revoice import over
+        rv_ec = over([(k3, e) for e, t, k3 in ec_all if mine(sp, k3)], max_echo) if timing0.get("sentences") else []
+        revoice_k.update(rv_ec)
+        check("每句没有回声" + who(sp), ec[0][0] <= max_echo, f"{len(ec)} 句停顿处衰减 20dB 的时间最长 {ec[0][0]:.0f}ms（上限 {max_echo}；干声约 60–90ms），中位 {np.median([e for e, _ in ec]):.0f}ms；最长的：" + "、".join(f"「{t[:8]}」{e:.0f}ms" for e, t in ec[:3])
+              + (f"；超过上限的 {len(rv_ec)} 句换种子重配" if rv_ec else ""))
     if max_spread:
         lv.sort()
         spread_db = lv[-1][0] - lv[0][0]  # 对话也全片一起比：各人的句子都统一到同一个 sentenceLevelDb

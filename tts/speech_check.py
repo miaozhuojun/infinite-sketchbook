@@ -5,6 +5,7 @@
   2. 吞字：配音时逐句对齐的逐字时间映射到成片旁白，每个字时长 ≥ 50ms，且能量不低于中位数 18 dB 以上。
   3. 断音/爆音：两侧都在发声的 ≥5ms 全零段（字中间掉音）不得出现，不得有相邻采样突跳。
   4. 总混可懂度：带书写声和音乐的总混，ASR 回转字错率 ≤ 2%。
+  4b. 逐句回转（关卡 speech.lineAsr，默认风格只给建议）：每段旁白单独切出来，干声和总混各识别一遍，和这一段的稿子按拼音零出入（line_asr.py）。
 另有几项只给建议、不判失败：语气起伏（句内起伏和句间音区变化，和 voice.json 里按真人录音标定的值比）、声调（tone_check.py，每个字的走势和该念的声调比）。
 用法：.venv-mlx/bin/python speech_check.py <timeline.json> [engine 根目录]
 """
@@ -318,8 +319,16 @@ jumps = int((np.abs(np.diff(x)) > 0.5).sum())
 check("发声中无断音/爆音", not dropouts and jumps == 0, f"字中间掉音 {len(dropouts)} 处{('：' + '、'.join(dropouts)) if dropouts else ''}，突跳 {jumps} 处")
 
 # 4. 总混可懂度
+ASR_DIR = Path(__file__).parent / "models/Qwen3-ASR-0.6B"
+_asr = []
+def asr_model():  # 识别模型只载一次，总混可懂度和逐句回转共用；逐句回转全用缓存时不载
+    if not _asr:
+        _asr.append(load_stt(str(ASR_DIR)))
+    return _asr[0]
+
+
 if tl.get("audio"):
-    asr = load_stt(str(Path(__file__).parent / "models/Qwen3-ASR-0.6B"))
+    asr = asr_model()
     from voice import read_numbers
     # 分块识别（qwen_clone.py 的整段回转一样）：十分钟的总混一次识别会整段漏掉（E03 v2 漏了约 90 秒）。
     # 在旁白片段之间的停顿正中切成不超过 30 秒的几块，块里几句照样拼着识别
@@ -346,6 +355,86 @@ if tl.get("audio"):
             prev, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, prev + (r[i - 1] != h[j - 1]))
     cer = d[len(h)] / max(1, len(r))
     check("总混可懂度", cer <= 0.02, f"拼音错误率 {cer:.3f}" + ("" if cer <= 0.02 else f"，识别为：{hyp}"))
+
+# 4b. 逐句回转（关卡 speech.lineAsr，line_asr.py）：每段旁白（时间线 audioClips）单独切出来，干声（源配音）和总混各识别一遍，和这一段的稿子按拼音比，
+#     一个音节都不许差。整段的「总混可懂度」放 2%：e01-benchmark 707 个字错 1 个（「卷子」的「卷」听成「阵」）是 0.1%，过了；
+#     句首「写」的字头弱，干声对、总混里听成「野」，整段比也看不出来。默认风格只给建议，私有配置可以设成 hard；hard 时有出入的句子进 revoice.json 换种子重配。
+#     识别结果按音频内容缓存（build/line_asr.cache.json）：重配一轮、自测注入时只有变了的片段重新识别
+import hashlib
+import os
+import tempfile
+from line_asr import check_lines
+LINE_HARD = ((tl.get("style") or {}).get("gates") or {}).get("speech.lineAsr") != "advice"  # 时间线里是编译时叠好的风格（默认 < 私有配置）；没列出的关卡都是 hard
+_cache_path = root / "build" / "line_asr.cache.json"
+try:
+    asr_cache = json.loads(_cache_path.read_text())
+except (OSError, ValueError):
+    asr_cache = {}
+n_heard = [0]
+def hear(seg, rate):
+    seg = np.ascontiguousarray(seg, dtype=np.float32)
+    if len(seg) < int(0.05 * rate):  # 切出来是空的（时间线和音频对不上），不送去识别；和稿子比就是整段没听到
+        return ""
+    key = hashlib.sha1(f"{ASR_DIR.name}|{rate}|".encode() + seg.tobytes()).hexdigest()
+    if key in asr_cache:
+        asr_cache[key] = asr_cache.pop(key)  # 用过的挪到最后，清旧的时留着
+    else:
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tf:
+            sf.write(tf.name, seg, rate)
+            asr_cache[key] = asr_model().generate(tf.name, language="Chinese").text
+        n_heard[0] += 1
+    return asr_cache[key]
+
+
+_cl = tl["audioClips"]
+_end = [c["at"] + c["srcOut"] - c["srcIn"] for c in _cl]
+_ord = sorted(range(len(_cl)), key=lambda i: _cl[i]["at"])
+_pad = {}  # 总混两头各多切 0.1 秒（字头字尾的气声），挨得近的片段只多切到两段中间，不把邻句的字切进来
+for n_, i in enumerate(_ord):
+    gap0 = _cl[i]["at"] - _end[_ord[n_ - 1]] if n_ else 0.2
+    gap1 = _cl[_ord[n_ + 1]]["at"] - _end[i] if n_ + 1 < len(_ord) else 0.2
+    _pad[i] = (min(0.1, max(0.0, gap0 / 2)), min(0.1, max(0.0, gap1 / 2)))
+xmix = None
+if tl.get("audio"):
+    xmix, srmix = sf.read(str(root / "public" / tl["audio"]), dtype="float32")
+    xmix = xmix.mean(1) if xmix.ndim > 1 else xmix
+dry_cut = lambda ci, c: (src[int(c["srcIn"] * ssr):int(c["srcOut"] * ssr)], ssr)
+mix_cut = (lambda ci, c: (xmix[max(0, int((c["at"] - _pad[ci][0]) * srmix)):int((_end[ci] + _pad[ci][1]) * srmix)], srmix)) if xmix is not None else None
+la = check_lines(_cl, timing0, dry_cut, mix_cut, hear)
+try:
+    keep = dict(list(asr_cache.items())[-5000:])
+    _cache_path.parent.mkdir(parents=True, exist_ok=True)
+    _tmp = _cache_path.with_suffix(f".{os.getpid()}.tmp")  # 几个会话同时查别的集时各写各的，再整个换上去
+    _tmp.write_text(json.dumps(keep, ensure_ascii=False))
+    os.replace(_tmp, _cache_path)
+except OSError as e:
+    print(f"  [警告] 逐句回转的识别缓存没写成：{e!r}")
+_S = timing0.get("sentences") or []
+def _line_item(b):
+    who_ = "、".join(f"「{_S[k]['text']}」" for k in b["ks"]) if b["ks"] and _S else f"「{b['phrase']}」"
+    s = f"{b['at']:.1f}s 第 {b['clip'] + 1} 段 {who_}"
+    if b["dry"] is not None:
+        s += f"，干声听成「{b['dry']}」" + (f"（{'、'.join(b['dryDiff'])}）" if b["dryDiff"] else "（对）")
+    if b["mix"] is not None:
+        s += f"，总混听成「{b['mix']}」" + (f"（{'、'.join(b['mixDiff'])}）" if b["mixDiff"] else "（对）")
+    if b["mixOnly"]:
+        s += "，只有总混错" + ("、错在开头" if b["atStart"] else "")
+    return s
+
+
+bad_l = la["bad"]
+line_detail = (f"{len(bad_l)} 段和稿子有出入：" + "；".join(_line_item(b) for b in bad_l[:8]) + (f" 等 {len(bad_l)} 段" if len(bad_l) > 8 else "") + "。"
+               + ("只有总混错、干声对的：多半是字头被背景乐和书写声盖住了，换种子也不一定好，要改写这一句：别把擦音开头的字（s、sh、x、f、h 打头，像「写」「是」「发」）放在句首。" if any(b["mixOnly"] for b in bad_l) else "")
+               if bad_l else f"{la['checked']} 段{'干声、总混各' if xmix is not None else '干声'}识别一遍，和稿子按拼音零出入") \
+    + f"（共查 {la['checked']} 段，短于 3 个字量不准、跳过 {la['skipped']} 段{'；时间线没有总混，只查了干声' if xmix is None else ''}；这次识别 {n_heard[0]} 次，其余用缓存）"
+if LINE_HARD:
+    check("逐句回转", not bad_l, line_detail)
+    for b in bad_l:
+        revoice_k.update(b["ks"])
+else:
+    print(f"[{'通过' if not bad_l else '建议'}] 逐句回转：{line_detail}" + ("（默认风格只给建议；私有配置 gates 里写 \"speech.lineAsr\": \"hard\" 就拦下、换种子重配）" if bad_l else ""))
+for b in bad_l:  # 上面一行只列前 8 段，这里每段一行
+    print(f"  逐句回转有出入：{_line_item(b)}")
 
 # 0k. 起音收音不硬切：声音从纯静音 2ms 里就起到 -35dB 以上，或者说着说着一下子断成纯静音（voice.py 的 hard_edges）。
 #     用户听 E02 v5「1:20 有个突兀的声音」：「权重越大」的「权」2ms 里从静音跳到 -20dB，剪开头串进来的字时切在了发声处

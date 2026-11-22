@@ -1253,6 +1253,18 @@ expectBeats('连着几句一笔不画（画面停着不动）', (b) => {
   const p = b.phrases.at(-1);
   p.actions = []; delete p.revisit; delete p.camera;
 }, compileNoFix(TGT), /一笔不画/, { advice: true });
+// 开头是空纸（opening.firstInk）：E05、E06、e01-benchmark、e04-elnino 四集第一笔都等了半秒到一秒。默认只是建议，私有配置设成 hard，所以报成建议或问题都算
+expectBeats('开头是空纸：第一笔晚于 firstInkWithin', (b) => {
+  b.style = { narrative: { [b.kind]: { firstInkWithin: 0.3, firstInkPull: 0.7 } } };
+  b.pen = { ...b.pen, leadIn: 1.1 }; // 片头先空 1.1 秒（演示分镜本来就是这样）
+}, compileNoFix(TGT), /第一笔在 [\d.]+s 才落/, { any: true });
+// 反过来：开场第一样东西挂在第一句的第二个词上（e04-elnino「今年为什么」的「为什么」），比提示词早不到 firstInkPull，编译自己挪到片头落笔，不再报
+expectBeats('开场第一笔挂在后面的词上：编译挪到片头落笔，不报空纸', (b) => {
+  b.style = { narrative: { [b.kind]: { firstInkWithin: 0.3, firstInkPull: 0.7 } } };
+  b.pen = { ...b.pen, leadIn: 0.05 };
+  const p0 = b.phrases[0], a0 = p0.actions.find((a) => a.type === 'text');
+  a0.at = p0.text.slice(1, 3); delete a0.lead;
+}, (p) => ['compiler/compile.mjs', p, '--target', TGT], /^(?![\s\S]*第一笔在)[\s\S]*片子一开头就落笔/, { any: true });
 // 一集超过 10 分钟（narrative.length）、说到灯取景里没灯（scene.lamp）、画面落后太多（sync.lagFar）：用户 2026-11-19 看 E08 样片 v1
 // 默认只是建议，私有配置可以设成 hard，所以报成建议或问题都算（any）
 expectBeats('正片超过一集的时长上限', (b) => {

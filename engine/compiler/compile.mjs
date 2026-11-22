@@ -38,6 +38,8 @@ const OUT_ID = `${beats.id}-${targetName}` + (AUTOFIX ? '' : '-noautofix');
 const baseDir = path.dirname(beatsPath);
 const timing = JSON.parse(fs.readFileSync(path.resolve(baseDir, beats.narration.timing), 'utf8'));
 const PEN = beats.pen;
+// 开场第一笔（完整一集）：within 秒内要有墨迹（opening.firstInk），pull 是开场第一笔最多能比提示词早多少秒自动落笔
+const FIRST_INK = { within: style.narrative?.[beats.kind]?.firstInkWithin, pull: style.narrative?.[beats.kind]?.firstInkPull };
 
 // 按画幅的版式覆盖：layout 的键可以是一个或多个画幅（逗号分隔），覆盖该画幅下的几何参数
 for (const p of beats.phrases) for (const a of p.actions) {
@@ -521,6 +523,7 @@ const OFF = [4000, 0]; // 画外（世界坐标极远处），任何画幅下都
 function schedule(boost) {
   const strokes = [], penTrack = [], effects = [], stickers = [], clips = [], audioClips = [], report = { phrases: [], actions: [] };
   let T = PEN.leadIn, penFree = 0, penPos = OFF, release = 0, penPhrase = 0, penAway = false, awayUntil = 0; // awayUntil：回看时退场的那段移动走完的时刻（不进 penFree）
+  let openingPull = null; // 开场第一笔提前到片头落笔（见下面 opening）
   // release：顿悟句后，下一句最早落笔时刻（镜头停够 holdAfter、拉远走完大半之后）；penPhrase：铅笔最后在哪一句落过笔
   phrases.forEach((p, pi) => {
     const next = phrases[pi + 1];
@@ -630,6 +633,13 @@ function schedule(boost) {
       const fromPos = opening ? [first.x, first.y] : penPos === OFF ? [first.x + 1000, first.y - 350] : penPos; // 首次入画：从右上方画外进来，不划过字幕区
       const travel = opening ? 0 : moveDur(dist(fromPos, [first.x, first.y]), 0.12, z);
       let t = Math.max(cue - (a.lead ?? PEN.cueLead), Math.max(penFree, awayUntil) + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）
+      // 开场第一笔不等提示词：片子一开头（pen.leadIn，旁白也从这一刻起）就落笔，前提是比提示词早不超过 firstInkPull 秒
+      // （e04-elnino：开场「为什么」挂在第二个词上，第一笔 0.61 秒，开头那一下是空纸；E05、E06、e01-benchmark 同样的事，第四次）。
+      // 早不超过 firstInkPull，不会碰到 sync.early（字比话早写 0.8 秒）；再早就不挪，交给 opening.firstInk 报
+      if (opening && AUTOFIX && FIRST_INK.pull !== undefined && t > PEN.leadIn + 1e-6 && cue - PEN.leadIn <= FIRST_INK.pull) {
+        openingPull = { id: a.id, label: a.text ?? a.type, at: a.at, by: t - PEN.leadIn };
+        t = PEN.leadIn;
+      }
       // 要停一会儿时先退开：笔尖往右下（笔身朝向）退一点，别压着刚写的东西；退开的点不出取景框
       // ---- 落笔前等多久、在哪儿等：停笔不压正在讲的东西（审片：笔停在刚写的「0」、刚画的灯、x₁ 的下标上） ----
       // 等不到 0.5 秒就原地等；再久就在候选位置里挑：原地、当前位置四周、下一笔起点四周、等得够久时还有画面外。
@@ -807,7 +817,7 @@ function schedule(boost) {
     T = nextT;
   });
   // 回看时退了场、之后再没动笔（回顾一路讲到片尾）：笔已经停在整段每一镜的画外，片尾不用再离场（awayAt 记它什么时候到的）
-  return { strokes, penTrack, effects, stickers, clips, audioClips, report, penFree, penPos, awayAt: penAway && awayUntil > 0 ? awayUntil : null };
+  return { strokes, penTrack, effects, stickers, clips, audioClips, report, penFree, penPos, awayAt: penAway && awayUntil > 0 ? awayUntil : null, openingPull };
 }
 // 写字要跟着旁白：文字类动作（文字、带标签的量表）必须在本句说完前起笔，且书写时间至少一半和本句旁白重叠
 // （审片发现「门槛 5」「7」都是旁白说完后才写）。不满足时先给该动作提速重排（不插静音），提到上限仍不行再报给分镜。
@@ -829,6 +839,10 @@ for (let it = 0; it < 8 && AUTOFIX; it++) {
   sched = schedule(boost);
 }
 for (const [id, b] of boost) fixes.push(`提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`), console.log(`  提速：${id} 书写加快到 ${r2(b)} 倍（让文字和旁白同步）`);
+if (sched.openingPull) {
+  const o = sched.openingPull, msg = `开场：「${o.label}」(${o.id}) 不等提示词「${o.at}」，片子一开头就落笔（提前 ${r2(o.by)}s，开头不是空纸）`;
+  fixes.push(msg), console.log(`  ${msg}`);
+}
 const { strokes, penTrack, effects, stickers, clips, audioClips, report } = sched;
 const pasted = pastedOf({ stickers, clips }); // 纸面上贴着的东西（贴图、贴视频）
 let { penFree, penPos } = sched;
@@ -1116,6 +1130,16 @@ if (NR.maxStill !== undefined) {
     const sec = report.phrases[j].audioEnd - report.phrases[i].at;
     if (sec > NR.maxStill) flag('narrative.still', `${report.phrases[i].at}s 起 ${j - i + 1} 句、${r2(sec)}s 一笔不画（「${phrases[i].text.slice(0, 14)}」${j > i ? `到「${phrases[j].text.slice(0, 10)}」` : ''}，上限 ${NR.maxStill}s）：说的是一个动作就画这个动作，串场话删掉；能画就别说`);
     i = j + 1;
+  }
+}
+// 开头不是空纸（opening.firstInk）：信息流里自动播放的第一眼。E05、E06、e01-benchmark、e04-elnino 四集都是空纸加一支笔等半秒到一秒
+// （开场第一样东西挂在第一句后面的词上）。编译能挪的已经挪了（见上面 openingPull），这里报挪不了的：第一笔（贴图、贴视频也算）晚于 within 秒
+if (FIRST_INK.within !== undefined) {
+  const t0s = [...strokes, ...stickers, ...clips].map((s) => s.t0);
+  const first = t0s.length ? Math.min(...t0s) : null;
+  if (first !== null && first > FIRST_INK.within + 1e-6) {
+    const a0 = [...report.actions].sort((x, y) => x.start - y.start)[0];
+    flag('opening.firstInk', `第一笔在 ${r2(first)}s 才落（要求 ${FIRST_INK.within}s 内）：开头那一下是空纸加一支笔。开场第一样东西${a0 ? `（${a0.id}）` : ''}的 at 挂到第一句开头的词上，pen.leadIn 用 0.05；早于提示词 ${FIRST_INK.pull ?? 0}s 以内的编译会自己挪`);
   }
 }
 // 一集多长（narrative.length）：用户 2026-11-19 看 E08 样片 v1（16 分 25 秒）：「一集可以少一点内容，但一定要让人把核心理解清楚，

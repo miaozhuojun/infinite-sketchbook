@@ -12,7 +12,7 @@
   "pencil.park": "advice", "camera.idle": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
   "safezone.feed": "advice", "narrative.quizDepth": "advice", "sync.early": "advice",
   "script.terms": "advice", "script.numbers": "advice", "script.payoff": "advice", "script.next": "advice", "script.tts": "advice", "script.erhua": "advice", "script.retrace": "advice", "script.dad": "advice",
-  "narrative.length": "advice", "scene.lamp": "advice", "sync.lagFar": "advice", "speech.lineAsr": "advice"
+  "narrative.length": "advice", "scene.lamp": "advice", "sync.lagFar": "advice", "speech.lineAsr": "advice", "opening.firstInk": "advice"
  },
 
  "palette": {
@@ -230,7 +230,7 @@
 
  "endCard": { "sec": 5, "fade": 0.6, "size": 36, "title": "参考资料", "note": "片尾参考资料卡：正片说完后单独停 sec 秒，列出分镜 facts 的 cite 和 endCard.lines；size 是 1080 短边下的字号，条目超过 7 条按比例缩小" },
  "narrative": {
-  "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2, "termWithin": 3, "termWithinNote": "写稿自查（compiler/script_checks.mjs）：新词、新例子第一次说到以后，最多隔几句就要讲清（brief.terms 的 explain、bridge）", "promiseWithin": 15, "askWithin": 60, "openingNote": "开头一分钟（narrative.opening）：收获前置（「看完这一集……」或 brief.promise）在 promiseWithin 秒内开口，第一个请观众回答的问题（带「评论」或 brief.ask）在 askWithin 秒内（E07 起，平台官方教程）", "maxStill": 8, "stillNote": "画面停着不动（narrative.still）：连着几句一个动作都没有，旁白加起来超过 maxStill 秒（E02、E05、E06 三集都出过）", "dadEvery": 12, "dadOpenerMax": 2, "maxSeconds": 600, "lengthNote": "一集多长（narrative.length）：最后一句说完不超过 maxSeconds 秒（用户 2026-11-19：每集不超过 10 分钟，装不下就拆集）", "lampWords": "灯|甲|乙|亮度", "lampNote": "说到灯（scene.lamp）：旁白里有 lampWords 的句子，说完那一刻取景里要有一盏灯（E07 样片 v2、E08 样片 v1 两次只有图表）；不该有灯的句子写 noLamp", "dadNote": "父子对话（script.dad，有爸爸的句子才查）：孩子连说超过 dadEvery 句没有爸爸（E07 样片 v6：连说 15 句、31 句）；爸爸的句子同一个开头词超过 dadOpenerMax 次（E04「合着」13 次）" },
+  "episode": { "hookWithin": 3.0, "maxAhaGap": 30, "requireRoles": ["hook", "aha", "recap", "next"], "minQuiz": 2, "termWithin": 3, "termWithinNote": "写稿自查（compiler/script_checks.mjs）：新词、新例子第一次说到以后，最多隔几句就要讲清（brief.terms 的 explain、bridge）", "promiseWithin": 15, "askWithin": 60, "openingNote": "开头一分钟（narrative.opening）：收获前置（「看完这一集……」或 brief.promise）在 promiseWithin 秒内开口，第一个请观众回答的问题（带「评论」或 brief.ask）在 askWithin 秒内（E07 起，平台官方教程）", "maxStill": 8, "stillNote": "画面停着不动（narrative.still）：连着几句一个动作都没有，旁白加起来超过 maxStill 秒（E02、E05、E06 三集都出过）", "dadEvery": 12, "dadOpenerMax": 2, "firstInkWithin": 0.3, "firstInkPull": 0.7, "firstInkNote": "开头不是空纸（opening.firstInk）：第一笔（贴图、贴视频也算）在 firstInkWithin 秒内落下，信息流里自动播放的第一眼不是空纸加一支笔（E05、E06、e01-benchmark、e04-elnino 四集都等了半秒到一秒）。开场第一笔比它的提示词早不超过 firstInkPull 秒时，编译自己挪到片头落笔（不碰 sync.early 的 0.8 秒）", "maxSeconds": 600, "lengthNote": "一集多长（narrative.length）：最后一句说完不超过 maxSeconds 秒（用户 2026-11-19：每集不超过 10 分钟，装不下就拆集）", "lampWords": "灯|甲|乙|亮度", "lampNote": "说到灯（scene.lamp）：旁白里有 lampWords 的句子，说完那一刻取景里要有一盏灯（E07 样片 v2、E08 样片 v1 两次只有图表）；不该有灯的句子写 noLamp", "dadNote": "父子对话（script.dad，有爸爸的句子才查）：孩子连说超过 dadEvery 句没有爸爸（E07 样片 v6：连说 15 句、31 句）；爸爸的句子同一个开头词超过 dadOpenerMax 次（E04「合着」13 次）" },
   "segment": { "requireRoles": [], "minQuiz": 0 },
   "retrace": { "recentSec": 8, "rate": 4, "note": "写稿自查 script.retrace：回描的东西不到 recentSec 秒前刚画（按旁白每秒 rate 字估），或就在这一节、这句又不是顿悟，算重复（E03 样片 28 句 36 处回描，用户：太多了）" }
  }

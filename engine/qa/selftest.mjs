@@ -1258,13 +1258,20 @@ expectBeats('开头是空纸：第一笔晚于 firstInkWithin', (b) => {
   b.style = { narrative: { [b.kind]: { firstInkWithin: 0.3, firstInkPull: 0.7 } } };
   b.pen = { ...b.pen, leadIn: 1.1 }; // 片头先空 1.1 秒（演示分镜本来就是这样）
 }, compileNoFix(TGT), /第一笔在 [\d.]+s 才落/, { any: true });
-// 反过来：开场第一样东西挂在第一句的第二个词上（e04-elnino「今年为什么」的「为什么」），比提示词早不到 firstInkPull，编译自己挪到片头落笔，不再报
-expectBeats('开场第一笔挂在后面的词上：编译挪到片头落笔，不报空纸', (b) => {
-  b.style = { narrative: { [b.kind]: { firstInkWithin: 0.3, firstInkPull: 0.7 } } };
-  b.pen = { ...b.pen, leadIn: 0.05 };
-  const p0 = b.phrases[0], a0 = p0.actions.find((a) => a.type === 'text');
-  a0.at = p0.text.slice(1, 3); delete a0.lead;
-}, (p) => ['compiler/compile.mjs', p, '--target', TGT], /^(?![\s\S]*第一笔在)[\s\S]*片子一开头就落笔/, { any: true });
+// 反过来：开场第一样东西挂在第一句的第二个字上（e04-elnino「今年为什么」的「为什么」），比提示词早不到 firstInkPull，编译自己挪到片头落笔，不再报。
+// 第一句里留一个文字动作当开场第一笔，其余动作挪到这句最后两个字上（不删：别的动作可能 after 它们）；第一句没有文字、或去掉标点不到 4 个字的基线跳过（审 #94）
+{
+  const name = '开场第一笔挂在后面的词上：编译挪到片头落笔，不报空纸';
+  const p0 = beatsSrc.phrases[0], said = strip(p0.text);
+  if (!p0.actions.some((a) => a.type === 'text') || said.length < 4) skip(name, '基线分镜第一句没有文字动作，或太短');
+  else expectBeats(name, (b) => {
+    b.style = { narrative: { [b.kind]: { firstInkWithin: 0.3, firstInkPull: 0.7 } } };
+    b.pen = { ...b.pen, leadIn: 0.05 };
+    const q = b.phrases[0], a0 = q.actions.find((a) => a.type === 'text');
+    for (const a of q.actions) if (a !== a0) a.at = said.slice(-2);
+    a0.at = said.slice(1, 3); delete a0.lead; delete a0.after;
+  }, (p) => ['compiler/compile.mjs', p, '--target', TGT], /^(?![\s\S]*第一笔在)[\s\S]*片子一开头就落笔/, { any: true });
+}
 // 一集超过 10 分钟（narrative.length）、说到灯取景里没灯（scene.lamp）、画面落后太多（sync.lagFar）：用户 2026-11-19 看 E08 样片 v1
 // 默认只是建议，私有配置可以设成 hard，所以报成建议或问题都算（any）
 expectBeats('正片超过一集的时长上限', (b) => {

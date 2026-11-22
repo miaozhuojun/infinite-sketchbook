@@ -635,8 +635,9 @@ function schedule(boost) {
       let t = Math.max(cue - (a.lead ?? PEN.cueLead), Math.max(penFree, awayUntil) + travel, release); // lead：允许个别动作提前于旁白开写（如开场标题）
       // 开场第一笔不等提示词：片子一开头（pen.leadIn，旁白也从这一刻起）就落笔，前提是比提示词早不超过 firstInkPull 秒
       // （e04-elnino：开场「为什么」挂在第二个词上，第一笔 0.61 秒，开头那一下是空纸；E05、E06、e01-benchmark 同样的事，第四次）。
-      // 早不超过 firstInkPull，不会碰到 sync.early（字比话早写 0.8 秒）；再早就不挪，交给 opening.firstInk 报
-      if (opening && AUTOFIX && FIRST_INK.pull !== undefined && t > PEN.leadIn + 1e-6 && cue - PEN.leadIn <= FIRST_INK.pull) {
+      // at 挂在文字自己的词上时，早不超过 firstInkPull 不会碰到 sync.early（字比话早写 0.8 秒）；挂在更前面的词上本来就可能报，挪了会更早（审 #94）。
+      // 再早就不挪，交给 opening.firstInk 报。作者自己写了 lead 的照他的（lead: 0 是有意让笔贴着提示词）
+      if (opening && AUTOFIX && FIRST_INK.pull !== undefined && a.lead === undefined && t > PEN.leadIn + 1e-6 && cue - PEN.leadIn <= FIRST_INK.pull) {
         openingPull = { id: a.id, label: a.text ?? a.type, at: a.at, by: t - PEN.leadIn };
         t = PEN.leadIn;
       }
@@ -1139,7 +1140,7 @@ if (FIRST_INK.within !== undefined) {
   const first = t0s.length ? Math.min(...t0s) : null;
   if (first !== null && first > FIRST_INK.within + 1e-6) {
     const a0 = [...report.actions].sort((x, y) => x.start - y.start)[0];
-    flag('opening.firstInk', `第一笔在 ${r2(first)}s 才落（要求 ${FIRST_INK.within}s 内）：开头那一下是空纸加一支笔。开场第一样东西${a0 ? `（${a0.id}）` : ''}的 at 挂到第一句开头的词上，pen.leadIn 用 0.05；早于提示词 ${FIRST_INK.pull ?? 0}s 以内的编译会自己挪`);
+    flag('opening.firstInk', `第一笔在 ${r2(first)}s 才落（要求 ${FIRST_INK.within}s 内）：开头那一下是空纸加一支笔。开场第一样东西${a0 ? `（${a0.id}）` : ''}的 at 挂到第一句开头的词上，pen.leadIn 用 0.05；动作上没写 lead、比提示词早 ${FIRST_INK.pull ?? 0}s 以内的，编译会自己挪`);
   }
 }
 // 一集多长（narrative.length）：用户 2026-11-19 看 E08 样片 v1（16 分 25 秒）：「一集可以少一点内容，但一定要让人把核心理解清楚，

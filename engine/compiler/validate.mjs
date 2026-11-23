@@ -30,7 +30,7 @@ export const loadStyle = (beats) => {
 // 关卡级别：gates 里写 advice 的只给建议；没列出的都是 hard
 export const gateLevel = (style, id) => (style.gates?.[id] === 'advice' ? 'advice' : 'hard');
 export const strip = (s) => s.replace(/[\s，。；：！？、,.;:!?"“”'‘’（）()—-]/g, '');
-const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead', 'copyOf', 'shift']);
+const SCHED_KEYS = new Set(['id', 'type', 'at', 'lead', 'on', 'after', 'layout', 'speed', 'hold', 'note', 'bleed', 'ahead', 'copyOf', 'shift', 'is']);
 const ROLES = new Set(['hook', 'setup', 'aha', 'recap', 'next']);
 
 // 估算一行字的宽度：中文全角，其余半角
@@ -192,6 +192,7 @@ export function validateBeats(beats, style, reg) {
     if (p.block !== undefined && p.block !== true) E(`${P}.block`, '只能写 true（这一句起换一块纸，镜头和铅笔像换节一样飞过去，不另起平台章节）');
     if (p.block !== undefined && p.chapter !== undefined) E(`${P}.block`, '这句已经是新的一节（chapter），不用再写 block');
     if (p.noLamp !== undefined && (typeof p.noLamp !== 'string' || !p.noLamp.trim())) E(`${P}.noLamp`, '写一句为什么这句说到灯、取景里却不该有灯（scene.lamp 放行）');
+    if (p.noChange !== undefined && (typeof p.noChange !== 'string' || !p.noChange.trim())) E(`${P}.noChange`, '写一句为什么这句说东西变了、画面上却不用跟着变（scene.change 放行），比如说的是别处的变化、一条规则');
     if (p.noPush !== undefined && (!Array.isArray(p.noPush) || p.noPush.some((t) => !style.targets[t]))) E(`${P}.noPush`, `只能列出画幅名，可用：${Object.keys(style.targets).join('、')}`);
     if (p.camera === 'overview' && (p.actions || []).length) E(`${P}.camera`, 'overview（整张纸全景）的句子不画新东西（actions 要空着）');
     if (p.camera === 'overview' && p.revisit) E(`${P}.camera`, 'overview 和 revisit 不能同时用');
@@ -209,6 +210,8 @@ export function validateBeats(beats, style, reg) {
     for (const a of p.actions || []) {
       const A = `${P}.${a.id || '(无 id)'}`;
       if (!a.id) { E(A, '缺少 id'); continue; }
+      // is：这一笔画的是什么（旁白里叫它的词，如「光」），一个或一组；scene.change 靠它认出旁白说变了的是哪样东西
+      if (a.is !== undefined && !(typeof a.is === 'string' ? a.is.trim() : Array.isArray(a.is) && a.is.length && a.is.every((x) => typeof x === 'string' && x.trim()))) E(`${A}.is`, '写这一笔画的是什么（旁白里叫它的词，如「光」），一个词或一组词');
       if (ids.has(a.id)) E(A, 'id 重复');
       ids.add(a.id);
       if (a.at === undefined || !st.includes(strip(String(a.at)))) E(`${A}.at`, `cue「${a.at}」不在这句旁白里`);
@@ -228,7 +231,7 @@ export function validateBeats(beats, style, reg) {
         else if (src && src.type === a.type && Array.isArray(a.shift) && a.shift.length === 2) {
           // 只平移真是坐标的：同名参数在别的组件里可能不是坐标（arcs、knob 的 from/to 是角度，trafficLight 的 top 是墨色名），按类型认（审 #75）
           const [dx, dy] = a.shift, mv = { x: dx, cx: dx, x0: dx, x1: dx, y: dy, cy: dy, top: dy, base: dy };
-          const free = new Set(['id', 'at', 'copyOf', 'shift', 'grid', 'on', 'target', 'after', 'lead', 'speed', 'hold', 'note', 'ahead', 'bleed', 'layout']);
+          const free = new Set(['id', 'at', 'copyOf', 'shift', 'grid', 'on', 'target', 'after', 'lead', 'speed', 'hold', 'note', 'ahead', 'bleed', 'layout', 'is']);
           const pt = (v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number');
           const want = (k, v) => (k in mv && typeof v === 'number' ? v + mv[k] : (k === 'from' || k === 'to') && pt(v) ? [v[0] + dx, v[1] + dy]
             : k === 'points' && Array.isArray(v) && v.every(pt) ? v.map(([x, y]) => [x + dx, y + dy]) : k === 'span' && pt(v) ? [v[0] + dx, v[1] + dx] : v);

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PY_QA, PY_MLX } from './pyenv.mjs';
-import { strip } from '../compiler/validate.mjs';
+import { strip, loadStyle } from '../compiler/validate.mjs';
 import { PENLESS } from '../library/index.mjs';
 const { cameraAt, penAt, idleAfterCamera, pastedOf, stickerInk } = await import('../src/timeline.ts'); // .ts 用 await import：Node 版本低时先看到上面那条说明
 
@@ -1296,6 +1296,44 @@ expectBeats('旁白说到灯，写了 noLamp 就不报', (b) => {
   lampless(b);
   for (const q of b.phrases) q.noLamp = '演示：这句不该有灯';
 }, compileNoFix(TGT), /^(?![\s\S]*说的是灯的事)[\s\S]*时长/, { any: true });
+// 说东西变了，画面上的它没跟着变（scene.change，compiler/change_check.mjs）：e03-coldest 成片「把光变弱」时光一笔没变，E08 样片 v1 讲灯时没灯。
+// 默认只是建议，私有配置设成 hard，所以报成建议或问题都算（any）。注入不改旁白：挑第 3 句以后的一句（去掉标点至少 6 个字，动作都不指向、不挂在别的元素上），
+// 把它的第 5、6 个字当成「变了」的词（整份旁白里只出现这一次，别的句子不会跟着报），给前两句以前画过的一个元素标 is 写这句的头 4 个字（词前面说的东西）。
+// 按组件认的名字（changeNames）每样都写成空的：风格规范是深合并，写 {} 关不掉，基线里有灯、光晕时会撞上
+const chg = (() => {
+  const all = beatsSrc.phrases.map((p) => strip(p.text)).join('');
+  const k = beatsSrc.phrases.findIndex((p, i) => {
+    const t = strip(p.text), w = t.slice(4, 6);
+    return i >= 2 && t.length >= 6 && t.indexOf(w) === 4 && all.indexOf(w) === all.lastIndexOf(w) && !/[没不别未非无]/.test(t[3]) && (p.actions ?? []).length
+      && p.actions.every((a) => a.target === undefined && a.on === undefined && a.is === undefined);
+  });
+  const x = k >= 2 ? beatsSrc.phrases.slice(0, k - 1).flatMap((p) => p.actions ?? [])[0] : null; // 隔一句：这一句和上一句并句时，它照样在「以前」
+  return x ? { k, x: x.id, t: strip(beatsSrc.phrases[k].text) } : null;
+})();
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const noNames = Object.fromEntries(Object.keys(loadStyle(beatsSrc).narrative?.[beatsSrc.kind]?.changeNames ?? {}).map((k) => [k, []]));
+const unchanged = (b) => {
+  b.style = { narrative: { [b.kind]: { changeWords: reEsc(chg.t.slice(4, 6)), changeNames: noNames } } };
+  acts(b).find((a) => a.id === chg.x).is = chg.t.slice(0, 4);
+};
+if (!chg) for (const n of ['旁白说东西变了，画面上的它这一句没跟着变', '旁白说东西变了，写了 noChange 就不报', '旁白说东西变了，这一句圈出了它就不报']) skip(n, '基线分镜里挑不出合适的句子');
+else {
+  expectBeats('旁白说东西变了，画面上的它这一句没跟着变', unchanged, compileNoFix(TGT), /画面上的「[^」]+」（[^）]*）这一句没跟着变/, { any: true });
+  expectBeats('旁白说东西变了，写了 noChange 就不报', (b) => {
+    unchanged(b);
+    b.phrases[chg.k].noChange = '演示：说的是别处的变化';
+  }, compileNoFix(TGT), /^(?![\s\S]*这一句没跟着变)[\s\S]*时长/, { any: true });
+  expectBeats('旁白说东西变了，这一句圈出了它就不报', (b) => {
+    unchanged(b);
+    b.phrases[chg.k].actions.push({ id: '_chg', type: 'ring', at: chg.t.slice(4, 6), target: chg.x });
+  }, compileNoFix(TGT), /^(?![\s\S]*这一句没跟着变)[\s\S]*时长/, { any: true });
+}
+// 认不出说的是哪样东西（词在句首，前面没有字）、这一句又一笔不画：最后一句的动作清空（后面没有句子引用它们）
+expectBeats('旁白说东西变了，这一句一笔没画', (b) => {
+  const p = b.phrases.at(-1);
+  b.style = { narrative: { [b.kind]: { changeWords: reEsc(strip(p.text).slice(0, 2)), changeNames: noNames } } };
+  p.actions = []; delete p.focus; delete p.frame; delete p.revisit; delete p.camera;
+}, compileNoFix(TGT), /说.{1,4}，这一句一笔没画/, { any: true });
 expectBeats('画面落后旁白太多（说到以后好几秒才开始画）', (b) => {
   b.style = { motion: { maxLagFar: 0.01, maxLag: 0 } };
   const p = b.phrases.find((q) => (q.actions ?? []).filter((a) => !a.copyOf).length >= 2);

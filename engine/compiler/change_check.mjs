@@ -2,7 +2,7 @@
 // 出处：e03-coldest 成片说「把光变弱」「光就要变弱」（2:00、2:23–2:34），画面上两束激光和碗底的光点一笔没变，
 // 只把碗沿划掉、写了「光变弱」三个字；E08 样片 v1 讲灯的亮暗时画面上没有灯（scene.lamp 只管「说到灯时取景里有没有灯」）。同一类第二次，做成关卡。
 // 认法：
-//   1. 旁白里每个「变了」的词（风格规范 narrative.<kind>.changeWords，如 变弱、变暗、关掉、灭了、没了），前面是「没、不、没有、不会」的跳过（「没变小」）；
+//   1. 旁白里每个「变了」的词（风格规范 narrative.<kind>.changeWords，如 变弱、变暗、关掉、灭了、没了），前面是「没、不、没有、不会、不再」的跳过（「没变小」），「不得不、非得」不跳；
 //   2. 往前看这个词前面几个字（最多 4 个字；原样看一遍，再把结尾的「就要、还真、了」这类虚字一个个去掉各看一遍，取对上最多的），
 //      在这一句以前画过的元素的名字里找，对上最长的那个就是被说变了的东西。只对上一个字时，那个字要在名字里自成一个词
 //      （「光做的碗」里的「光」算，「温度」里的「度」、「旅行者1号」里的「1」不算）。
@@ -10,14 +10,15 @@
 //      复用件（copyOf）连原元素的名字一起算。连着两个词（「变弱弱到零」）后一个沿用前一个的东西；
 //   3. 认出来了：这一句要有一个动作落在它身上——target 指它（划掉、回描、圈出、熄灭），不是文字的笔画 on 挂在它身上，
 //      或者新画一个不是文字的元素、is（或按组件认的名字）就是它（变化后的样子）。只写字不算：e03 写了「光变弱」三个字，光还是没变；
-//      对上的元素里有画出来的（不是文字），就要落在画出来的那几笔上，圈出它的标签不算；
+//      对上的元素里有画出来的（不是文字，对上几个字都算），就要落在画出来的那几笔上，圈出它的标签、划掉写它的字不算；
 //   4. 认不出（画面上没有叫这个名字的东西）：退一步，这一句至少要画点什么（动作、回看、全景都算），一笔不画就报。
 // 豁免：说的是别处的变化（「拧大扣分变少就往大拧」这种规则、比方），分镜那句写 noChange: "为什么"。
 import { strip } from './validate.mjs';
 
 // 「变」字前面、不是东西的那些字（副词、助词、把字句）：从后往前一个个去掉，剩下的结尾才是东西
-const TAIL = /(自己|就要|就会|还真|已经|一下子|一下|慢慢|渐渐|突然|马上|跟着|都|就|要|会|也|又|再|能|还|真|全|得|地|了|是|把|让|将|给|被|可|才|却)$/;
-const NEG = /(没有|[没不别未非无])$/;
+const TAIL = /(不得不|非得|自己|就要|就会|还真|已经|一下子|一下|慢慢|渐渐|突然|马上|跟着|都|就|要|会|也|又|再|能|还|真|全|得|地|了|是|把|让|将|给|被|可|才|却)$/;
+// 「没变小」「光不会变暗」「光没有变弱」跳过；「不得不变暗」「非得变弱」说的正是变了，不跳
+const NEG = /(?<!不得)(没有|[没不别未无])(会|再|能|要|曾|用|是)?$/;
 const HAN = /\p{Script=Han}/u;
 const clean = (s) => strip(s).replace(/[…「」『』《》〈〉～·]/g, ''); // strip 留着的引号、省略号、书名号
 const list = (v) => [].concat(v ?? []).filter((x) => typeof x === 'string' && x.trim());
@@ -60,19 +61,23 @@ export function changeIssues(phrases, { words, names }) {
     let last = 0, prev = null;
     for (const m of t.matchAll(RE)) {
       if (!m[0]) continue; // 词表写成能匹配空串的样子（「变弱|」）
-      let w = t.slice(last, m.index), pre = t.slice(0, m.index);
+      let w = t.slice(last, m.index);
       last = m.index + m[0].length;
+      if (NEG.test(t.slice(0, m.index))) continue;
       const stages = [w.slice(-4)];
       while (TAIL.test(w)) { w = w.replace(TAIL, ''); stages.push(w.slice(-4)); }
-      while (TAIL.test(pre)) pre = pre.replace(TAIL, '');
-      if (NEG.test(t.slice(0, m.index)) || NEG.test(pre)) continue; // 没变小、光不会变暗、光没有变弱
       let sub = prev;
       if (stages.some(Boolean)) {
         sub = null;
         for (const st of stages.filter(Boolean)) { // 对上一样多时取去掉虚字以后的
           const sc = before.map((a) => [a, score(nameOf(a), st)]), best = Math.max(0, ...sc.map((x) => x[1]));
           // 还带着虚字的那一遍，对上的要比结尾的虚字长（「动能」的「能」算名字的一部分；「冷下来是」只对上一个「是」不算）
-          if (best > (st.match(TAIL)?.[0].length ?? 0) && best >= (sub?.n ?? 0)) sub = { n: best, s: st.slice(-best), T: sc.filter((x) => x[1] === best).map((x) => x[0]) };
+          const tl = st.match(TAIL)?.[0].length ?? 0;
+          if (best > tl && best >= (sub?.n ?? 0)) sub = {
+            n: best, s: st.slice(-best), T: sc.filter((x) => x[1] === best).map((x) => x[0]),
+            // 画出来的那几笔：不是文字、也对得上的（哪怕不如某段文字对上的多：文字「第一步信风变弱」比箭头的 is「信风」对上的多，变化还是要落在箭头上）
+            drawn: sc.filter((x) => x[1] > tl && x[0].type !== 'text').map((x) => x[0]),
+          };
         }
       }
       prev = sub;
@@ -80,10 +85,10 @@ export function changeIssues(phrases, { words, names }) {
         if (!acts.length && !(p.revisit ?? []).length && p.camera !== 'overview') miss.push({ word: m[0] });
         continue;
       }
-      const drawn = sub.T.filter((a) => a.type !== 'text'), T = new Set((drawn.length ? drawn : sub.T).map((a) => a.id));
+      const T = new Set((sub.drawn.length ? sub.drawn : sub.T).map((a) => a.id));
       const changed = acts.some((a) => list(a.target).some((x) => T.has(x))
         || (a.type !== 'text' && (T.has(a.on) || own(a).some((n) => n.includes(sub.s) || sub.s.endsWith(n))))); // is 是作者写明的，「风」也算「信风」
-      if (!changed) miss.push({ word: m[0], s: sub.s, ids: sub.T.map((a) => a.id), onlyText: !drawn.length });
+      if (!changed) miss.push({ word: m[0], s: sub.s, ids: [...T], onlyText: !sub.drawn.length });
     }
     if (miss.length) out.push({ pi, miss });
   });

@@ -10,6 +10,7 @@ import { svgPathProperties } from 'svg-path-properties';
 import { loadLibrary, PENLESS } from '../library/index.mjs';
 import { loadSticker } from './stickers.mjs';
 import { loadClip } from './clips.mjs';
+import { changeIssues } from './change_check.mjs';
 import { makeKit, samplePts, offsetPath, translatePath, r2, dist } from '../library/kit.mjs';
 import { validateBeats, loadStyle, gateLevel, strip, breakLines, styleSubset } from './validate.mjs';
 const { stickerOutline, flightTip, cameraAt, pastedOf } = await import('../src/timeline.ts');
@@ -117,6 +118,7 @@ for (const p of phrases) {
       if (p.role === 'aha' || prev.role === 'aha') prev.role = 'aha'; // 合并后顿悟角色优先保留（否则顿悟句不推近）
       if (p.focus) prev.focus = [...(prev.focus || []), ...p.focus];
       if (p.noLamp) prev.noLamp ??= p.noLamp; // 并进来的那句写了 noLamp，合并后的整句照样放行（PR #83 审查）
+      if (p.noChange) prev.noChange ??= p.noChange; // noChange 同理（scene.change）
       continue;
     }
     prev.cutOut = cut; p.cutIn = cut;
@@ -1162,6 +1164,17 @@ if (NR.lampWords) {
     if (!bulbs.some((a) => phraseOf.get(a.id) <= pi && inView(a.id, targetCam[pi]))) // 实际取景：顿悟句按推近后的（PR #83 审查）
       flag('scene.lamp', `${report.phrases[pi].at}s「${p.text.slice(0, 16)}」说的是灯的事，取景里一盏灯都没有：把那张图放在旁边（复用 copyOf 或镜头回看），讲到哪盏灯就让它亮暗；确实不该有灯的写 noLamp`);
   });
+}
+// 说东西变了，画面上的它要跟着变（scene.change，compiler/change_check.mjs）：e03-coldest 成片说「把光变弱」「光就要变弱」，两束激光和碗底的光点一笔没变；
+// E08 样片 v1 讲灯的亮暗时画面上没有灯。旁白说「变弱、变暗、关掉、灭了、没了……」（changeWords）时，「变」前面说的那样东西（元素的 is、文字写的字、
+// 挂在它身上的标签、changeNames）这一句要有动作落在它身上，或新画一个 is 写它的样子；认不出是哪样东西时这一句至少要画点什么。说的是别处的变化写 noChange
+if (NR.changeWords) for (const { pi, miss } of changeIssues(phrases, { words: NR.changeWords, names: NR.changeNames })) {
+  const said = `${report.phrases[pi].at}s「${phrases[pi].text.slice(0, 16)}」`, m = miss.find((x) => x.s) ?? miss[0];
+  if (!m.s) { flag('scene.change', `${said}说${m.word}，这一句一笔没画：画出变了的样子（划掉、回描、圈出、熄灭，或新画一个）；说的是别处的变化写 noChange`); continue; }
+  const more = [...new Set(miss.filter((x) => x !== m && x.s && x.s !== m.s).map((x) => `「${x.s}」${x.word}`))];
+  flag('scene.change', `${said}说「${m.s}」${m.word}${more.length ? `（还有${more.join('、')}）` : ''}，画面上的「${m.s}」（${m.ids.slice(0, 4).join('、')}${m.ids.length > 4 ? ' 等' : ''}）这一句没跟着变：`
+    + `划掉、回描、圈出它（strike/retrace/ring，光晕用 off），在它身上画出变化（笔画 on 挂在它上面），或新画一个变化后的样子、标 is: "${m.s}"`
+    + `${m.onlyText ? `。画面上叫「${m.s}」的只有字：画它的那几笔先标 is: "${m.s}"，再让它们变` : ''}；只写字不算。说的是别处的变化写 noChange`);
 }
 
 // 字幕：说完后若这句的画面还在画，字幕停留到画完（不晚于下一句字幕出现），避免画面和字幕脱节

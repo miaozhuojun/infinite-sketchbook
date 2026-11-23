@@ -1248,14 +1248,32 @@ expectBeats('写稿自查：爸爸老用同一个开头（合着），接话问�
 // 开头一分钟（narrative.opening）、画面停着不动（narrative.still），编译按真实时间算，只给建议
 expectBeats('开头没有收获前置，也没有请观众回答的问题', (b) => {
   b.style = { narrative: { [b.kind]: { promiseWithin: 15, askWithin: 60 } } };
-  for (const p of b.phrases) p.text = p.text.replace(/看完这一?集|评论/g, '');
-}, compileNoFix(TGT), /开头没有收获前置[\s\S]*没有请观众回答/, { advice: true });
+  for (const p of b.phrases) p.text = p.text.replace(/看完这一?集|评论|[？?]/g, '');
+}, compileNoFix(TGT), /开头没有收获前置[\s\S]*没有请观众想一想/, { advice: true });
 // 反过来：第一句就是收获前置（brief.promise 带标点也认得出），只缺请观众回答的问题，就只报后一条
 expectBeats('开头有收获前置（带标点的 brief.promise 也认得），只报缺请观众回答的问题', (b) => {
   b.style = { narrative: { [b.kind]: { promiseWithin: 15, askWithin: 60 } } };
-  for (const p of b.phrases) p.text = p.text.replace(/看完这一?集|评论/g, '');
+  for (const p of b.phrases) p.text = p.text.replace(/看完这一?集|评论|[？?]/g, '');
   b.brief = { ...(b.brief ?? {}), promise: `${b.phrases[0].text.slice(0, 2)}，${b.phrases[0].text.slice(2, 4)}` };
-}, compileNoFix(TGT), /^(?![\s\S]*收获前置)[\s\S]*没有请观众回答/, { advice: true });
+}, compileNoFix(TGT), /^(?![\s\S]*收获前置)[\s\S]*没有请观众想一想/, { advice: true });
+// 例行公事地请评论（narrative.commentCall）：E07 到 e04-elnino 六集开头「……？打在评论区」，用户 2026-11-23 说公式化、呆板。
+// 旁白文字要和配音对得上，不能往句子里加字：把 commentWords 设成基线句子里本来就有的字，查的是「哪些句子、什么时候说」。
+// 默认只是建议，私有配置设成 hard，所以报成建议或问题都算（any）；不报的那条看整段输出
+const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+expectBeats('开头就请观众打在评论区', (b) => {
+  b.style = { narrative: { [b.kind]: { commentWords: esc(strip(b.phrases[0].text)), commentQuiet: 60, commentMax: 9 } } };
+}, compileNoFix(TGT), /开头就请观众打在评论区/, { any: true });
+// 反过来：开头只问问题（brief.ask）、不催评论，整片只在片尾请一次：两条都不报
+expectBeats('开头只问不催评论、片尾请一次：不报', (b) => {
+  b.style = { narrative: { [b.kind]: { commentWords: esc(strip(b.phrases.at(-1).text)), commentQuiet: 0.5, commentMax: 1, askWithin: 60 } } };
+  b.brief = { ...(b.brief ?? {}), ask: strip(b.phrases[0].text).slice(0, 4) };
+}, compileNoFix(TGT), /^(?![\s\S]*(请观众打在评论区|没有请观众想一想|不是合法的正则))[\s\S]*时长 [\d.]+s/, { any: true });  // 要看到编译跑完（时长那行），不让编译崩了也算过
+expectBeats('commentWords 写错正则：报得清楚，不崩', (b) => {
+  b.style = { narrative: { [b.kind]: { commentWords: '评论区(', commentQuiet: 60, commentMax: 1 } } };
+}, compileNoFix(TGT), /commentWords 不是合法的正则/, { any: true });
+expectBeats('整片请观众打在评论区太多次', (b) => {
+  b.style = { narrative: { [b.kind]: { commentWords: b.phrases.slice(-2).map((p) => esc(strip(p.text))).join('|'), commentQuiet: 0, commentMax: 1 } } };
+}, compileNoFix(TGT), /整片 \d+ 句请观众打在评论区/, { any: true });
 expectBeats('连着几句一笔不画（画面停着不动）', (b) => {
   b.style = { narrative: { [b.kind]: { maxStill: 0.5 } } };
   const p = b.phrases.at(-1);

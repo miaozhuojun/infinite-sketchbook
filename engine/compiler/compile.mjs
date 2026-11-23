@@ -1111,15 +1111,27 @@ if (NR.hookWithin !== undefined) {
   for (let i = 1; i < ahas.length; i++) if (ahas[i] - ahas[i - 1] > NR.maxAhaGap) flag('narrative.ahaGap', `${r2(ahas[i - 1])}s 到 ${r2(ahas[i])}s 之间 ${r2(ahas[i] - ahas[i - 1])}s 没有顿悟点（上限 ${NR.maxAhaGap}s）`);
 }
 // 开头一分钟（E07 起，平台官方教程：推荐靠观众的互动信号）：钩子之后很快说清「看完这一集，你自己就能……」（收获前置），
-// 1 分钟内有第一个请观众回答、打在评论区的问题。E05 唯一的提问在 12 分钟的片尾，评论、关注都是 0。
-// 认法：收获前置是 brief.promise 那半句（没写就认「看完这一集」）；请观众回答的问题是 brief.ask 那半句（没写就认带「评论」的句子）
+// 1 分钟内有第一个让观众想答的问题（二选一、猜个数）。E05 唯一的提问在 12 分钟的片尾，评论、关注都是 0。
+// 认法：收获前置是 brief.promise 那半句（没写就认「看完这一集」）；问题是 brief.ask 那半句（没写就认第一个问句）。
+// 不要求说「评论」：好问题本身就是钩子，「打在评论区」是另一件事，见下面 narrative.commentCall
 if (NR.promiseWithin !== undefined || NR.askWithin !== undefined) {
-  const at = (frag, re) => { const i = phrases.findIndex((p) => (frag ? strip(p.text).includes(strip(frag)) : re.test(strip(p.text)))); return i < 0 ? null : report.phrases[i].at; };
-  const pr = at(beats.brief?.promise, /看完这一?集/), ask = at(beats.brief?.ask, /评论/);
+  const at = (frag, re) => { const i = phrases.findIndex((p) => (frag ? strip(p.text).includes(strip(frag)) : re.test(p.text))); return i < 0 ? null : report.phrases[i].at; };
+  const pr = at(beats.brief?.promise, /看完这一?集/), ask = at(beats.brief?.ask, /[？?]/);
   if (NR.promiseWithin !== undefined && (pr === null || pr > NR.promiseWithin))
     flag('narrative.opening', pr === null ? `开头没有收获前置：钩子之后、${NR.promiseWithin}s 内用一句话说清「看完这一集，你自己就能……」（观众能做到、能复述的一件事）；说法不同就把那半句写进 brief.promise` : `收获前置（「看完这一集……」）在 ${pr}s 才开口（要求 ${NR.promiseWithin}s 内）：钩子之后马上说，别先铺垫`);
   if (NR.askWithin !== undefined && (ask === null || ask > NR.askWithin))
-    flag('narrative.opening', ask === null ? `没有请观众回答、打在评论区的问题：${NR.askWithin}s 内问一个一句话能答的问题（二选一、猜个数），答案片中隔一阵再揭晓；说法不同就把那半句写进 brief.ask` : `第一个请观众回答的问题在 ${ask}s 才问（要求 ${NR.askWithin}s 内）：E05 唯一的提问在片尾，几乎没人看到`);
+    flag('narrative.opening', ask === null ? `没有请观众想一想的问题：${NR.askWithin}s 内问一个一句话能答的问题（二选一、猜个数），答案片中隔一阵再揭晓；不用说「打在评论区」；说法不同就把那半句写进 brief.ask` : `第一个请观众想一想的问题在 ${ask}s 才问（要求 ${NR.askWithin}s 内）：E05 唯一的提问在片尾，几乎没人看到`);
+}
+// 例行公事地请观众「打在评论区」（narrative.commentCall）：E07 到 e04-elnino 六集开头三四十秒都是「……？打在评论区」，片尾再来一句「答案打在评论区」，
+// 用户两次说公式化、呆板（2026-11-23）。开头 commentQuiet 秒内说 commentWords 就报；整片超过 commentMax 句也报（片尾真有值得讨论的开放问题，自然地请一次）
+let commentRe = null;
+try { commentRe = NR.commentWords ? new RegExp(NR.commentWords) : null; } catch (e) { flag('narrative.commentCall', `style.narrative.${beats.kind}.commentWords 不是合法的正则：${e.message}`); }
+if (commentRe) {
+  const re = commentRe, said = phrases.map((p, i) => (re.test(strip(p.text)) ? i : -1)).filter((i) => i >= 0);
+  for (const i of said.filter((i) => report.phrases[i].at < (NR.commentQuiet ?? 0)))
+    flag('narrative.commentCall', `${report.phrases[i].at}s「${phrases[i].text.slice(0, 20)}」开头就请观众打在评论区（${NR.commentQuiet}s 内不说）：问题照问，答不答、打在哪由观众，开头说这句是例行公事，删掉`);
+  if (NR.commentMax !== undefined && said.length > NR.commentMax)
+    flag('narrative.commentCall', `整片 ${said.length} 句请观众打在评论区（上限 ${NR.commentMax}）：${said.map((i) => `${report.phrases[i].at}s`).join('、')}；最多片尾真有值得讨论的开放问题时自然地请一次`);
 }
 // 画面停着不动（E02「一句话没有画面超过 5 秒」、E05 17.7 秒和 14.7 秒、E06 样片 v3 核心四节 19 句什么都不画，第三次出现）：
 // 连着几句一个动作都没有（灯亮灭、回看、全景也算动作），这段旁白加起来超过 maxStill 秒就提醒。能画就画它说的动作；串场话删掉；爸爸插话、请观众算的问句可以不画

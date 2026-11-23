@@ -1124,8 +1124,10 @@ if (NR.promiseWithin !== undefined || NR.askWithin !== undefined) {
 }
 // 例行公事地请观众「打在评论区」（narrative.commentCall）：E07 到 e04-elnino 六集开头三四十秒都是「……？打在评论区」，片尾再来一句「答案打在评论区」，
 // 用户两次说公式化、呆板（2026-11-23）。开头 commentQuiet 秒内说 commentWords 就报；整片超过 commentMax 句也报（片尾真有值得讨论的开放问题，自然地请一次）
-if (NR.commentWords) {
-  const re = new RegExp(NR.commentWords), said = phrases.map((p, i) => (re.test(strip(p.text)) ? i : -1)).filter((i) => i >= 0);
+let commentRe = null;
+try { commentRe = NR.commentWords ? new RegExp(NR.commentWords) : null; } catch (e) { flag('narrative.commentCall', `style.narrative.${beats.kind}.commentWords 不是合法的正则：${e.message}`); }
+if (commentRe) {
+  const re = commentRe, said = phrases.map((p, i) => (re.test(strip(p.text)) ? i : -1)).filter((i) => i >= 0);
   for (const i of said.filter((i) => report.phrases[i].at < (NR.commentQuiet ?? 0)))
     flag('narrative.commentCall', `${report.phrases[i].at}s「${phrases[i].text.slice(0, 20)}」开头就请观众打在评论区（${NR.commentQuiet}s 内不说）：问题照问，答不答、打在哪由观众，开头说这句是例行公事，删掉`);
   if (NR.commentMax !== undefined && said.length > NR.commentMax)

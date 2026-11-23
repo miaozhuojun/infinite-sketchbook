@@ -1267,7 +1267,10 @@ expectBeats('开头就请观众打在评论区', (b) => {
 expectBeats('开头只问不催评论、片尾请一次：不报', (b) => {
   b.style = { narrative: { [b.kind]: { commentWords: esc(strip(b.phrases.at(-1).text)), commentQuiet: 0.5, commentMax: 1, askWithin: 60 } } };
   b.brief = { ...(b.brief ?? {}), ask: strip(b.phrases[0].text).slice(0, 4) };
-}, compileNoFix(TGT), /^(?![\s\S]*(请观众打在评论区|没有请观众想一想))/, { any: true });
+}, compileNoFix(TGT), /^(?![\s\S]*(请观众打在评论区|没有请观众想一想|不是合法的正则))[\s\S]*时长 [\d.]+s/, { any: true });  // 要看到编译跑完（时长那行），不让编译崩了也算过
+expectBeats('commentWords 写错正则：报得清楚，不崩', (b) => {
+  b.style = { narrative: { [b.kind]: { commentWords: '评论区(', commentQuiet: 60, commentMax: 1 } } };
+}, compileNoFix(TGT), /commentWords 不是合法的正则/, { any: true });
 expectBeats('整片请观众打在评论区太多次', (b) => {
   b.style = { narrative: { [b.kind]: { commentWords: b.phrases.slice(-2).map((p) => esc(strip(p.text))).join('|'), commentQuiet: 0, commentMax: 1 } } };
 }, compileNoFix(TGT), /整片 \d+ 句请观众打在评论区/, { any: true });

@@ -238,7 +238,8 @@ def poly_ref(R):
 
 # 这一集核过的读音的指纹：缓存里的句子判过一次就记下它（json 的 poly），读法没变就不再打分。
 # 原来每次跑都把缓存里的句子重判一遍：E08 样片 v2 主讲全走缓存也要 483 秒（一句约 7 秒），改几句话白等 8 分钟
-POLY_SIG = hashlib.sha1(json.dumps([sorted(REVIEWED), (_RD or {}).get("readings") or {}, PGM.MARGIN, PGM.OK_MARGIN, PGM.REF_SLACK], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16] if REVIEWED is not None else None  # 判法的门槛改了，旧的记号也作废
+# 判法改了（门槛、写法表、换声母的声母表……polyphone_guard.py 改了任何一处），旧的记号也作废
+POLY_SIG = hashlib.sha1(json.dumps([sorted(REVIEWED), (_RD or {}).get("readings") or {}, hashlib.sha1(open(PGM.__file__, "rb").read()).hexdigest()], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16] if REVIEWED is not None else None
 
 
 def poly_seen(meta_path):
@@ -272,6 +273,11 @@ def poly_bad(audio, sr_, rel, text, R):
     for r in res:
         if not r["ok"] and not r["reviewed"]:
             POLY_LOG.append({"kind": "没核过、可能念错", "text": text, **{k: r[k] for k in ("ctx", "py", "heard", "margin")}})
+        if r["reviewed"] and r.get("unjudged"):  # 换声母的参照分不开：没拦，单听；也不算判过（缓存不记号），以后每次都重判、都列进报告
+            POLY_SKIP.add(text)
+            if (text, r["ctx"]) not in POLY_UNJUDGED:
+                POLY_UNJUDGED.add((text, r["ctx"]))
+                POLY_LOG.append({"kind": "判不了（参照分不开）、单听确认", "text": text, "ctx": r["ctx"], "py": r["py"]})
     return [r for r in res if r["reviewed"] and not r["ok"]]
 
 
@@ -279,7 +285,7 @@ def poly_say(text, bad):
     """把念错的字换成该念读音的同音字（只换这一处上下文），给 TTS 用；字幕、对齐、回转比对照旧用原文"""
     t = SUBST.get(text, text)
     for r in bad:  # 按原文位置换（同音字一个字换一个字，位置不变；PR #84 审查：按上下文找会因为标点找不到、换错地方）
-        if r.get("pos") is not None and t[r["pos"]] == r["ch"]:
+        if r.get("say") and r.get("pos") is not None and t[r["pos"]] == r["ch"]:  # 换声母判的读音（散 sàn）没有同音字可换，只能接着换种子
             t = t[:r["pos"]] + r["say"] + t[r["pos"] + 1:]
     return t
 
@@ -304,6 +310,7 @@ FAILS = {}
 SPLIT_STUCK = {}  # 句子 → 自动拆成两半后没过的那一半
 POLY_FALLBACK = "多音字没判过，用最像的一条"  # 记在缓存的 note 里，以后每次跑都列出来
 POLY_SKIP = set()  # 对不上逐字时间、没查成的句子
+POLY_UNJUDGED = set()  # 换声母判不了的（句子, 上下文），报告里只记一次
 POLY_OK = set()  # (句子, 种子)：这一条候选过了多音字这一关，或者是上面那条退路（有意留下、不再重判）。别的退路（语速、沙沙声、背景、断句）没走到这一关，不算
 POLY_BAD = {}  # 句子 → 每次判成念错的多音字
 POLY_TRIES = 3  # 同一句念错几次就换写法（换写法以后还念错，就照别的关卡一样试满）
@@ -481,14 +488,19 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         # 多音字（polyphone_guard.py）：核过读音的字念成了别的读音，换种子；同一个字念错满 POLY_TRIES 次，换成同音字再配。
         # 放在别的关卡后面（PR #85 审查）：被它拒掉的候选别的都过了，留作退路才干净，也省得给过不了别的关卡的候选打分
         if (pb := poly_bad(audio, sr, rel, text, R)):
-            reject(text, seed, "多音字念错", "：多音字 " + "、".join(f"{r['ctx']} 该念 {r['py']}，像 {r['heard']}（{r['margin']:+.1f}" + (f"，参照 {r['ref']:+.1f}" if r["ref"] is not None else "") + "）" for r in pb) + "，换种子重来")
+            reject(text, seed, "多音字念错", "：多音字 " + "、".join(f"{r['ctx']} 该念 {r['py']}，像 {r['heard']}（" + (f"换声母比 z {r['z']:.2f}，过线 {PGM.Z_OK}" if r.get("z") is not None else f"{r['margin']:+.1f}" + (f"，参照 {r['ref']:+.1f}" if r["ref"] is not None else "")) + "）" for r in pb) + "，换种子重来")
             POLY_BAD.setdefault(text, []).append(pb)
-            if not best_poly or min(r["margin"] - (r["ref"] or 0) for r in pb) > best_poly[0]:
-                best_poly = (min(r["margin"] - (r["ref"] or 0) for r in pb), (audio, sr, seed, note, rel, bk), pb)
+            if not best_poly or min(r["gap"] for r in pb) > best_poly[0]:  # gap：离过线还差多少（同音字按对数概率，换声母按 z）
+                best_poly = (min(r["gap"] for r in pb), (audio, sr, seed, note, rel, bk), pb)
             if len(POLY_BAD[text]) >= POLY_TRIES and text not in SUBST:
-                SUBST[text] = poly_say(text, pb)
-                POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": SUBST[text], "ctx": [r["ctx"] for r in pb]})
-                print(f"    多音字念错 {POLY_TRIES} 次，换个写法给配音：{SUBST[text]}")
+                # 前几次念错过的字都算上（这一次只错了换声母判的字、前两次错过的同音字也要换）；换声母判的读音没有同音字可换，只能接着换种子
+                say = poly_say(text, [r for att in POLY_BAD[text] for r in att])
+                if say != text:
+                    SUBST[text] = say
+                    POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": say, "ctx": list(dict.fromkeys(r["ctx"] for att in POLY_BAD[text] for r in att))})
+                    print(f"    多音字念错 {POLY_TRIES} 次，换个写法给配音：{say}")
+                elif len(POLY_BAD[text]) == POLY_TRIES:
+                    print(f"    多音字念错 {POLY_TRIES} 次，没有同音字可换（" + "、".join(r["ctx"] for r in pb) + "），接着换种子")
             continue
         if text not in POLY_SKIP:
             POLY_OK.add((text, seed))
@@ -528,7 +540,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         return best
     if best_poly and usable(best_poly[1]):
         print(f"    {args.max_tries} 次里多音字都没判过（换了写法也没过），用最像的种子 {best_poly[1][2]}：" + "、".join(r["ctx"] for r in best_poly[2]) + "，记进 .polyphones.json，单听确认")
-        POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": text, "ctx": [r["ctx"] for r in best_poly[2]], "margin": [r["margin"] for r in best_poly[2]], "ref": [r["ref"] for r in best_poly[2]]})
+        POLY_LOG.append({"kind": "没判过、用最像的一条（单听确认）", "text": text, "ctx": [r["ctx"] for r in best_poly[2]], "margin": [r["margin"] for r in best_poly[2]], "ref": [r["ref"] for r in best_poly[2]], "z": [r.get("z") for r in best_poly[2]]})
         a_, sr_, sd_, nt_, rel_, bk_ = best_poly[1]
         POLY_OK.add((text, sd_))  # 留下这一条，以后走缓存不再重判（种子是确定的，重配也是同样的结果），每次列进报告等人单听
         return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + POLY_FALLBACK, rel_, bk_
@@ -1148,14 +1160,18 @@ def asr_long(path, spans, max_sec=ASR_CHUNK):
     return "".join(hyp)
 
 
-json.dump({"reviewed": sorted(REVIEWED) if REVIEWED is not None else None, "log": POLY_LOG, "rewritten": SUBST}, open(args.out + ".polyphones.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+# 查不了的读音（几个读音凑不出能比的写法，polyphone_guard.unchecked）：配音时没拦，列出来，成片单听这几处
+UNCHECKED = [{"text": s_, "ctx": s_[max(0, PGM.unit_offsets(s_)[i] - 2):PGM.unit_offsets(s_)[i] + 3], "py": py, "miss": miss}
+             for s_ in dict.fromkeys(re.findall(r"[^。？！]+[。？！]?", args.text)) for i, ch, py, miss in PGM.unchecked(s_)]
+json.dump({"reviewed": sorted(REVIEWED) if REVIEWED is not None else None, "log": POLY_LOG, "rewritten": SUBST, "unchecked": UNCHECKED}, open(args.out + ".polyphones.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 if FAST:
     print("  多音字：样片快配不查（成片精配时每条候选都查）")
 elif REVIEWED is None:
     print("  多音字：没给核过的读音（--readings），没拦；" + (f"可疑 {len(POLY_LOG)} 处见 .polyphones.json" if POLY_LOG else "没发现可疑的"))
 else:
     n_bad = sum(1 for q in POLY_LOG if q["kind"] == "换成同音字再配")
-    print(f"  多音字：核过 {len(REVIEWED)} 种读音，每条候选都查；换成同音字再配 {n_bad} 句" + (f"；没核过、可能念错 {sum(1 for q in POLY_LOG if q['kind'].startswith('没核'))} 处（见 .polyphones.json）" if any(q['kind'].startswith('没核') for q in POLY_LOG) else ""))
+    print(f"  多音字：核过 {len(REVIEWED)} 种读音，每条候选都查；换成同音字再配 {n_bad} 句" + (f"；没核过、可能念错 {sum(1 for q in POLY_LOG if q['kind'].startswith('没核'))} 处（见 .polyphones.json）" if any(q['kind'].startswith('没核') for q in POLY_LOG) else "")
+          + (f"；查不了 {len(UNCHECKED)} 处，成片单听：" + "、".join(u["ctx"] for u in UNCHECKED[:8]) + ("…" if len(UNCHECKED) > 8 else "") if UNCHECKED else ""))
 _ref_all = syl(said_text(args.text))
 c_all = cer(_ref_all, syl(asr_long(args.out + ".wav", spans)))
 # 整段只有一两百个音节时（爸爸一集十句上下），0.5% 不到一个音节，等于一个都不许差：E08 爸爸 126 个音节，整段识别把「同一道」听成「从一到」，

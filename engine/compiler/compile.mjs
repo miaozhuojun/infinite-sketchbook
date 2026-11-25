@@ -1217,7 +1217,7 @@ if (Number.isFinite(MAX_TEXTS)) for (let i = 0; i < phrases.length; ) {
   if (!over(i)) { i++; continue; }
   let j = i, k = i;
   while (j + 1 < phrases.length && over(j + 1) && !newScreen(j + 1)) { j++; if (blocksInView[j].length > blocksInView[k].length) k = j; }
-  const l = blocksInView[k], name = (a) => { const r = rootOf(a); return r.grid !== undefined ? `「表 ${r.grid}」` : `「${String(r.text).replace(/\s+/g, ' ').slice(0, 8)}」`; };
+  const l = blocksInView[k], name = (a) => { const r = rootOf(a), g = a.grid ?? r.grid; return g !== undefined ? `「表 ${g}」` : `「${String(r.text).replace(/\s+/g, ' ').slice(0, 8)}」`; };
   flag('layout.crowded', `${report.phrases[k].audioEnd}s「${phrases[k].text.slice(0, 16)}」说完时取景里有 ${l.length} 块字（上限 ${MAX_TEXTS}${j > i ? `；${report.phrases[i].at}s 起连着 ${j - i + 1} 句都超` : ''}）：`
     + `${l.slice(0, 14).map(name).join('')}${l.length > 14 ? ' 等' : ''}。一屏一件事：图已经说明白的字、照念旁白的字删掉，算式并成一行（after 接写），满了就拆屏（换一块纸 block、镜头移开）`);
   i = j + 1;

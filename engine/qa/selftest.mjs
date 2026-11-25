@@ -1375,6 +1375,8 @@ const crowd = (() => {
     && (p.actions ?? []).some((a) => a.type === 'text' && a.after === undefined && a.copyOf === undefined && a.grid === undefined && a.on === undefined));
   return j < 0 ? { why: `最满（${M} 块）的那一句自己没写字，加不了接写` } : { M, j };
 })();
+// 分镜自己带的 style（墨色、调色板）要留着，只改上限（整个换掉，分镜校验就报墨色不在规范里）
+const crowdMax = (b, n) => { b.style = { ...b.style, type: { ...b.style?.type, maxScreenTexts: n } }; };
 const crowdAdd = (b, grid) => {
   const p = b.phrases[crowd.j], h = p.actions.find((a) => a.type === 'text' && a.after === undefined && a.copyOf === undefined && a.grid === undefined && a.on === undefined);
   const cell = (id, dx) => ({ id, type: 'text', text: 'ab', x: h.x + dx * h.size, y: h.y + 1.6 * h.size, size: h.size, at: h.at, ...(grid ? { grid: '_selftest' } : {}) });
@@ -1382,11 +1384,11 @@ const crowdAdd = (b, grid) => {
 };
 if (crowd.why) for (const n of ['画太满（一屏的字块超过上限）', '画太满：接写和同一张表各算一块', '画太满：不在一张表里的两段字算两块']) skip(n, crowd.why);
 else {
-  expectBeats('画太满（一屏的字块超过上限）', (b) => { b.style = { type: { maxScreenTexts: crowd.M - 1 } }; }, compileNoFix(TGT), new RegExp(`说完时取景里有 ${crowd.M} 块字（上限 ${crowd.M - 1}`), { any: true });
-  expectBeats('画太满：接写和同一张表各算一块', (b) => { b.style = { type: { maxScreenTexts: crowd.M + 1 } }; crowdAdd(b, true); },
+  expectBeats('画太满（一屏的字块超过上限）', (b) => { crowdMax(b, crowd.M - 1); }, compileNoFix(TGT), new RegExp(`说完时取景里有 \\d+ 块字（上限 ${crowd.M - 1}`), { any: true });
+  expectBeats('画太满：接写和同一张表各算一块', (b) => { crowdMax(b, crowd.M + 1); crowdAdd(b, true); },
     compileNoFix(TGT), /^(?![\s\S]*说完时取景里有 \d+ 块字)[\s\S]*时长/, { any: true });
-  expectBeats('画太满：不在一张表里的两段字算两块', (b) => { b.style = { type: { maxScreenTexts: crowd.M + 1 } }; crowdAdd(b, false); },
-    compileNoFix(TGT), new RegExp(`说完时取景里有 ${crowd.M + 2} 块字（上限 ${crowd.M + 1}`), { any: true });
+  expectBeats('画太满：不在一张表里的两段字算两块', (b) => { crowdMax(b, crowd.M + 1); crowdAdd(b, false); },
+    compileNoFix(TGT), new RegExp(`说完时取景里有 \\d+ 块字（上限 ${crowd.M + 1}`), { any: true });
 }
 expectBeats('画面落后旁白太多（说到以后好几秒才开始画）', (b) => {
   b.style = { motion: { maxLagFar: 0.01, maxLag: 0 } };
@@ -1438,7 +1440,8 @@ print(json.dumps(cases, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts
 // 回转比对的拼音（tts/voice.py 的 pinyin_syllables 和识别那一边的 heard_syllables，qwen_clone.py 逐句验收、speech_check.py 总混可懂度、line_asr.py 逐句回转都用它）：
 // 同音字算一致；前后鼻音不分（用户 2026-11-16：南方孩子本来就不太分，E07「考零格」听成「考林格」卡掉 30 个种子）；平翘舌、别的韵母读错仍算错。
 // 识别写出来的字是多音字、其中一个读音和稿子的字一样，也算一致（e07-fur 稿子「黏成」识别写「粘成」，粘按上下文念 zhān，种子试满也过不了）；
-// 只放宽这一种：稿子写的多音字照上下文定一个读音（稿子「粘在」、识别「黏在」仍算错），识别写的多音字没有稿子那个读音的仍算错（一成 / 一长）
+// 只放宽这一种：稿子写的多音字照上下文定一个读音（稿子「粘在」、识别「黏在」仍算错），识别写的多音字没有稿子那个读音的仍算错（一成 / 一长）；
+// 读音只认词表里用到过的（也 yì、有 wěi 这类生僻读音不算），高频虚词不放宽（「第一」念糊、识别写「的一」仍算错）
 if (SKIP.has('speech') || !PY_MLX) skip('回转比对：前后鼻音不分、识别写的多音字任一读音都算、别的读错仍算错（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
 else {
   const r = spawnSync(PY_MLX, ['-c', `
@@ -1449,9 +1452,11 @@ print(json.dumps({"前后鼻音": s("考零格") == s("考林格") and s("人生
   "同音字": s("乘上") == s("成上") and s("乘上") == h("成上"), "数字": s("试了50次") == s("试了五十次") and s("试了50次") == h("试了五十次"),
   "平翘舌仍算错": s("一成") != s("一层") and s("一成") != h("一层"), "韵母仍算错": s("才亮") != s("材料") and s("才亮") != h("材料"), "字母原样": s("AI") == ["a", "i"] and h("AI") == ["a", "i"],
   "识别写的多音字任一读音都算": s("头发就黏成一缕") == h("头发就粘成一缕") and h("头发就粘成一缕") == s("头发就黏成一缕"),
-  "稿子写的多音字不放宽": s("粘在一起") != h("黏在一起"), "多音字没有那个读音仍算错": s("一成") != h("一长") and s("一层") != h("一长")}))`], { encoding: 'utf8', cwd: '../tts' });
+  "稿子写的多音字不放宽": s("粘在一起") != h("黏在一起"), "多音字没有那个读音仍算错": s("一成") != h("一长") and s("一层") != h("一长"),
+  "高频虚词不放宽": s("第一") != h("的一") and s("一块儿") != h("一会儿") and s("换成") != h("还成") and s("聊天") != h("了天"),
+  "词表里没用到的生僻读音不算": s("一样") != h("也样") and s("为什么") != h("有什么") and s("零个") != h("任个") and s("拧开") != h("年开")}))`], { encoding: 'utf8', cwd: '../tts' });
   let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
-  record('回转比对：前后鼻音不分、识别写的多音字任一读音都算、别的读错仍算错（单元检查）', Object.keys(got).length === 9 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
+  record('回转比对：前后鼻音不分、识别写的多音字任一读音都算、别的读错仍算错（单元检查）', Object.keys(got).length === 11 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
 }
 // 逐句回转的比法和点名（tts/line_asr.py，识别换成桩，不载模型）：一个片段里两句，念错的字只点名它在的那一句；
 // 稿子「1、1、0」「两千五百」「AI」和识别写的「一一零」「2500」「AI」算一致（片段 phrase 去了标点是 110，要按逐字拼稿子）；

@@ -414,7 +414,7 @@ def _fold_ng(x):
 
 
 class Heard(str):
-    """识别出来的一个字的拼音：本身是按上下文的读音（和 pinyin_syllables 一样），alts 是这个字能念的所有读音（同样去声调、前后鼻音不分）。
+    """识别出来的一个字的拼音：本身是按上下文的读音（和 pinyin_syllables 一样），alts 是这个字在词表里用到过的读音（phrase_readings，同样去声调、前后鼻音不分）。
     和稿子的拼音比时（==、!=、两串比），稿子那个字的读音落在 alts 里就算对上。只放宽识别这一边：稿子写的字照上下文定一个读音。
     右边是 str 的子类、又改了比较，Python 先用它的比较，所以 r != h、h == r 都走这里。只拿来比，别放进集合、当字典的键（哈希按本身的读音）"""
     __slots__ = ("alts",)
@@ -435,19 +435,44 @@ class Heard(str):
     __hash__ = str.__hash__
 
 
+# 识别那一边不放宽的字：高频虚词。配音把一个字念糊了，识别最常写成这几个字，它们的另一个读音又正好是常用字的音
+# （稿子「第一」念糊成 de、识别写「的一」，的有 dí 这个音；「一块儿」写成「一会儿」，会计的会念 kuài）。这几个字照上下文的读音比
+HEARD_STRICT = set("的了着地得和还会都么呢哪吗吧啊呀")
+_PHRASE_READINGS = None
+
+
+def phrase_readings(ch):
+    """这个字在拼音库词表里真用到过的读音（去声调、前后鼻音不分）。字典里收的古旧、生僻读音（也 yì、有 wěi、儿 rén、年 níng）词表里没有用到，不算"""
+    global _PHRASE_READINGS
+    if _PHRASE_READINGS is None:
+        try:
+            from pypinyin.constants import PHRASES_DICT
+            from pypinyin.contrib.tone_convert import to_normal
+        except ImportError:  # 自测的假配音环境里 pypinyin 是桩（qa/fixtures/fake_voice.py）：没有词表，不放宽
+            PHRASES_DICT, to_normal = {}, None
+        idx = {}
+        for w, pys in PHRASES_DICT.items():
+            if len(w) == len(pys):
+                for c, py in zip(w, pys):
+                    idx.setdefault(c, set()).add(_fold_ng(to_normal(py[0])))
+        _PHRASE_READINGS = idx
+    return _PHRASE_READINGS.get(ch, set())
+
+
 def heard_syllables(s):
-    """回转比对时识别出来的那一边转拼音：和 pinyin_syllables 一样逐字转、数字按念法、前后鼻音不分，另外多音字的每个读音都算。
+    """回转比对时识别出来的那一边转拼音：和 pinyin_syllables 一样逐字转、数字按念法、前后鼻音不分，另外多音字的常用读音都算。
     识别写出来的同音别字如果是多音字，按上下文挑的读音可能和稿子不一样：e07-fur 稿子写「黏成」nián，识别写「粘成」，粘按上下文念 zhān，
-    种子试满也过不了。只放宽「识别出来的字是多音字、其中一个读音和稿子的字一样」这一种；不是多音字的照旧按读音比（一成 / 一层仍算错）"""
-    from pypinyin import Style, lazy_pinyin, pinyin
+    种子试满也过不了。只放宽「识别出来的字是多音字、其中一个读音和稿子的字一样」这一种：读音只认拼音库词表里真用到过的（phrase_readings），
+    高频虚词不放宽（HEARD_STRICT）；不是多音字的照旧按读音比（一成 / 一层仍算错），稿子那一边照上下文定一个读音"""
+    from pypinyin import lazy_pinyin
     text = read_numbers(s.lower())
     out = [_fold_ng(x) for x in lazy_pinyin(text, errors=lambda x: list(x))]
     if len(out) != len(text):  # 一个字一个音节对不上（不该发生）：不放宽，照 pinyin_syllables 比
         return out
     res = []
     for ch, d in zip(text, out):
-        alts = [_fold_ng(x) for x in pinyin(ch, style=Style.NORMAL, heteronym=True)[0]] if "一" <= ch <= "鿿" else []
-        res.append(Heard(d, alts) if len(set(alts) - {d}) else d)
+        alts = phrase_readings(ch) if "一" <= ch <= "鿿" and ch not in HEARD_STRICT else set()
+        res.append(Heard(d, alts) if alts - {d} else d)
     return res
 
 

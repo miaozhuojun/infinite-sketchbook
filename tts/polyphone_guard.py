@@ -372,7 +372,8 @@ def check_sentence(scorer, x, sr, text, words, offset=0.0, reviewed=None, refere
     return res
 
 
-Z_OK = 0.4          # 换声母判的读音：z 过这条线算念对（z：0 像别的读音的参照、1 像该念读音的参照，见 _check_proxy；E06 校准）
+Z_OK = 0.4          # 换声母判的读音：z 过这条线算念对（z：0 像别的读音的参照、1 像该念读音的参照，见 _check_proxy）。
+#                     E06 端到端校准 83 条（同一音色故意念成各个读音：散 31、更 16、空 难 少 好 各 8、看 4）：念对的 z ≥ 0.54、念错的 ≤ 0.32
 MIN_SPREAD = 3.0    # 两条参照自己的分差不到这么多，说明这组写法在这一小段里分不开这两个读音，这一对不算
 
 
@@ -383,7 +384,7 @@ def _check_proxy(scorer, seg, left, right, py, sets, reference):
         参照用 A 自己的写法配不行：声母对得上，分差大得多（灿 +8～+10，真念 sàn 只有 0～+5），念对的也够不着（E06 校准）。
       - 两两分差 D = A 组该念读音的最高分 − 别的读音 r 的最高分；念 py 的参照 D 是 hi、念 r 的参照 D 是 lo，
         z =（实测 D − lo）/（hi − lo），对每个别的读音取最小，所有（A, B）对平均，过 Z_OK 算念对。
-      - 组越多越稳（各组的偏差互相抵掉）：E06 校准 63 条，两组时「有空来玩」念对的 z 只有 0.08～0.37，三四组时全部分开（只漏「空气」念成 kòng 两条）。
+      - 组越多越稳（各组的偏差互相抵掉）：两组时「有空来玩」念对的 z 只有 0.08～0.37、「空气」念成 kòng 有 0.7，四组时全部分开（见 Z_OK）。
     没给 reference（不配参照）就不判（ok=True，z=None）。"""
     flat = [(n, r, h) for n, hs in sets for r, cs in hs.items() for h in cs]
     sc = scorer.logps(seg, [left + h + right for _, _, h in flat])

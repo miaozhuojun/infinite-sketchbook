@@ -4,7 +4,8 @@
 「总混可懂度」把整片按 30 秒一块识别、拼音错误率 2% 以内放行：e01-benchmark 707 个字错 1 个是 0.1%，过了，可错的是全片的关键词
 （「卷子」的「卷」听成「阵」）；句首的「写」字头弱，干声对、垫上背景乐的总混里听成「野」，整段比也看不出来。
 
-比法和配音时逐句回转同一个口径：said_text（数字按念法、去标点）、pinyin_syllables（同音字算一致、前后鼻音不分），另外
+比法和配音时逐句回转同一个口径：said_text（数字按念法、去标点）、pinyin_syllables（同音字算一致、前后鼻音不分；识别那一边用 heard_syllables，
+写出来的多音字任一读音和稿子对上就算），另外
   - 拉丁字母词（AI）不比：识别有时写 AI，有时写别的；
   - 「两」当「二」：稿子写「两千五百」「2格」，识别写「2500」「两格」，按念法换回汉字后一边是「二」一边是「两」。
 稿子按 timing 的逐字（words）拼：片段的 phrase 是分镜里的短语，通常不写标点，「1、1、0」写成 110 会念成「一百一十」；逐字里它们是三个字。
@@ -13,7 +14,7 @@
 """
 import re
 
-from voice import said_text, pinyin_syllables
+from voice import heard_syllables, said_text, pinyin_syllables
 
 STRIP = re.compile(r"[\s，。；：！？、,.;:!?\"“”'‘’（）()—-]")  # 和 compiler/validate.mjs 的 strip 一样：片段 phrase 就是这样去的标点
 LATIN = re.compile(r"[a-z]+")
@@ -110,7 +111,7 @@ def check_lines(clips, timing, dry_clip, mix_clip, hear, min_chars=3):
                 continue
             text = hear(*cut(ci, c))
             hs = heard(text)
-            d, ops = align(r, pinyin_syllables(hs))
+            d, ops = align(r, heard_syllables(hs))
             got[name] = (text, hs, d, ops)
         if not any(g[2] for g in got.values()):
             continue

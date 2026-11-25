@@ -652,6 +652,15 @@ expectBeats('手写汉字字号太小（会糊）', (b) => { acts(b).find((a) =>
 expectBeats('旁白里数字后面跟冒号（会读成「比」）', (b) => { b.narration.script = b.narration.script.replace(/(\d)。?/, '$1：'); }, validate, '读成「比」');
 expectBeats('旁白里的数字没有出处', (b) => { b.facts = []; }, validate, '没有出处');
 expectBeats('按句选情绪写的不是旁白稿里的一整句', (b) => { b.narration.mood = { '旁白稿里没有这句。': '好奇' }; }, validate, 'narration.mood');
+// 圈出一整行字（layout.ringWide）：圈是以字的中心为圆心、半对角线为半径的圆，宽文字圈出来比字高出一大截（e04、e07-fur 两次撞到旁边的字）。
+// 默认是建议，私有配置可能设成 hard，所以都算（any）。挑第一段文字，后面接一个圈它的 ring；文字换成一行宽字母要报，换成一个字母不报
+const ringOn = (b, text) => {
+  const p = b.phrases.find((q) => (q.actions ?? []).some((a) => a.type === 'text' && a.copyOf === undefined)), t = p.actions.find((a) => a.type === 'text' && a.copyOf === undefined);
+  t.text = text;
+  p.actions.splice(p.actions.indexOf(t) + 1, 0, { id: '_ring-wide', type: 'ring', at: t.at, target: t.id });
+};
+expectBeats('圈出一整行字（圈会比字大一大截）', (b) => ringOn(b, 'abcdefgh'), validate, /_ring-wide\.target：圈的是一段宽文字「abcdefgh」/, { any: true });
+expectBeats('圈出一个字不报宽文字', (b) => ringOn(b, 'a'), validate, /^(?![\s\S]*圈的是一段宽文字)[\s\S]*分镜校验/, { any: true });
 expectBeats('文字里有手写字体没有的字（全角逗号）', (b) => { const t = b.phrases.flatMap((p) => p.actions).find((x) => x.type === 'text'); t.text += '，'; }, validate, '画不出来');
 // 对话（compiler/speakers.mjs）：说话的人要登记；配音按句生成，换人只能在句末
 expectBeats('对话：句子的说话人没在 narration.voices 里登记', (b) => { b.phrases[1].speaker = 'dad'; }, validate, '没在 narration.voices 里登记');
@@ -1352,6 +1361,33 @@ expectBeats('旁白说东西变了，这一句一笔没画', (b) => {
   b.style = { narrative: { [b.kind]: { changeWords: reEsc(strip(p.text).slice(0, 2)), changeNames: noNames } } };
   p.actions = []; delete p.focus; delete p.frame; delete p.revisit; delete p.camera;
 }, compileNoFix(TGT), /说.{1,4}，这一句一笔没画/, { any: true });
+// 画太满（layout.crowded）：e06-damp 样片 v1、e07-fur 静帧 s1–s3 三轮审稿点名。默认只是建议，私有配置设成 hard，所以报成建议或问题都算（any）。
+// 上限按基线时间线里最满的那一句（M 块）定：上限 M − 1 要报；在 M 块的那一句里加一段接写（after）、两格同一张表（grid），上限 M + 1 不报（接写和那段字是一块、
+// 两格是一块，只多了一块）；同样两段字不写 grid 就是两块，要报（对照：证明加的字真在取景里）
+const crowd = (() => {
+  const R = base.report.phrases;
+  if (!R.some((p) => p.textBlocks !== undefined)) return { why: '基线时间线是旧编译器编的，没有每句的字块数：先重新编译基线' };
+  const M = Math.max(...R.map((p) => p.textBlocks ?? 0));
+  if (M < 2) return { why: `基线里最满的一句只有 ${M} 块字` };
+  let i = 0, said = ''; // 分镜里的句子 → 时间线里的句子（编译时没有静音隔开的几句并成一句，文字首尾相接）
+  const at = beatsSrc.phrases.map((p) => { if (said === R[i]?.text) { i++; said = ''; } said += p.text; return i; });
+  const j = beatsSrc.phrases.findIndex((p, k) => R[at[k]]?.textBlocks === M && !p.revisit && p.camera === undefined
+    && (p.actions ?? []).some((a) => a.type === 'text' && a.after === undefined && a.copyOf === undefined && a.grid === undefined && a.on === undefined));
+  return j < 0 ? { why: `最满（${M} 块）的那一句自己没写字，加不了接写` } : { M, j };
+})();
+const crowdAdd = (b, grid) => {
+  const p = b.phrases[crowd.j], h = p.actions.find((a) => a.type === 'text' && a.after === undefined && a.copyOf === undefined && a.grid === undefined && a.on === undefined);
+  const cell = (id, dx) => ({ id, type: 'text', text: 'ab', x: h.x + dx * h.size, y: h.y + 1.6 * h.size, size: h.size, at: h.at, ...(grid ? { grid: '_selftest' } : {}) });
+  p.actions.push({ id: '_crowd-aft', type: 'text', text: 'ab', after: h.id, size: h.size, at: h.at }, cell('_crowd-g1', 0), cell('_crowd-g2', 3));
+};
+if (crowd.why) for (const n of ['画太满（一屏的字块超过上限）', '画太满：接写和同一张表各算一块', '画太满：不在一张表里的两段字算两块']) skip(n, crowd.why);
+else {
+  expectBeats('画太满（一屏的字块超过上限）', (b) => { b.style = { type: { maxScreenTexts: crowd.M - 1 } }; }, compileNoFix(TGT), new RegExp(`说完时取景里有 ${crowd.M} 块字（上限 ${crowd.M - 1}`), { any: true });
+  expectBeats('画太满：接写和同一张表各算一块', (b) => { b.style = { type: { maxScreenTexts: crowd.M + 1 } }; crowdAdd(b, true); },
+    compileNoFix(TGT), /^(?![\s\S]*说完时取景里有 \d+ 块字)[\s\S]*时长/, { any: true });
+  expectBeats('画太满：不在一张表里的两段字算两块', (b) => { b.style = { type: { maxScreenTexts: crowd.M + 1 } }; crowdAdd(b, false); },
+    compileNoFix(TGT), new RegExp(`说完时取景里有 ${crowd.M + 2} 块字（上限 ${crowd.M + 1}`), { any: true });
+}
 expectBeats('画面落后旁白太多（说到以后好几秒才开始画）', (b) => {
   b.style = { motion: { maxLagFar: 0.01, maxLag: 0 } };
   const p = b.phrases.find((q) => (q.actions ?? []).filter((a) => !a.copyOf).length >= 2);
@@ -1399,24 +1435,28 @@ print(json.dumps(cases, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts
   record('配音逐句验收：掉嗓子、破音、硬切、语速（单元检查）', ok, (r.stdout || '') + (r.stderr || ''));
 }
 
-// 回转比对的拼音（tts/voice.py 的 pinyin_syllables，qwen_clone.py 逐句验收和 speech_check.py 总混可懂度都用它）：
-// 同音字算一致；前后鼻音不分（用户 2026-11-16：南方孩子本来就不太分，E07「考零格」听成「考林格」卡掉 30 个种子）；平翘舌、别的韵母读错仍算错
-if (SKIP.has('speech') || !PY_MLX) skip('回转比对：前后鼻音不分、别的读错仍算错（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
+// 回转比对的拼音（tts/voice.py 的 pinyin_syllables 和识别那一边的 heard_syllables，qwen_clone.py 逐句验收、speech_check.py 总混可懂度、line_asr.py 逐句回转都用它）：
+// 同音字算一致；前后鼻音不分（用户 2026-11-16：南方孩子本来就不太分，E07「考零格」听成「考林格」卡掉 30 个种子）；平翘舌、别的韵母读错仍算错。
+// 识别写出来的字是多音字、其中一个读音和稿子的字一样，也算一致（e07-fur 稿子「黏成」识别写「粘成」，粘按上下文念 zhān，种子试满也过不了）；
+// 只放宽这一种：稿子写的多音字照上下文定一个读音（稿子「粘在」、识别「黏在」仍算错），识别写的多音字没有稿子那个读音的仍算错（一成 / 一长）
+if (SKIP.has('speech') || !PY_MLX) skip('回转比对：前后鼻音不分、识别写的多音字任一读音都算、别的读错仍算错（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
 else {
   const r = spawnSync(PY_MLX, ['-c', `
 import sys, json
 sys.path.insert(0, '.')
-from voice import pinyin_syllables as s
-print(json.dumps({"前后鼻音": s("考零格") == s("考林格") and s("人生") == s("人身") and s("一样") == s("一言"),
-  "同音字": s("乘上") == s("成上"), "数字": s("试了50次") == s("试了五十次"),
-  "平翘舌仍算错": s("一成") != s("一层"), "韵母仍算错": s("才亮") != s("材料"), "字母原样": s("AI") == ["a", "i"]}))`], { encoding: 'utf8', cwd: '../tts' });
+from voice import pinyin_syllables as s, heard_syllables as h
+print(json.dumps({"前后鼻音": s("考零格") == s("考林格") and s("人生") == s("人身") and s("一样") == s("一言") and s("考零格") == h("考林格"),
+  "同音字": s("乘上") == s("成上") and s("乘上") == h("成上"), "数字": s("试了50次") == s("试了五十次") and s("试了50次") == h("试了五十次"),
+  "平翘舌仍算错": s("一成") != s("一层") and s("一成") != h("一层"), "韵母仍算错": s("才亮") != s("材料") and s("才亮") != h("材料"), "字母原样": s("AI") == ["a", "i"] and h("AI") == ["a", "i"],
+  "识别写的多音字任一读音都算": s("头发就黏成一缕") == h("头发就粘成一缕") and h("头发就粘成一缕") == s("头发就黏成一缕"),
+  "稿子写的多音字不放宽": s("粘在一起") != h("黏在一起"), "多音字没有那个读音仍算错": s("一成") != h("一长") and s("一层") != h("一长")}))`], { encoding: 'utf8', cwd: '../tts' });
   let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
-  record('回转比对：前后鼻音不分、别的读错仍算错（单元检查）', Object.keys(got).length === 6 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
+  record('回转比对：前后鼻音不分、识别写的多音字任一读音都算、别的读错仍算错（单元检查）', Object.keys(got).length === 9 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
 }
 // 逐句回转的比法和点名（tts/line_asr.py，识别换成桩，不载模型）：一个片段里两句，念错的字只点名它在的那一句；
 // 稿子「1、1、0」「两千五百」「AI」和识别写的「一一零」「2500」「AI」算一致（片段 phrase 去了标点是 110，要按逐字拼稿子）；
 // 只有总混错、错在开头的单独标出来；多听到的字算在它前面那个字所在的那一句；短于 3 个字的片段跳过并计数
-if (SKIP.has('speech') || !PY_MLX) skip('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
+if (SKIP.has('speech') || !PY_MLX) skip('逐句回转：念错的字点名到那一句、只有总混错单独标出、识别写的多音字任一读音都算（单元检查）', SKIP.has('speech') ? '这次没改配音和旁白检查（--skip speech）' : '没有本地配音环境（PY_MLX）');
 else {
   const r = spawnSync(PY_MLX, ['-c', `
 import sys, json
@@ -1448,12 +1488,19 @@ ye = [ok[0], "野代码这类卷子。", ok[2]]
 en = [ok[0].replace("零个", "零个嗯")] + ok[1:]  # 多听到一个字：算在它前面那个字所在的那一句
 a, b, c, d, e = run(ok, ok2), run(juan, juan), run(ok, ye), run(ok2, ok), run(en, ok)
 pick = lambda res: [(x["clip"], x["ks"], x["dryDiff"], x["mixDiff"], x["mixOnly"], x["atStart"]) for x in res["bad"]]
+# 识别写的同音字是多音字、有稿子那个读音（稿子「黏成」nián，识别「粘成」）算对上；写成只念 zhān 的「沾成」仍算错（e07-fur 样片）
+S2 = "头发就黏成一缕。"
+w2 = [{"text": ch, "start": 0.2 * k, "end": 0.2 * k + 0.18} for k, ch in enumerate(strip(S2))]
+c2 = [{"phrase": strip(S2), "at": 0, "srcIn": 0.0, "srcOut": w2[-1]["end"]}]
+one = lambda said: check_lines(c2, {"words": w2, "sentences": [{"text": S2, "start": 0.0, "end": w2[-1]["end"]}]}, lambda i, c: (said, 0), lambda i, c: (said, 0), lambda x, sr: x)
+f, g = one("头发就粘成一缕"), one("头发就沾成一缕")
 print(json.dumps({"ok": not a["bad"] and not d["bad"] and a["checked"] == 2 and a["skipped"] == 1,
   "juan": pick(b) == [(0, [0], ["卷→阵"], ["卷→阵"], False, False)],
   "ye": pick(c) == [(1, [2], [], ["写→野"], True, True)],
-  "extra": pick(e) == [(0, [1], ["多了「嗯」"], [], False, False)]}, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts' });
+  "extra": pick(e) == [(0, [1], ["多了「嗯」"], [], False, False)],
+  "nian": not f["bad"] and f["checked"] == 1, "zhan": pick(g) == [(0, [0], ["黏→沾"], ["黏→沾"], False, False)]}, ensure_ascii=False))`], { encoding: 'utf8', cwd: '../tts' });
   let got = {}; try { got = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
-  record('逐句回转：念错的字点名到那一句、只有总混错单独标出（单元检查）', Object.keys(got).length === 4 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
+  record('逐句回转：念错的字点名到那一句、只有总混错单独标出、识别写的多音字任一读音都算（单元检查）', Object.keys(got).length === 6 && Object.values(got).every(Boolean), (r.stdout || '') + (r.stderr || ''));
 }
 
 // ---------- 旁白检查按时刻点名到句（tts/sentence_map.py，单元检查）：一个片段里有两句时，前一句句尾的收音硬切要点名前一句，

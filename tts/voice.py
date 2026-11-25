@@ -406,7 +406,49 @@ def pinyin_syllables(s):
     只有前后鼻音不分（以 ng 结尾的都去掉 g 再比：in/ing、en/eng、an/ang、ian/iang、uan/uang 按前鼻音算一样；ong/iong 也折成 on/ion，没有真音节是这样，只和自己相等）：用户 2026-11-16「南方孩子本来就不太分得清前后鼻音，
     偶尔的瑕疵还能带来真实感和童真感」。E07 成片「考零格」听成「考林格」，一句试满 30 个种子都没过，配音白等了几个小时。"""
     from pypinyin import lazy_pinyin
-    return [x[:-1] if len(x) > 2 and x.endswith("ng") else x for x in lazy_pinyin(read_numbers(s.lower()), errors=lambda x: list(x))]
+    return [_fold_ng(x) for x in lazy_pinyin(read_numbers(s.lower()), errors=lambda x: list(x))]
+
+
+def _fold_ng(x):
+    return x[:-1] if len(x) > 2 and x.endswith("ng") else x
+
+
+class Heard(str):
+    """识别出来的一个字的拼音：本身是按上下文的读音（和 pinyin_syllables 一样），alts 是这个字能念的所有读音（同样去声调、前后鼻音不分）。
+    和稿子的拼音比时（==、!=、两串比），稿子那个字的读音落在 alts 里就算对上。只放宽识别这一边：稿子写的字照上下文定一个读音。
+    右边是 str 的子类、又改了比较，Python 先用它的比较，所以 r != h、h == r 都走这里。只拿来比，别放进集合、当字典的键（哈希按本身的读音）"""
+    __slots__ = ("alts",)
+
+    def __new__(cls, default, alts=()):
+        h = super().__new__(cls, default)
+        h.alts = frozenset(alts) | {default}
+        return h
+
+    def __eq__(self, other):
+        if isinstance(other, Heard):
+            return bool(self.alts & other.alts)
+        return isinstance(other, str) and str.__str__(other) in self.alts
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    __hash__ = str.__hash__
+
+
+def heard_syllables(s):
+    """回转比对时识别出来的那一边转拼音：和 pinyin_syllables 一样逐字转、数字按念法、前后鼻音不分，另外多音字的每个读音都算。
+    识别写出来的同音别字如果是多音字，按上下文挑的读音可能和稿子不一样：e07-fur 稿子写「黏成」nián，识别写「粘成」，粘按上下文念 zhān，
+    种子试满也过不了。只放宽「识别出来的字是多音字、其中一个读音和稿子的字一样」这一种；不是多音字的照旧按读音比（一成 / 一层仍算错）"""
+    from pypinyin import Style, lazy_pinyin, pinyin
+    text = read_numbers(s.lower())
+    out = [_fold_ng(x) for x in lazy_pinyin(text, errors=lambda x: list(x))]
+    if len(out) != len(text):  # 一个字一个音节对不上（不该发生）：不放宽，照 pinyin_syllables 比
+        return out
+    res = []
+    for ch, d in zip(text, out):
+        alts = [_fold_ng(x) for x in pinyin(ch, style=Style.NORMAL, heteronym=True)[0]] if "一" <= ch <= "鿿" else []
+        res.append(Heard(d, alts) if len(set(alts) - {d}) else d)
+    return res
 
 
 # 书名号、引号这些也去掉：回转识别会自己加（E04「书名就叫感知机。」听成「书名就叫《感知机》」，字全对，30 个种子却都按念错算）

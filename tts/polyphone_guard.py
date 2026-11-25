@@ -99,7 +99,8 @@ def _gb2312_level1():
 def homophones(py, avoid="", common=False):
     """只有这一个读音的常用字（严格的一个没有，才用词表里几乎只这么念的字）。
     common：挑词表里词最多的几个（换声母的写法和参照用：「赣」这种生僻的配音和识别都不稳）；默认按 GB2312 的顺序，同音字的候选和校准时一样。"""
-    hs = [c for c in _homophone_index().get(py, []) if c not in avoid] or [c for c in _dominant_index().get(py, []) if c not in avoid]
+    pool = _homophone_index().get(py) or _dominant_index().get(py, [])  # 严格的有（哪怕都在上下文里、被 avoid 去掉）就不用放宽的
+    hs = [c for c in pool if c not in avoid]
     if common:
         hs = sorted(hs, key=lambda c: -_char_phrases().get(c, 0))
     return hs[:PER_READING]
@@ -150,7 +151,7 @@ def proxies(readings, avoid=""):
     near = [x for i, _ in parts if i for x in NEAR.get(i, "").split()]
     if own & {"j", "q", "x"}:
         keep = ("j", "q", "x")  # j q x 后面的 u 是 ü，换成别的声母韵母就变了
-    elif any(i in APICAL and f == "i" for i, f in parts):
+    elif any(i in APICAL and f[:-1] == "i" for i, f in parts):
         keep = APICAL
     else:
         keep = tuple(x for x in INITIALS if x not in ("j", "q", "x"))
@@ -161,6 +162,8 @@ def proxies(readings, avoid=""):
         hs, seen = {}, set()
         for r, (i, f) in zip(readings, parts):
             s = sub + f
+            if f[:-1] == "i" and (sub in APICAL) != (i in APICAL):
+                continue  # 比 bǐ 换成 zh 是「纸」zhǐ：i 从舌面元音变成舌尖元音，韵母就不是同一个了
             if i and s not in seen and (h := homophones(s, avoid, True) or homophones(s, common=True)):
                 hs[r] = h
                 seen.add(s)  # 两个读音只差在声母上，换成同一个声母就分不出了：留前一个
@@ -340,7 +343,7 @@ def check_sentence(scorer, x, sr, text, words, offset=0.0, reviewed=None, refere
     us, ws = al
     offs = unit_offsets(text)
     res = []
-    for i, ch, py, others in targets(text):
+    for i, ch, py, others in polyphones(text):  # 和 targets 一样按这个字所有常用读音来定写法（只拿 targets 留下的读音，换声母时会撞上丢掉那个读音的声母）
         a, b = max(0, i - WINDOW), min(len(us) - 1, i + WINDOW)
         left = "".join(u[0] for u in us[a:i]); right = "".join(u[0] for u in us[i + 1:b + 1])
         seg = _crop16(x, sr, ws[a]["start"] - offset - 0.05, ws[b]["end"] - offset + 0.05)
@@ -408,7 +411,8 @@ def _check_proxy(scorer, seg, left, right, py, sets, reference):
                 rivals[r] = rivals.get(r, 0) + 1
     z = sum(zs) / len(zs) if zs else None
     alt = max(rivals, key=rivals.get) if rivals else max((r for r in sets[0][1] if r != py), key=lambda r: best[sets[0][0]][r])
-    return dict(heard=py if z is None or z >= Z_OK else alt, margin=round(sum(raw) / len(raw), 2), ok=z is None or z >= Z_OK, ref=None,
+    # 判不了（没配参照、参照配不出来、或者参照自己都分不开）：不拦，unjudged 记一笔，配音报告里列出来单听
+    return dict(heard=py if z is None or z >= Z_OK else alt, margin=round(sum(raw) / len(raw), 2), ok=z is None or z >= Z_OK, ref=None, unjudged=z is None,
                 z=None if z is None else round(z, 2), gap=0.0 if z is None else round(z - Z_OK, 2), say=None,
                 scores={n: {r: round(v, 2) for r, v in b.items()} for n, b in best.items()})
 
@@ -501,5 +505,8 @@ if __name__ == "__main__":
     for s in tm.get("sentences") or [{"text": tm["text"], "start": 0, "end": 1e9}]:
         ws = [w for w in words if w["start"] >= s["start"] - 0.02 and w["end"] <= s["end"] + 0.02]
         for r in check_sentence(sc, x, sr, s["text"], ws):  # 不配参照：换声母判的读音只列分数，不判
+            if r.get("unaligned"):
+                print(f"  ? {s['text']}：对不上逐字时间，没查")
+                continue
             judged = r["how"] == "同音"
             print(f"{'  ' if r['ok'] or not judged else '✗ '}{r['at']:8.2f} {r['ctx']}  该念 {r['py']}  margin {r['margin']:+.2f}" + ("" if judged else f"（{r['how']}，要配参照才判）") + f"  {r['scores']}")

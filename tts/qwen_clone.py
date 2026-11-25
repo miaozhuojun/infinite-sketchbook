@@ -273,9 +273,11 @@ def poly_bad(audio, sr_, rel, text, R):
     for r in res:
         if not r["ok"] and not r["reviewed"]:
             POLY_LOG.append({"kind": "没核过、可能念错", "text": text, **{k: r[k] for k in ("ctx", "py", "heard", "margin")}})
-        if r["reviewed"] and r.get("unjudged") and (text, r["ctx"]) not in POLY_UNJUDGED:  # 换声母的参照分不开：没拦，单听
-            POLY_UNJUDGED.add((text, r["ctx"]))
-            POLY_LOG.append({"kind": "判不了（参照分不开）、单听确认", "text": text, "ctx": r["ctx"], "py": r["py"]})
+        if r["reviewed"] and r.get("unjudged"):  # 换声母的参照分不开：没拦，单听；也不算判过（缓存不记号），以后每次都重判、都列进报告
+            POLY_SKIP.add(text)
+            if (text, r["ctx"]) not in POLY_UNJUDGED:
+                POLY_UNJUDGED.add((text, r["ctx"]))
+                POLY_LOG.append({"kind": "判不了（参照分不开）、单听确认", "text": text, "ctx": r["ctx"], "py": r["py"]})
     return [r for r in res if r["reviewed"] and not r["ok"]]
 
 

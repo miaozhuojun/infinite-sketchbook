@@ -76,6 +76,19 @@ export function breakLines(text, size, width) {
   return lines.filter(Boolean);
 }
 
+// 一段文字实际墨迹的宽高比（试写一遍，取笔画路径上所有坐标的范围；画不出来时返回 null，「画不出来」另有报错）
+function textInkAspect(a, style, reg) {
+  try {
+    const t = { ...a, x: 0, y: 0 }, strokes = reg.get('text').draw(t, makeKit(t, style, reg));
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of strokes) {
+      const n = (s.d.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/gi) ?? []).map(Number);
+      for (let i = 0; i + 1 < n.length; i += 2) { x0 = Math.min(x0, n[i]); x1 = Math.max(x1, n[i]); y0 = Math.min(y0, n[i + 1]); y1 = Math.max(y1, n[i + 1]); }
+    }
+    return x1 > x0 && y1 > y0 ? (x1 - x0) / (y1 - y0) : null;
+  } catch { return null; }
+}
+
 function checkType(spec, v, style, ctx) {
   const t = spec.type;
   const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
@@ -103,6 +116,8 @@ export function validateBeats(beats, style, reg) {
   const G = (gate, where, msg) => (gateLevel(style, gate) === 'advice' ? advice : errors).push(`${where}：${msg}`);
   const E = (where, msg) => errors.push(`${where}：${msg}`);
   if (!['episode', 'segment'].includes(beats.kind)) E('kind', '应为 episode（完整一集）或 segment（片段）');
+  // 画太满、圈宽文字的上限是作者在风格规范和私有配置里定的：一期分镜自己改了就提醒（改大了，私有配置设成 hard 的关卡也会被绕过去）
+  for (const k of ['maxScreenTexts', 'ringMaxAspect']) if (beats.style?.type?.[k] !== undefined) warnings.push(`style.type.${k}：这一期分镜改了 ${k}（${beats.style.type[k]}），关卡的上限按作者的配置来，不要在分镜里改`);
   if (!beats.narration?.audio && !beats.narration?.script) E('narration', '需要 audio（已有配音）或 script（待生成的旁白稿）');
   // 配音会按读数规则读的写法：数字后面的冒号读成「比」（实测「定在5：超过它」读成「五比超过它」）
   // reseed：听出畸变的句子换个种子重配，键必须是旁白稿里的一整句（含句末标点），值是正整数
@@ -295,6 +310,14 @@ export function validateBeats(beats, style, reg) {
       if (a.type === 'off') {
         const g = beats.phrases.flatMap((p) => p.actions).find((x) => x.id === a.target);
         if (g && g.type !== 'glow') E(`${A}.target`, `off 只能熄灭光晕（glow），「${a.target}」是 ${g.type}`);
+      }
+      // 圈出一段宽文字（layout.ringWide）：圈是以目标中心为圆心、包围盒半对角线 +12 为半径的圆，圈一整行字时圆比字高出好几倍，
+      // 撞到上下的东西（e04-elnino、e07-fur 两次试编才撞出来；e06-damp 片尾圈「魔法攻击」，字一缩小圈就蹭到上一行）。按目标文字实际的墨迹量宽高比
+      if (a.type === 'ring' && Number.isFinite(style.type.ringMaxAspect)) {
+        const g = beats.phrases.flatMap((p) => p.actions ?? []).find((x) => x.id === a.target);
+        const r = g?.type === 'text' && typeof g.text === 'string' && g.size > 0 ? textInkAspect(g, style, reg) : null;
+        if (r !== null && r > style.type.ringMaxAspect)
+          G('layout.ringWide', `${A}.target`, `圈的是一段宽文字「${g.text.trim()}」（宽是高的 ${r.toFixed(1)} 倍，上限 ${style.type.ringMaxAspect}）：圈是以字的中心为圆心画的圆，宽文字圈出来比字高出一大截，会撞到上下的东西。改用下划线（line 画在字下面），或者只圈其中一个关键字`);
       }
       // after：接在前一段文字后面写（同一行，位置由编译器按前文实际墨迹算），只能接文字
       if (a.after !== undefined) {

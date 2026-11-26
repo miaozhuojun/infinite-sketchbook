@@ -6,7 +6,7 @@
  "gates": {
   "note": "关卡分两级。hard：机械上坏了（字被切、压字幕、进平台界面、出镜头、两处同时落笔、铅笔出画或瞬移、字幕折行超限、事实没出处、平台章节规格），流水线判失败。advice：创作上的取舍（叙事结构、节奏、镜头、留白、字号），只写进报告的「建议」，不拦截。这里只列 advice 级的关卡，没列的都是 hard。私有创作配置 profile.local.json 可以把任何一项改成 hard；每期分镜不能改关卡级别。",
   "narrative.roles": "advice", "narrative.quiz": "advice", "narrative.hook": "advice", "narrative.ahaGap": "advice", "narrative.opening": "advice", "narrative.commentCall": "advice", "narrative.still": "advice",
-  "type.scale": "advice", "type.minCjk": "advice", "type.minScreen": "advice", "layout.textGap": "advice", "layout.shapeGap": "advice",
+  "type.scale": "advice", "type.minCjk": "advice", "type.minScreen": "advice", "layout.textGap": "advice", "layout.shapeGap": "advice", "layout.crowded": "advice", "layout.ringWide": "advice",
   "camera.ahaPush": "advice", "camera.ahaNoZoomOut": "advice", "camera.ahaCentered": "advice", "framing.shapeCut": "advice",
   "sync.trail": "advice", "sync.lag": "advice", "sync.silent": "advice", "pace.pause": "advice",
   "pencil.park": "advice", "camera.idle": "advice", "pencil.cover": "advice", "pencil.exit": "advice", "watermark.ahaSwap": "advice",
@@ -63,7 +63,7 @@
   "maxAutoGrow": 1.4,
   "minCjkSize": 72,
   "cjkSizePerStroke": 5,
-  "minCjkSizeNote": "手写汉字字号下限：笔宽统一（4.4）后，56 号字的笔画占字高 8%，像马克笔（组件预览和理解度测试都看到 56–64 号的字发黑发糊）；72–84 号占 5–6%，接近铅笔写在孩子字上的比例。字号至少 max(minCjkSize, 笔画数 × cjkSizePerStroke)；笔宽和字号随镜头同比缩放，所以按世界字号卡"
+  "maxScreenTexts": 10, "crowdedNote": "画太满（layout.crowded）：每句说完那一刻，取景框里亮着的字块超过 maxScreenTexts 块就报。字块 = 一段文字；接写（after）接成的一串算一块，同一张表（grid）的格子算一块。e07-fur 静帧审稿点名的「量一量那一屏 12 处字」量出来正好 12 块，e06-damp 样片 v1 先弄干那一屏 13 块；改好后的 e06-damp 成片每屏最多 10 块", "ringMaxAspect": 2.5, "ringNote": "圈出一段宽文字（layout.ringWide，分镜校验）：ring 的圈是以目标中心为圆心、半对角线为半径的圆，目标文字估出来的宽高比超过 ringMaxAspect 时，圈会比字高出好几倍、撞到上下的东西（e04、e07-fur 两次）。改用下划线（line）或只圈其中一个字", "minCjkSizeNote": "手写汉字字号下限：笔宽统一（4.4）后，56 号字的笔画占字高 8%，像马克笔（组件预览和理解度测试都看到 56–64 号的字发黑发糊）；72–84 号占 5–6%，接近铅笔写在孩子字上的比例。字号至少 max(minCjkSize, 笔画数 × cjkSizePerStroke)；笔宽和字号随镜头同比缩放，所以按世界字号卡"
  },
 
  "sample": { "fps": 15, "scale": 0.5, "x264Preset": "veryfast", "note": "粗样片（pipeline.mjs --sample）：给用户先看内容方向，声音、画质可以粗糙。按这个帧率编译、按这个比例缩小渲染（横版 960×540），只出第一个画幅。精配和整片不受影响" },

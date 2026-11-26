@@ -173,6 +173,7 @@ def tone_of(sent):
     return "好奇" if s0.endswith("？") else "兴奋" if s0.endswith("！") else "认真讲"
 clean = re.sub(r"[，。；：！？、,.;:!?\"“”'‘’（）()—\s-]", "", args.text)
 from voice import pinyin_syllables as syl  # 同音字算一致、前后鼻音不分（零/林），别的读错的音（一成听成一层、才亮听成材料）仍算错
+from voice import heard_syllables as hsyl  # 识别那一边：多音字的每个读音都算（稿子「黏成」识别写「粘成」，粘有 nián 这个音，算对上）
 
 
 def cer(r, h):
@@ -412,7 +413,7 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
                 continue
         sf.write(tmp, audio, sr)
         hyp = asr_text(tmp)
-        c, dz = cer(syl(ref), syl(hyp)), dropouts(audio, sr)
+        c, dz = cer(syl(ref), hsyl(hyp)), dropouts(audio, sr)
         drops = pitch_drops(audio, sr, GEN_FLOOR) if FLOOR else []
         if drops:
             reject(text, seed, "掉嗓子", f"：掉嗓子 " + "、".join(f"{a:.2f}–{b:.2f}s 低到 {f:.0f}Hz" for a, b, f in drops) + f"（生成时下限 {GEN_FLOOR:.0f}Hz），换种子重来")
@@ -424,12 +425,12 @@ def synth_sentence(text, seed0, R, strict=False, tone=None):
         note = None
         if c == 0 and dz == 0:
             note = ""
-        hs, rs = syl(hyp), syl(ref)
+        hs, rs = hsyl(hyp), syl(ref)
         if note is None and dz == 0 and 0 < len(hs) - len(rs) <= 3 and hs[len(hs) - len(rs):] == rs:
             prefix = hyp[: len(hs) - len(rs)]
             audio = soften_edges(trim_leaked_prefix(audio, sr, prefix, ref), sr)  # 剪开处淡入：E02 v5「权」2ms 里从静音跳到 -20dB，咔一声
             sf.write(tmp, audio, sr)
-            if cer(rs, syl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, GEN_FLOOR)):
+            if cer(rs, hsyl(asr_text(tmp))) == 0 and dropouts(audio, sr) == 0 and not (FLOOR and pitch_drops(audio, sr, GEN_FLOOR)):
                 note = f"开头串进「{prefix}」已剪掉"
         if note is None:
             if c > 0:  # 先记听成了什么再 reject：「卡句」那一行要写上
@@ -1173,7 +1174,7 @@ else:
     print(f"  多音字：核过 {len(REVIEWED)} 种读音，每条候选都查；换成同音字再配 {n_bad} 句" + (f"；没核过、可能念错 {sum(1 for q in POLY_LOG if q['kind'].startswith('没核'))} 处（见 .polyphones.json）" if any(q['kind'].startswith('没核') for q in POLY_LOG) else "")
           + (f"；查不了 {len(UNCHECKED)} 处，成片单听：" + "、".join(u["ctx"] for u in UNCHECKED[:8]) + ("…" if len(UNCHECKED) > 8 else "") if UNCHECKED else ""))
 _ref_all = syl(said_text(args.text))
-c_all = cer(_ref_all, syl(asr_long(args.out + ".wav", spans)))
+c_all = cer(_ref_all, hsyl(asr_long(args.out + ".wav", spans)))
 # 整段只有一两百个音节时（爸爸一集十句上下），0.5% 不到一个音节，等于一个都不许差：E08 爸爸 126 个音节，整段识别把「同一道」听成「从一到」，
 # 逐句都过了还是整段失败，重跑也不会变。短的整段至少容一个音节
 C_ALL_MAX = max(0.005, 1.0 / max(1, len(_ref_all)) + 1e-9)

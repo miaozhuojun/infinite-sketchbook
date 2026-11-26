@@ -1188,6 +1188,40 @@ if (NR.changeWords) for (const { pi, miss } of changeIssues(phrases, { words: NR
     + `划掉、回描、圈出它（strike/retrace/ring，光晕用 off），在它身上画出变化（笔画 on 挂在它上面），或新画一个变化后的样子、标 is: "${m.s}"`
     + `${m.onlyText ? `。画面上叫「${m.s}」的只有字：画它的那几笔先标 is: "${m.s}"，再让它们变` : ''}；只写字不算。说的是别处的变化写 noChange`);
 }
+// 画太满（layout.crowded）：e06-damp 样片 v1 用户「有几幅图里画的太满了」，e07-fur 静帧 s1–s3 三轮审稿点名（「量一量那一屏 12 处字」），第三次出现。
+// 单张静帧看不出挤，连着看片一眼就满。每句说完那一刻（这一句的取景，顿悟句按推近后的；片尾整张纸的全景 camera: overview 是看全貌的，不数），
+// 数取景框里亮着的字块：画到这一句为止、包围盒中心落在取景框里的文字（type text，复用的文字也算）。接写（after）接成的一串是一块（一行算式分几段写），
+// 同一张表（grid 相同）的格子是一块（靠行列对齐来读）。超过 type.maxScreenTexts 块就报；一屏连着几句都超（换节、换块、回看另算一屏），只报最满的那一句
+const MAX_TEXTS = style.type.maxScreenTexts;
+const rootOf = (a) => { for (let k = 0; a?.copyOf !== undefined && k < 32; k++) a = actionsById.get(a.copyOf); return a; };
+const headOf = (a) => { for (let k = 0; a?.after !== undefined && actionsById.has(a.after) && k < 64; k++) a = actionsById.get(a.after); return a; };
+// 复用件可以换表名（新表）：按复用件自己的表名分；表名和原表一样时，按平移量和原表分开（照搬过去的另一张表）
+const blockOf = (a) => { const h = headOf(a), r = rootOf(h), g = h.grid ?? r.grid; return g !== undefined ? `grid:${g}@${h.copyOf !== undefined && g === r.grid ? h.shift : ''}` : h.id; };
+const screenTexts = allActions.filter((a) => rootOf(a)?.type === 'text' && geo.get(a.id)?.length);
+const blocksInView = phrases.map((p, pi) => {
+  const cam = targetCam[pi];
+  if (!cam || cam.overview) return null;
+  const seen = new Map();
+  for (const a of screenTexts) {
+    if (!(phraseOf.get(a.id) <= pi)) continue;
+    const b = geoBox(a.id), x = ((b.x0 + b.x1) / 2 - cam.x) * cam.z + VIEW.cx, y = ((b.y0 + b.y1) / 2 - cam.y) * cam.z + VIEW.cy;
+    if (x > FR.l && x < FR.r && y > FR.t && y < FR.b && !seen.has(blockOf(a))) seen.set(blockOf(a), headOf(a));
+  }
+  return [...seen.values()];
+});
+blocksInView.forEach((l, pi) => { report.phrases[pi].textBlocks = l?.length ?? null; });
+const over = (pi) => blocksInView[pi]?.length > MAX_TEXTS;
+// 连着超的几句当成同一屏，报最满的那一句；换节、换块、回看（镜头换到别处）断开另算一屏
+const newScreen = (pi) => phrases[pi].chapter || phrases[pi].block || phrases[pi].revisit?.length || phrases[pi - 1]?.revisit?.length;
+if (Number.isFinite(MAX_TEXTS)) for (let i = 0; i < phrases.length; ) {
+  if (!over(i)) { i++; continue; }
+  let j = i, k = i;
+  while (j + 1 < phrases.length && over(j + 1) && !newScreen(j + 1)) { j++; if (blocksInView[j].length > blocksInView[k].length) k = j; }
+  const l = blocksInView[k], name = (a) => { const r = rootOf(a), g = a.grid ?? r.grid; return g !== undefined ? `「表 ${g}」` : `「${String(r.text).replace(/\s+/g, ' ').slice(0, 8)}」`; };
+  flag('layout.crowded', `${report.phrases[k].audioEnd}s「${phrases[k].text.slice(0, 16)}」说完时取景里有 ${l.length} 块字（上限 ${MAX_TEXTS}${j > i ? `；${report.phrases[i].at}s 起连着 ${j - i + 1} 句都超` : ''}）：`
+    + `${l.slice(0, 14).map(name).join('')}${l.length > 14 ? ' 等' : ''}。一屏一件事：图已经说明白的字、照念旁白的字删掉，算式并成一行（after 接写），满了就拆屏（换一块纸 block、镜头移开）`);
+  i = j + 1;
+}
 
 // 字幕：说完后若这句的画面还在画，字幕停留到画完（不晚于下一句字幕出现），避免画面和字幕脱节
 // 一屏最多几行（画幅的 sub.maxLines，没写就不限）：超了就在标点处拆成几张，各在这一段开口时出现。

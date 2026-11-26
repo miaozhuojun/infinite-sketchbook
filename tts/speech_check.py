@@ -342,8 +342,8 @@ if tl.get("audio"):
             sf.write(tf.name, xm[int(c0 * srm):int(c1 * srm)], srm)
             parts.append(asr.generate(tf.name, language="Chinese").text)
     hyp = said_text("".join(parts))
-    from voice import pinyin_syllables  # 按拼音比：同音字不算错（成/乘），前后鼻音不分（零/林），别的读错的音仍算错
-    r, h = pinyin_syllables(script), pinyin_syllables(hyp)
+    from voice import heard_syllables, pinyin_syllables  # 按拼音比：同音字不算错（成/乘），前后鼻音不分（零/林），识别写的多音字任一读音对上就算（黏/粘），别的读错的音仍算错
+    r, h = pinyin_syllables(script), heard_syllables(hyp)
     d = list(range(len(h) + 1))
     for i in range(1, len(r) + 1):
         prev, d[0] = d[0], i

@@ -5,7 +5,7 @@
   2. 吞字：配音时逐句对齐的逐字时间映射到成片旁白，每个字时长 ≥ 50ms，且能量不低于中位数 18 dB 以上。
   3. 断音/爆音：两侧都在发声的 ≥5ms 全零段（字中间掉音）不得出现，不得有相邻采样突跳。
   4. 总混可懂度：带书写声和音乐的总混，ASR 回转字错率 ≤ 2%。
-  0k. 多音字没有明显念错：拼好的源配音上逐句按核过的读音再判，按同音字判得出、低得多、参照又明显高的才算念错（配音走哪条路都兜得住）。
+  0n. 多音字没有明显念错：拼好的源配音上逐句按核过的读音再判，按同音字判得出、低得多、参照又明显高的才算念错（配音走哪条路都兜得住）。
   4b. 逐句回转（关卡 speech.lineAsr，默认风格只给建议）：每段旁白单独切出来，干声和总混各识别一遍，和这一段的稿子按拼音零出入（line_asr.py）。
 另有几项只给建议、不判失败：语气起伏（句内起伏和句间音区变化，和 voice.json 里按真人录音标定的值比）、声调（tone_check.py，每个字的走势和该念的声调比）。
 用法：.venv-mlx/bin/python speech_check.py <timeline.json> [engine 根目录]
@@ -253,50 +253,55 @@ try:
 except Exception as e:  # 只给建议的检查，自己出错也不能把旁白检查拦下
     print(f"[建议] 声调检查没跑成：{e!r}")
 
-# 0k. 多音字没有明显念错（关卡）。用户 2026-11-26 终审 e07-fur 成片：「4:10 的长是多音字，应该念 zhang」。
+# 0n. 多音字没有明显念错（关卡）。用户 2026-11-26 终审 e07-fur 成片：「4:10 的长是多音字，应该念 zhang」。
 #     配音时每条候选都查核过的多音字，那一句是从没走到多音字关卡的退路漏过去的（qwen_clone.py 已补上）。这里不管配音走的哪条路，
-#     在拼好的源配音上逐句再判一遍，念错的句子写进 revoice.json，流水线换种子重配。只拦明显念错的，三条都要占：
-#     按同音字判得出（换声母判的不拦）；该念的读音比最像的别的读音低 POLY_LIGHT 以上；同一个音色照该念读音配的参照比实测高 POLY_GAP 以上
-#     （识别模型对有的词本来就偏：e07-fur「薄薄」念对的参照也是 −6.0、实测 −7.7，不算念错；「长到」参照 +4.5、实测 −11.3）
-POLY_LIGHT, POLY_GAP = 5.0, 8.0
+#     在拼好的源配音上逐句再判一遍，念错的句子写进 revoice.json，流水线换种子重配。只拦明显念错的（voice.clearly_wrong，三条都要占）：
+#     按同音字判得出（换声母判的不拦）；该念的读音比最像的别的读音低 5 以上；同一个人的参考音照该念读音配的参照比实测高 8 以上
+#     （识别模型对有的词本来就偏：e07-fur「薄薄」念对的参照也是 −6.0、实测 −7.7，不算念错；「长到」参照 +4.5、实测 −11.5）。
+#     参照用 Qwen3 克隆这个人的参考音配（爸爸的配音用 Breeze，参照的音色只是接近）；门槛是拿孩子的声音标定的
 _rd_path = root / "build" / f"{beats['id']}.readings.json"  # 流水线从分镜 narration.readings / readingsReviewed 写出
 if _rd_path.exists() and timing0.get("sentences"):
     import mlx.core as mx
     import polyphone_guard as PGM
+    from tone_check import load_readings
+    from voice import clearly_wrong, CLEAR_LOW, CLEAR_GAP
+    load_readings(Path(__file__).parent / "readings.json")  # 和配音时一样：拼音库标错的读法先登记（原来靠前面的声调检查顺手载了）
     _rd = json.loads(_rd_path.read_text(encoding="utf-8"))
-    PGM.apply_readings(_rd.get("readings"))  # 和配音时一样按登记的读法注音（改的是进程里的拼音库，后面的拼音比对也按它，和配音时一致）
+    PGM.apply_readings(_rd.get("readings"))  # 按这一集登记的读法注音（改的是进程里的拼音库，后面的拼音比对也按它，和配音时一致）
     _rev = set(_rd.get("reviewed") or [])
     _pscorer = PGM.load_scorer()
 
     def _poly_ref(sp):
-        """参照：同一个人的参考音、固定种子，用 Qwen3 把这一小段照该念的读音（同音字写法）配出来"""
+        """参照：这个人的参考音、固定种子，用 Qwen3 把这一小段照该念的读音（同音字写法）配出来"""
         v = voices[sp]  # load_voice 已经把 ref 换成绝对路径、读好 ref_text
         def gen(txt):
             try:
                 mx.random.seed(2)
-                ch = list(_tts.generate(text=txt, ref_audio=v["ref"], ref_text=v["ref_text"], lang_code="chinese", temperature=v.get("temperature", 0.7), max_tokens=int(12.5 * (0.5 * len(txt) + 2))))
+                ch = list(_tts.generate(text=txt, ref_audio=v["ref"], ref_text=v["ref_text"], lang_code="chinese", temperature=0.7, max_tokens=int(12.5 * (0.5 * len(txt) + 2))))
                 return np.concatenate([np.array(c.audio) for c in ch]).astype(np.float32), ch[0].sample_rate
             except Exception:
                 return None
         return gen
 
     _refs = {sp: _poly_ref(sp) for sp in speakers}
-    _pbad, _n = [], 0
-    clear = lambda r: r["reviewed"] and r.get("how") == "同音" and r["margin"] <= -POLY_LIGHT
+    _pbad, _n, _ref_sp = [], 0, None
     for k, s in enumerate(timing0["sentences"]):
         if not PGM.targets(s["text"]):
             continue
         ws = [w_ for w_ in timing0["words"] if w_["start"] >= s["start"] - 0.02 and w_["end"] <= s["end"] + 0.02]
-        # 先不配参照判一遍（快：一集一百来处不到一分钟）；有明显念错嫌疑的句子再带参照判（配参照一处要几秒，全配一集要八分钟）
-        res = [r for r in PGM.check_sentence(_pscorer, xs5, ssr5, s["text"], ws, reviewed=_rev) if not r.get("unaligned") and r["reviewed"]]
+        # 先不配参照判一遍（快：一集一百来处不到一分钟）；有明显念错嫌疑的读音再带参照判（配参照一处要几秒，全配一集要八分钟）
+        res = [r for r in PGM.check_sentence(_pscorer, xs5, ssr5, s["text"], ws, reviewed=_rev) if not r.get("unaligned") and r["reviewed"] and r.get("how") == "同音"]
         _n += len(res)
-        if not any(clear(r) for r in res):
+        sus = {PGM.pair(r["ch"], r["py"]) for r in res if r["margin"] <= -CLEAR_LOW}
+        if not sus:
             continue
-        for r in PGM.check_sentence(_pscorer, xs5, ssr5, s["text"], ws, reviewed=_rev, reference=_refs.get(SP[k], _refs[speakers[0]])):
-            if not r.get("unaligned") and clear(r) and r.get("ref") is not None and r["ref"] - r["margin"] >= POLY_GAP:
+        if SP[k] != _ref_sp:  # 参照按 (左, 读音, 右) 缓存、不分说话人：换了人就清掉，别拿另一个人的参照比
+            PGM._REF.clear(); PGM._REF_AUDIO.clear(); _ref_sp = SP[k]
+        for r in PGM.check_sentence(_pscorer, xs5, ssr5, s["text"], ws, reviewed=sus, reference=_refs.get(SP[k], _refs[speakers[0]])):
+            if not r.get("unaligned") and clearly_wrong(r):
                 _pbad.append((k, s, r)); revoice_k.add(k)
     check("多音字没有明显念错", not _pbad, f"{len(_pbad)} 处：" + "；".join(f"{s['start']:.1f}s「{s['text'][:12]}」{r['ctx']} 该念 {r['py']}，像 {r['heard']}（实测 {r['margin']:+.1f}，参照 {r['ref']:+.1f}）" for _, s, r in _pbad[:6])
-          if _pbad else f"核过的多音字 {_n} 处逐句重判，没有明显念错的（该念的比别的读音低 {POLY_LIGHT:g} 以上、参照又比实测高 {POLY_GAP:g} 以上才算）")
+          if _pbad else f"按同音字判得出的核过的多音字 {_n} 处逐句重判，没有明显念错的（该念的比别的读音低 {CLEAR_LOW:g} 以上、参照又比实测高 {CLEAR_GAP:g} 以上才算）")
 
 # 1. 拼接切点
 src, ssr = mono(root / "public" / tl.get("source", beats["narration"]["audio"]))

@@ -441,7 +441,9 @@ def synth_sentence(text, seed0, R, strict=False, tone=None, again=False, last=Tr
         # e07-fur「长到」−11.5、参照 +4.5，收下它旁白检查也会拦）；照同音字写法配的、并且判不过的字都换成了同音字的优先
         # （读音由写法保证，判不过是识别模型对这个词有偏差，e07-fur「薄薄」念对的参照也是 −6；换声母判的字没有同音字可换，不算保证）；
         # 再比是不是别的关卡都过了（退路池里来的带着沙沙声、断句这类毛病），最后比 gap（离过线还差多少：同音字按对数概率，换声母按 z）
-        if not any(clearly_wrong(r) for r in pb):
+        # 只记过得了成片旁白检查那几项的（掉嗓子、破音、硬切、语速离目标不超过 maxDev）：过不了的记下来也用不上，
+        # 还会挡住后来能用的（PR #100 复审）
+        if not any(clearly_wrong(r) for r in pb) and not line_defects(cand[0], cand[1], cand[4], voice, GEN_FLOOR):
             covered = (text, seed) in SAID_SUBST and all(r.get("say") and r.get("pos") is not None and SUBST.get(text, text)[r["pos"]] == r["say"] for r in pb)
             key = (covered, fallback is None, min(r["gap"] for r in pb))
             if text not in POLY_BEST or key > POLY_BEST[text][0]:
@@ -669,9 +671,9 @@ def split_synth(sent, seed0, pause=0.25, strict=False):
         SPLIT_STUCK[sent] = half  # 卡句清单里写明是哪一半没过
         return None
     a1, sr_, s1, n1, rel1, bk1 = r1; a2, _, s2, n2, rel2, _ = r2
-    # 两半都判过多音字（或者没有要判的字），整句就算判过：主循环不再整句补判（PR #100 审查：照同音字写法配的半句、
+    # 两半都判过多音字（或者没有要判的字；没查成的不算），整句就算判过：主循环不再整句补判（PR #100 审查：照同音字写法配的半句、
     # 判不过收下的半句，整句再判还是同样的结果，会误报成配音程序漏了路）
-    if all(not PGM.targets(t) or t in POLY_SKIP or (t, sd) in POLY_OK for t, sd in ((a_txt, s1), (b_txt, s2))) and sent not in POLY_SKIP:
+    if all(not PGM.targets(t) or (t not in POLY_SKIP and (t, sd) in POLY_OK) for t, sd in ((a_txt, s1), (b_txt, s2))) and sent not in POLY_SKIP:
         POLY_OK.add((sent, s1))
     off = len(a1) / sr_ + pause
     audio = np.concatenate([a1, np.zeros(int(pause * sr_), np.float32), a2])
@@ -695,6 +697,7 @@ def make_take(sent, seed0, strict=False, label="", then="配不出来的话这�
     """配一句的完整做法（主循环、拼好后的吞字重配、音色一致重配都用它）：先按 seed0 起试一轮，不过就再试 extraRounds 轮新种子，
     还不过就自动拆成两半配；都不行返回 None。label 是「第几句、为什么配」，then 是配不出来会怎样，试到上限一半还没过时都打在「[卡句]」那一行里"""
     watch(sent, label, then)
+    POLY_BEST.pop(sent, None)  # 「判不过里最好的一条」只在这一次 make_take 的几轮里比，不拿上一次（别的参考音、拼好后的重配）留下的
     for r in range(1 + voice.get("extraRounds", 0)):
         try:
             res = synth_sentence(sent, seed0 + r * args.max_tries, ref_for(sent), strict, last=r == voice.get("extraRounds", 0))
@@ -947,6 +950,7 @@ for i, sent in enumerate(sents):
             open(fb_mark, "w").write(FALLBACK)
             mood_of[sent.strip()] = FALLBACK
             key = os.path.join(CACHE, cache_key(sent))
+            POLY_BEST.pop(sent, None)  # 换了参考音：默认参考音那几轮的候选不和新的比
             try:
                 res = synth_sentence(sent, seed_of(sent), ref_for(sent))
                 res = res[:3] + ((res[3] + "；" if res[3] else "") + f"自动换「{FALLBACK}」参考音",) + res[4:]
@@ -1294,8 +1298,8 @@ else:
           + (f"；查不了 {len(UNCHECKED)} 处，成片单听：" + "、".join(u["ctx"] for u in UNCHECKED[:8]) + ("…" if len(UNCHECKED) > 8 else "") if UNCHECKED else ""))
     # 程序没判下来的几处写进流水线报告（[警告] 进报告的备注）：原来只在配音日志和 .polyphones.json 里，
     # e07-fur 成片 7 句「没判过、用最像的一条」报告里一句没有，交付时被写成了「都逐条查过」
-    for kind, text_ in dict.fromkeys((q["kind"], q["text"]) for q in POLY_LOG if "单听" in q["kind"] or q["kind"].startswith("对不上逐字时间")):  # 同一句判了几条候选会记几次，报告里只写一行
-        q = next(q for q in reversed(POLY_LOG) if (q["kind"], q["text"]) == (kind, text_))
+    for kind, text_, ctx in dict.fromkeys((q["kind"], q["text"], str(q.get("ctx") or "")) for q in POLY_LOG if "单听" in q["kind"] or q["kind"].startswith("对不上逐字时间")):  # 同一句判了几条候选会记几次，报告里只写一行
+        q = next(q for q in reversed(POLY_LOG) if (q["kind"], q["text"], str(q.get("ctx") or "")) == (kind, text_, ctx))
         print(f"[警告] 多音字{kind}：「{text_}」" + (f"（{'、'.join(q['ctx']) if isinstance(q.get('ctx'), list) else q['ctx']}）" if q.get("ctx") else ""))
 _ref_all = syl(said_text(args.text))
 c_all = cer(_ref_all, hsyl(asr_long(args.out + ".wav", spans)))

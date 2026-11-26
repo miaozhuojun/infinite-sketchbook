@@ -274,10 +274,12 @@ if _rd_path.exists() and timing0.get("sentences"):
     def _poly_ref(sp):
         """参照：这个人的参考音、固定种子，用 Qwen3 把这一小段照该念的读音（同音字写法）配出来"""
         v = voices[sp]  # load_voice 已经把 ref 换成绝对路径、读好 ref_text
+        # 用 Qwen3 配音的人照他的 temperature（和配音时的参照一样）；用别的模型配的（爸爸用 Breeze），那个 temperature 不是给 Qwen3 的，用默认 0.7
+        temp = v.get("temperature", 0.7) if "Qwen3" in v.get("model", "Qwen3") else 0.7
         def gen(txt):
             try:
                 mx.random.seed(2)
-                ch = list(_tts.generate(text=txt, ref_audio=v["ref"], ref_text=v["ref_text"], lang_code="chinese", temperature=0.7, max_tokens=int(12.5 * (0.5 * len(txt) + 2))))
+                ch = list(_tts.generate(text=txt, ref_audio=v["ref"], ref_text=v["ref_text"], lang_code="chinese", temperature=temp, max_tokens=int(12.5 * (0.5 * len(txt) + 2))))
                 return np.concatenate([np.array(c.audio) for c in ch]).astype(np.float32), ch[0].sample_rate
             except Exception:
                 return None

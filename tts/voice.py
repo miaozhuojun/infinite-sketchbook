@@ -541,6 +541,19 @@ def art_rate(words, gap_cap=0.12):
     return sum(len(w["text"]) for w in ws) / max(t, 0.3)
 
 
+# 多音字明显念错（配音挑「判不过、只好用最像的一条」时不要它；旁白检查拦它，speech_check.py 的 0n）：三条都占才算。
+# 按同音字判得出（换声母判的不算）；该念的读音比最像的别的读音低 CLEAR_LOW 以上（对数概率）；同一个音色照该念读音配的参照比实测高 CLEAR_GAP 以上
+# （参照把识别模型对这个词本来的偏差扣掉）。e07-fur 成片 v1：「长到」实测 −11.5、参照 +4.5，算；「薄薄」实测 −7.7、参照 −6.0（念对的也这样），不算。
+# 放在这里不放 polyphone_guard.py：那个文件一改，缓存里所有句子的多音字记号都作废、要重判
+CLEAR_LOW, CLEAR_GAP = 5.0, 8.0
+
+
+def clearly_wrong(r):
+    """polyphone_guard.check_sentence 的一条结果是不是明显念错（要带参照判过，没有参照的不算）"""
+    return bool(r.get("reviewed", True) and r.get("how") == "同音" and r.get("margin") is not None and r["margin"] <= -CLEAR_LOW
+                and r.get("ref") is not None and r["ref"] - r["margin"] >= CLEAR_GAP)
+
+
 def line_defects(x, sr, words, voice, floor_hz=None):
     """一句配音会被成片旁白检查点名、要换种子重配的几项：掉嗓子、破音、硬切、语速（speech_check.py 0b、0j、0k、0l，同一套函数、同一套阈值）。
     配音生成时每个候选、退路和缓存复查都拿它验收，坏句子在生成时就换种子，不等到混音后的旁白检查（E03 内容定稿后每轮退回都是这几类）。

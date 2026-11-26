@@ -20,7 +20,7 @@ const arg = (k) => (process.argv.includes(k) ? process.argv[process.argv.indexOf
 // 生效的风格（默认 < 本机私有创作配置 < 这一期分镜）：画幅、发布清单也按它来，私有配置里定的「只出横版、各平台都传横版」才会生效
 const styleJson = loadStyle(beats);
 const DRAFT = process.argv.includes('--draft');
-// --sample：粗样片，给用户先看内容方向（声音、画质可以粗糙）。快配音（只查念对和对齐，精配过的句子直接用）、低分辨率低帧率、
+// --sample：粗样片，给用户先看内容方向（声音、画质可以粗糙）。快配音（只查念对、对齐和明显念错的多音字，精配过的句子直接用）、低分辨率低帧率、
 // 只出第一个画幅，混音、渲染，别的检查都不跑。输出在 out/<id>-sample/，时间线和配音都另存，不碰精配和定稿的那一份
 const SAMPLE = process.argv.includes('--sample');
 const SAMPLE_ID = `${beats.id}-sample`;

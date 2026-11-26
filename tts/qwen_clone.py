@@ -433,7 +433,9 @@ def synth_sentence(text, seed0, R, strict=False, tone=None, again=False):
         POLY_BAD.setdefault(text, []).append(pb)
         # 挑「多音字没判过」的退路：照同音字写法配的优先（念的就是该念的音，判不过是识别模型对这个词有偏差，e07-fur「薄薄」念对的参照也是 −6），
         # 同一类里再比 gap（离过线还差多少：同音字按对数概率，换声母按 z）
-        key = ((text, seed) in SAID_SUBST, min(r["gap"] for r in pb))
+        # 照同音字写法配的、并且判不过的每个字都换成了同音字（换声母判的字没有同音字可换，照样没保证），才算读音由写法保证
+        covered = (text, seed) in SAID_SUBST and all(r.get("say") and r.get("pos") is not None and SUBST.get(text, text)[r["pos"]] == r["say"] for r in pb)
+        key = (covered, min(r["gap"] for r in pb))
         if not best_poly or key > best_poly[0]:
             best_poly = (key, cand, pb)
         if len(POLY_BAD[text]) >= POLY_TRIES and text not in SUBST:
@@ -608,10 +610,16 @@ def synth_sentence(text, seed0, R, strict=False, tone=None, again=False):
         print(f"    {args.max_tries} 次里每条都断在没标点的地方，用断得最轻的种子 {got[1][2]}（{got[0]:.2f} 倍门槛，多音字判过）")
         a_, sr_, sd_, nt_, rel_, bk_ = got[1]
         return a_, sr_, sd_, (nt_ + "；" if nt_ else "") + STRAY_FALLBACK, rel_, bk_
-    # 退路都念错了多音字：念错满 POLY_TRIES 次已经换成同音字的写法（poly_reject），照同音字配的还没试几条，就照它再试一轮种子
-    if not again and text in SUBST and sum((text, seed0 + k) in SAID_SUBST for k in range(args.max_tries)) < POLY_TRIES:
-        print(f"    退路都念错了多音字，照同音字的写法再试一轮：{SUBST[text]}")
-        return synth_sentence(text, seed0 + args.max_tries, R, strict, tone, again=True)
+    # 退路都没判过多音字：照同音字的写法再试一轮种子（照同音字写法配的，读音由写法保证），不留「单听确认」的尾巴。
+    # 念错还没满 POLY_TRIES 次、还没换写法的，这里就换（e07-fur v2「狗不洗头，为什么不油？」：7 条退路 5 条语速超上限，
+    # 判了的 2 条都没过，原来只能用最像的一条、等人单听）；照同音字配的已经试过几条的不再试
+    if not again and best_poly and not best_poly[0][0]:
+        if text not in SUBST and (say := poly_say(text, [r for att in POLY_BAD.get(text, []) for r in att])) != text:
+            SUBST[text] = say
+            POLY_LOG.append({"kind": "换成同音字再配", "text": text, "say": say, "ctx": list(dict.fromkeys(r["ctx"] for att in POLY_BAD[text] for r in att))})
+        if text in SUBST and sum((text, seed0 + k) in SAID_SUBST for k in range(args.max_tries)) < POLY_TRIES:
+            print(f"    退路都没判过多音字，照同音字的写法再试一轮：{SUBST[text]}")
+            return synth_sentence(text, seed0 + args.max_tries, R, strict, tone, again=True)
     if best_poly and usable(best_poly[1]):
         a_, sr_, sd_, nt_, rel_, bk_ = best_poly[1]
         POLY_OK.add((text, sd_))  # 留下这一条，以后走缓存不再重判（种子是确定的，重配也是同样的结果）

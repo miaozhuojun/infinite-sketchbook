@@ -1294,7 +1294,7 @@ else:
           + (f"；查不了 {len(UNCHECKED)} 处，成片单听：" + "、".join(u["ctx"] for u in UNCHECKED[:8]) + ("…" if len(UNCHECKED) > 8 else "") if UNCHECKED else ""))
     # 程序没判下来的几处写进流水线报告（[警告] 进报告的备注）：原来只在配音日志和 .polyphones.json 里，
     # e07-fur 成片 7 句「没判过、用最像的一条」报告里一句没有，交付时被写成了「都逐条查过」
-    for kind, text_ in dict.fromkeys((q["kind"], q["text"]) for q in POLY_LOG if q["kind"].endswith("单听确认") or q["kind"].startswith("对不上逐字时间")):  # 同一句判了几条候选会记几次，报告里只写一行
+    for kind, text_ in dict.fromkeys((q["kind"], q["text"]) for q in POLY_LOG if "单听" in q["kind"] or q["kind"].startswith("对不上逐字时间")):  # 同一句判了几条候选会记几次，报告里只写一行
         q = next(q for q in reversed(POLY_LOG) if (q["kind"], q["text"]) == (kind, text_))
         print(f"[警告] 多音字{kind}：「{text_}」" + (f"（{'、'.join(q['ctx']) if isinstance(q.get('ctx'), list) else q['ctx']}）" if q.get("ctx") else ""))
 _ref_all = syl(said_text(args.text))
